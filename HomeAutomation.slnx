@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/backend/">
+    <Project Path="src/backend/HomeAutomation.Api/HomeAutomation.Api.csproj" />
+    <Project Path="src/backend/HomeAutomation.Application/HomeAutomation.Application.csproj" />
+    <Project Path="src/backend/HomeAutomation.Domain/HomeAutomation.Domain.csproj" />
+    <Project Path="src/backend/HomeAutomation.Infrastructure/HomeAutomation.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/HomeAutomation.UnitTests/HomeAutomation.UnitTests.csproj" />
+    <Project Path="tests/HomeAutomation.IntegrationTests/HomeAutomation.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

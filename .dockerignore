@@ -1,0 +1,13 @@
+**/bin
+**/obj
+**/node_modules
+**/dist
+.git
+.agents
+.vscode
+.artifacts
+.npm-cache
+.env
+.env.*
+docs
+TestResults

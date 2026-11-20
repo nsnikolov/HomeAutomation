@@ -1,0 +1,32 @@
+name: Foundation checks
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore HomeAutomation.slnx
+      - run: dotnet build HomeAutomation.slnx --no-restore -c Release
+      - run: dotnet test HomeAutomation.slnx --no-build -c Release
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/frontend/home-automation-web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/frontend/home-automation-web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
