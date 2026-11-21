@@ -4,6 +4,7 @@ export type Metric =
   | 'voltage' | 'current' | 'activePower' | 'energy' | 'temperature'
   | 'humidity' | 'switchOn' | 'targetTemperature' | 'operatingMode'
   | 'gridVoltage' | 'gridFrequency' | 'gridImportPower' | 'pvVoltage' | 'warningStatus'
+  | 'acOutputVoltage' | 'inverterLoadPercent' | 'acChargingPower'
 
 export type Property = { id: number; name: string; timeZone: string }
 export type Room = { id: number; name: string }
@@ -44,4 +45,4 @@ export type PropertyState = {
 
 export type Point = Omit<Reading, 'metric' | 'unit' | 'quality'> & { observedAt: string }
 export type Health = { database: string; simulator: string; lastSuccess: string | null; pollSeconds: number }
-export type GrowattState = { status: string; data: PropertyState | null }
+export type GrowattState = { status: string; lastSuccess: string | null; data: PropertyState | null }

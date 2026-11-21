@@ -45,10 +45,11 @@ internal static class MonitoringEndpoints
             IGrowattMonitoringReader reader, CancellationToken cancellationToken) =>
         {
             var current = progress.Current;
-            if (!options.Enabled || current is "notConfigured" or "invalidConfiguration" or "transportUnavailable")
-                return Results.Ok(new { status = current, data = (PropertyState?)null });
+            if (!options.Enabled || current.Status is "notConfigured" or "invalidConfiguration" or "transportUnavailable")
+                return Results.Ok(new { status = current.Status, lastSuccess = (DateTimeOffset?)null, data = (PropertyState?)null });
             var data = await reader.GrowattStateAsync(propertyId, options.SiteKey, cancellationToken);
-            return Results.Ok(new { status = data is null ? "notConfigured" : current, data });
+            return Results.Ok(new { status = data is null ? "notConfigured" : current.Status,
+                lastSuccess = data is null ? null : current.LastSuccess, data });
         });
         property.MapGet("/devices", async (long propertyId, IMonitoringReader reader, CancellationToken cancellationToken) =>
             (await reader.StateAsync(propertyId, cancellationToken)).Devices);

@@ -127,6 +127,9 @@ public sealed class GrowattCloudClient(HttpClient http, GrowattOptions options, 
         public double? VGrid { get; init; }
         public double? FreqGrid { get; init; }
         public double? OutPutPower { get; init; }
+        public double? OutPutVolt { get; init; }
+        public double? LoadPercent { get; init; }
+        public double? PAcCharge { get; init; }
         public double? VBat { get; init; }
         public double? Capacity { get; init; }
         public int? FaultCode { get; init; }
@@ -134,5 +137,6 @@ public sealed class GrowattCloudClient(HttpClient http, GrowattOptions options, 
         public int? WarnCode { get; init; }
         public bool? Lost { get; init; }
         public string? Spf5000StatusText { get; init; }
+        public string? StatusText { get; init; }
     }
 }

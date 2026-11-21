@@ -101,7 +101,7 @@ Use `docker compose logs migrate app` to inspect startup and `docker compose dow
 
 ## Growatt read-only monitoring
 
-The dashboard has a separate Growatt status panel. The simulator remains enabled by default. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.
+Sign in and choose **Live Growatt** in the property sidebar to open real readings. **Dashboard** opens the simulator. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.
 
 ## Verify changes
 

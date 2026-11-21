@@ -7,3 +7,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 3. 2026-11-21 · [Fix Local Startup and Verify Home Automation Dashboard](0003-fix-local-dashboard-startup.md)
 4. 2026-11-21 · [Milestone 2 — Growatt Read-Only Integration](0004-growatt-read-only-integration.md)
 5. 2026-11-21 · [Milestone 2B — Activate Live Growatt Cloud Monitoring](0005-activate-live-growatt-cloud-monitoring.md)
+6. 2026-11-21 · [Milestone 2C — Activate Live Growatt Monitoring](0006-activate-live-growatt-monitoring.md)

@@ -8,10 +8,13 @@ namespace HomeAutomation.Api;
 
 internal sealed class GrowattProgress
 {
-    private volatile string status = "notConfigured";
-    public string Current => status;
-    public void Set(string value) => status = value;
+    private volatile GrowattPollStatus current = new("notConfigured", null);
+    public GrowattPollStatus Current => current;
+    public void Set(string status, DateTimeOffset? lastSuccess = null) =>
+        current = new(status, lastSuccess ?? current.LastSuccess);
 }
+
+internal sealed record GrowattPollStatus(string Status, DateTimeOffset? LastSuccess);
 
 internal sealed class GrowattWorker(IServiceScopeFactory scopes, GrowattOptions options, GrowattPoller poller,
     GrowattProgress progress, TimeProvider clock, IHubContext<MonitoringHub> hub, ILogger<GrowattWorker> logger) : BackgroundService
@@ -46,9 +49,10 @@ internal sealed class GrowattWorker(IServiceScopeFactory scopes, GrowattOptions 
                     delay = result.NextDelay;
                     if (result.PropertyId is { } propertyId)
                     {
-                        progress.Set("running");
+                        var synchronizedAt = clock.GetUtcNow();
+                        progress.Set("running", synchronizedAt);
                         await hub.Clients.Group(MonitoringHub.Group(propertyId))
-                            .SendAsync("stateChanged", new { propertyId, observedAt = clock.GetUtcNow() }, stoppingToken);
+                            .SendAsync("stateChanged", new { propertyId, observedAt = synchronizedAt }, stoppingToken);
                     }
                     else
                     {

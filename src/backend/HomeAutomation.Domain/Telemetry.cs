@@ -4,7 +4,8 @@ public enum Metric
 {
     PvPower, HouseholdPower, GridAvailable, BatterySoc, BatteryPower,
     Voltage, Current, ActivePower, Energy, Temperature, Humidity,
-    SwitchOn, TargetTemperature, OperatingMode, GridVoltage, GridFrequency, GridImportPower, PvVoltage, WarningStatus
+    SwitchOn, TargetTemperature, OperatingMode, GridVoltage, GridFrequency, GridImportPower, PvVoltage, WarningStatus,
+    AcOutputVoltage, InverterLoadPercent, AcChargingPower
 }
 
 public static class Telemetry
@@ -12,11 +13,13 @@ public static class Telemetry
     public static string? Unit(Metric metric) => metric switch
     {
         Metric.PvPower or Metric.HouseholdPower or Metric.BatteryPower or Metric.ActivePower or Metric.GridImportPower => "W",
+        Metric.AcChargingPower => "W",
         Metric.Voltage or Metric.GridVoltage or Metric.PvVoltage => "V",
+        Metric.AcOutputVoltage => "V",
         Metric.GridFrequency => "Hz",
         Metric.Current => "A",
         Metric.Energy => "kWh",
-        Metric.BatterySoc or Metric.Humidity => "%",
+        Metric.BatterySoc or Metric.Humidity or Metric.InverterLoadPercent => "%",
         Metric.Temperature or Metric.TargetTemperature => "°C",
         _ => null
     };
@@ -52,7 +55,8 @@ public sealed record Sample
         if (Telemetry.Unit(metric) is null || !double.IsFinite(value) ||
             (metric is Metric.BatterySoc or Metric.Humidity && (value < 0 || value > 100)) ||
             (metric is Metric.PvPower or Metric.HouseholdPower or Metric.Energy or Metric.Voltage or Metric.Current
-                or Metric.GridVoltage or Metric.PvVoltage or Metric.GridImportPower or Metric.GridFrequency && value < 0))
+                or Metric.GridVoltage or Metric.PvVoltage or Metric.GridImportPower or Metric.GridFrequency
+                or Metric.AcOutputVoltage or Metric.InverterLoadPercent or Metric.AcChargingPower && value < 0))
         {
             throw new ArgumentOutOfRangeException(nameof(value), "Invalid value for the metric.");
         }

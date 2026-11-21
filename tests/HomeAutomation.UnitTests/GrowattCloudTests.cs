@@ -111,7 +111,8 @@ public sealed class GrowattCloudTests
                   {"serialNum":"fixture-S","time":"2026-11-21 13:56:00","ppv":900,"vGrid":229,"capacity":90,"vBat":51.3,
                    "lost":true,"errorCode":3},
                   {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","ppv":"840","vpv":102,"vGrid":230,"freqGrid":50,
-                   "outPutPower":303,"capacity":49,"vBat":52.7,"warnCode":4,"faultCode":6,"lost":false,
+                   "outPutPower":303,"outPutVolt":241,"loadPercent":20.3,"pAcCharge":46,
+                   "capacity":49,"vBat":52.7,"warnCode":4,"faultCode":6,"lost":false,
                    "spf5000StatusText":"Battery Discharging"}
                 ]}}
                 """);
@@ -133,6 +134,10 @@ public sealed class GrowattCloudTests
         Assert.Equal(49, Assert.Single(master.SharedBatteryReadings, reading => reading.Metric == Metric.BatterySoc).Number);
         Assert.Equal(840, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.PvPower).Number);
         Assert.Equal(303, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.ActivePower).Number);
+        Assert.Equal(241, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.AcOutputVoltage).Number);
+        Assert.Equal(20.3, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.InverterLoadPercent).Number);
+        Assert.Equal(46, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.AcChargingPower).Number);
+        Assert.DoesNotContain(master.SharedBatteryReadings, reading => reading.Metric == Metric.BatteryPower);
         Assert.Equal("6", master.FaultCode);
         Assert.DoesNotContain(master.InverterReadings, reading => reading.Metric == Metric.GridAvailable);
         var slave = Assert.Single(snapshot.Inverters, inverter => inverter.ExternalId == options.SlaveId);

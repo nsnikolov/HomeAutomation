@@ -14,6 +14,7 @@ export const metricLabels: Record<Metric, string> = {
   switchOn: 'Switch state', targetTemperature: 'Target temperature', operatingMode: 'Operating mode',
   gridVoltage: 'Grid voltage', gridFrequency: 'Grid frequency', gridImportPower: 'Grid import',
   pvVoltage: 'PV voltage', warningStatus: 'Reported warning',
+  acOutputVoltage: 'AC output voltage', inverterLoadPercent: 'Inverter load', acChargingPower: 'AC charging power',
 }
 
 export function DeviceIcon({ kind, size = 18 }: { kind: string; size?: number }) {

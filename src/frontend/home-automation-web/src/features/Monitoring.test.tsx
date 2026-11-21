@@ -16,9 +16,30 @@ const meter: Device = {
 
 describe('Monitoring dashboard', () => {
   it('shows the unconfigured Growatt state without rendering fabricated readings', () => {
-    render(<GrowattSummary result={{ status: 'notConfigured', data: null }} timeZone="Europe/Sofia" />)
+    render(<GrowattSummary result={{ status: 'notConfigured', lastSuccess: null, data: null }} timeZone="Europe/Sofia" />)
     expect(screen.getByText(/Live Growatt monitoring is not configured/)).toBeInTheDocument()
     expect(screen.queryByText('Solar installation')).not.toBeInTheDocument()
+  })
+
+  it('shows asymmetric recovery and keeps a provider offline flag distinct from reading freshness', () => {
+    const observedAt = '2026-11-21T12:00:00Z'
+    const output: Reading = {
+      metric: 'acOutputVoltage', unit: 'V', observedAt, number: 241, flag: null, code: null, quality: 'fresh',
+    }
+    render(<GrowattSummary timeZone="Europe/Sofia" result={{ status: 'running', lastSuccess: observedAt, data: {
+      installation: [], alerts: [{ deviceId: 2, deviceName: 'Growatt slave', code: 'offline', occurredAt: observedAt }],
+      devices: [
+        { ...meter, id: 1, kind: 'inverter', name: 'Growatt master' },
+        { ...meter, id: 2, kind: 'inverter', name: 'Growatt slave', connectivity: 'offline',
+          endpoints: [{ id: 2, name: 'Main', capabilities: [], measurements: [output] }] },
+      ],
+    } }} />)
+    expect(screen.getByText(/Last successful synchronization/)).toBeInTheDocument()
+    expect(screen.getByText(/Master online and Slave offline/)).toBeInTheDocument()
+    expect(screen.getByText(/offline and has recently supplied readings/)).toBeInTheDocument()
+    expect(screen.getByText('241 V')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Recent Growatt alerts' })).toBeInTheDocument()
+    expect(screen.queryByText('Outage')).not.toBeInTheDocument()
   })
 
   it('shows current data, known faults, and unknown grid rather than an outage for stale readings', () => {

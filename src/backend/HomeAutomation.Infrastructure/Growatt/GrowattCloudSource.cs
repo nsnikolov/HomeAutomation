@@ -62,11 +62,13 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
             AddNumber(inverter, Metric.GridVoltage, reading.VGrid, observedAt);
             AddNumber(inverter, Metric.GridFrequency, reading.FreqGrid, observedAt);
             AddNumber(inverter, Metric.ActivePower, reading.OutPutPower, observedAt);
+            AddNumber(inverter, Metric.AcOutputVoltage, reading.OutPutVolt, observedAt);
+            AddNumber(inverter, Metric.InverterLoadPercent, reading.LoadPercent, observedAt);
+            AddNumber(inverter, Metric.AcChargingPower, reading.PAcCharge, observedAt);
             if (reading.WarnCode is >= 0)
                 inverter.Add(Sample.Status(Metric.WarningStatus, observedAt, reading.WarnCode.Value.ToString(CultureInfo.InvariantCulture)));
-            if (reading.Spf5000StatusText is { Length: > 0 and <= 32 } mode &&
-                !string.IsNullOrWhiteSpace(mode) &&
-                mode.All(character => char.IsAsciiLetter(character) || character is ' ' or '-' or '/'))
+            var mode = ValidMode(reading.Spf5000StatusText) ? reading.Spf5000StatusText : reading.StatusText;
+            if (ValidMode(mode) && mode is not null)
                 inverter.Add(Sample.Status(Metric.OperatingMode, observedAt, mode));
 
             var battery = new List<Sample>();
@@ -89,6 +91,10 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
         if (inverters.Count == 0) throw new GrowattReadException(GrowattFailure.Unavailable);
         return new GrowattSnapshot(inverters, []);
     }
+
+    private static bool ValidMode(string? mode) => mode is { Length: > 0 and <= 32 } &&
+        !string.IsNullOrWhiteSpace(mode) &&
+        mode.All(character => char.IsAsciiLetter(character) || character is ' ' or '-' or '/' or '&');
 
     private static void AddNumber(List<Sample> samples, Metric metric, double? input, DateTimeOffset observedAt)
     {
