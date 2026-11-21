@@ -28,9 +28,11 @@ builder.Services.AddOptions<SimulatorOptions>().BindConfiguration("Simulator")
         Enum.IsDefined(options.Scenario), "Invalid simulator cadence, freshness or scenario.")
     .ValidateOnStart();
 builder.Services.AddOptions<DatabaseOptions>().BindConfiguration("Database")
-    .Validate(options => !string.IsNullOrWhiteSpace(options.Host) && options.Port is > 0 and <= 65535 &&
-        !string.IsNullOrWhiteSpace(options.Name) && !string.IsNullOrWhiteSpace(options.User) &&
-        !string.IsNullOrWhiteSpace(options.Password), "Set the database host, port, name, user and password.")
+    .Validate(options => !string.IsNullOrWhiteSpace(options.Host), "Set Database:Host to the intended MySQL server.")
+    .Validate(options => options.Port is > 0 and <= 65535, "Set Database:Port to the confirmed MySQL TCP port (1–65535).")
+    .Validate(options => !string.IsNullOrWhiteSpace(options.Name), "Set Database:Name to the dedicated Home Automation schema.")
+    .Validate(options => !string.IsNullOrWhiteSpace(options.User), "Set Database:User to the scoped MySQL account.")
+    .Validate(options => !string.IsNullOrWhiteSpace(options.Password), "Set Database:Password with Development User Secrets or a private environment variable.")
     .ValidateOnStart();
 builder.Services.AddSingleton(services => services.GetRequiredService<IOptions<SimulatorOptions>>().Value);
 builder.Services.AddSingleton(services =>
@@ -156,7 +158,16 @@ app.MapMonitoring();
 app.MapHub<MonitoringHub>("/hubs/monitoring", options => options.CloseOnAuthenticationExpiration = true).RequireAuthorization();
 app.Map("/api/{**path}", () => Results.NotFound());
 app.MapFallbackToFile("index.html");
-await app.RunAsync();
+try
+{
+    await app.RunAsync();
+}
+catch (OptionsValidationException error)
+{
+    foreach (var failure in error.Failures)
+        app.Logger.LogError("Configuration error: {Reason}", failure);
+    Environment.ExitCode = 1;
+}
 
 static void UseEnumStrings(JsonSerializerOptions options) =>
     options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false));

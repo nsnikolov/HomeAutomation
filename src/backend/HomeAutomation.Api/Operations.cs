@@ -9,10 +9,10 @@ namespace HomeAutomation.Api;
 
 internal sealed class DatabaseOptions
 {
-    public string Host { get; set; } = "localhost";
-    public int Port { get; set; } = 3307;
-    public string Name { get; set; } = "homeautomation";
-    public string User { get; set; } = "home_runtime";
+    public string Host { get; set; } = "";
+    public int Port { get; set; }
+    public string Name { get; set; } = "";
+    public string User { get; set; } = "";
     public string? Password { get; set; }
     public MySqlSslMode SslMode { get; set; } = MySqlSslMode.Preferred;
 }
@@ -46,7 +46,7 @@ internal sealed class DatabaseReadiness(Migrations migrations) : IHealthCheck
 
 internal sealed class TelemetryWorker(
     IServiceScopeFactory scopes, IObservationProvider provider, SimulatorOptions options,
-    TimeProvider clock, PollProgress progress, IHubContext<MonitoringHub> hub, ILogger<TelemetryWorker> logger)
+    TimeProvider clock, PollProgress progress, Migrations migrations, IHubContext<MonitoringHub> hub, ILogger<TelemetryWorker> logger)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -57,10 +57,20 @@ internal sealed class TelemetryWorker(
         long? propertyId = null;
         var failures = 0;
         var announced = false;
+        var waitingForSchema = false;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
+                if (propertyId is null && !await migrations.VerifyAsync(stoppingToken))
+                {
+                    progress.Failed();
+                    if (!waitingForSchema)
+                        logger.LogWarning("Simulator is waiting for the database schema. Run the API with --migrate using the migration account.");
+                    waitingForSchema = true;
+                    await Task.Delay(interval, clock, stoppingToken);
+                    continue;
+                }
                 await using var scope = scopes.CreateAsyncScope();
                 var writer = scope.ServiceProvider.GetRequiredService<ITelemetryWriter>();
                 propertyId ??= await writer.RegisterDemoInventoryAsync(await provider.DiscoverAsync(stoppingToken), stoppingToken);

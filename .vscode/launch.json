@@ -10,17 +10,23 @@
       "cwd": "${workspaceFolder}/src/backend/HomeAutomation.Api",
       "env": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "ASPNETCORE_URLS": "http://localhost:5080",
-        "Database__Host": "127.0.0.1",
-        "Database__Port": "3307"
+        "ASPNETCORE_URLS": "http://localhost:5080"
       }
     },
     {
       "name": "Home Automation web",
       "type": "pwa-chrome",
       "request": "launch",
+      "preLaunchTask": "Start React development server",
       "url": "http://localhost:5173",
       "webRoot": "${workspaceFolder}/src/frontend/home-automation-web"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Home Automation (API + web)",
+      "configurations": ["Home Automation API", "Home Automation web"],
+      "stopAll": true
     }
   ]
 }

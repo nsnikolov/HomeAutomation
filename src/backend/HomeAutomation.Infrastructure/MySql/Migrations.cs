@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Dapper;
+using MySqlConnector;
 using static HomeAutomation.Infrastructure.MySql.Database;
 
 namespace HomeAutomation.Infrastructure.MySql;
@@ -42,9 +43,17 @@ public sealed class Migrations(Database database)
                 if (saved is not null)
                     throw new InvalidOperationException($"Checksum mismatch for migration {name}.");
 
-                await connection.ExecuteAsync(Query(sql, cancellationToken));
-                await connection.ExecuteAsync(Query(
-                    "INSERT INTO schema_migrations (name, checksum) VALUES (@Name, @Checksum)", cancellationToken, migration));
+                try
+                {
+                    await connection.ExecuteAsync(Query(sql, cancellationToken));
+                    await connection.ExecuteAsync(Query(
+                        "INSERT INTO schema_migrations (name, checksum) VALUES (@Name, @Checksum)", cancellationToken, migration));
+                }
+                catch (MySqlException error)
+                {
+                    throw new InvalidOperationException(
+                        $"Migration {name} failed with MySQL error {error.ErrorCode} (SQL state {error.SqlState}).", error);
+                }
             }
         }
         finally
@@ -56,7 +65,14 @@ public sealed class Migrations(Database database)
     public async Task<bool> VerifyAsync(CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
-        var applied = await connection.QueryAsync<string>(Query("SELECT name FROM schema_migrations", cancellationToken));
-        return applied.ToHashSet(StringComparer.Ordinal).SetEquals(Scripts);
+        try
+        {
+            var applied = await connection.QueryAsync<string>(Query("SELECT name FROM schema_migrations", cancellationToken));
+            return applied.ToHashSet(StringComparer.Ordinal).SetEquals(Scripts);
+        }
+        catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.NoSuchTable)
+        {
+            return false;
+        }
     }
 }

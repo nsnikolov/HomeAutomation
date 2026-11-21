@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <UserSecretsId>HomeAutomation.Api.LocalDevelopment</UserSecretsId>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../HomeAutomation.Application/HomeAutomation.Application.csproj" />
     <ProjectReference Include="../HomeAutomation.Infrastructure/HomeAutomation.Infrastructure.csproj" />

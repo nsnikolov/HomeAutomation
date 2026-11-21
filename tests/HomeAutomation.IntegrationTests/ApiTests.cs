@@ -65,6 +65,10 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            builder.UseSetting("Database:Host", "127.0.0.1");
+            builder.UseSetting("Database:Port", "3306");
+            builder.UseSetting("Database:Name", "homeautomation_test");
+            builder.UseSetting("Database:User", "test");
             builder.UseSetting("Database:Password", "test-configuration-only");
             builder.UseSetting("Simulator:Enabled", "false");
             builder.ConfigureTestServices(services =>
