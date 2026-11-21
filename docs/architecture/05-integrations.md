@@ -25,6 +25,8 @@ Official onboarding references are available through [Growatt support](https://e
 
 ## Daikin ONECTA
 
+See the [ONECTA setup and commissioning guide](../integrations/daikin-onecta.md) for the implementation, authenticated contract checks and hardware validation still needed.
+
 Daikin's public developer guidance confirms official monitoring and control, self-service private developer credentials, terms acceptance and EMEA availability. Its FAQ publishes a default 200 calls/day for private developers and sliding-window accounting. The public information does not establish the exact model capabilities, request costs, token rotation behavior, or support for a 10 °C heating setpoint on the installed units. Consult the portal contract with the registered app before implementation. [Daikin developer FAQ](https://www.daikin.ie/en_gb/product-group/control-systems/daikin-developer-portal.html) · [ONECTA Developer Portal](https://developer.cloud.daikineurope.com/)
 
 - Register the app and its exact HTTPS callback. Use server-side OAuth2 authorization code with protected, expiring state tied to the initiating property admin and PKCE subject to the provider contract. Obtain documented scopes and consent. Refresh ahead of expiry using one in-flight refresh per credential, persist replacements atomically, and signal reauthorization on revocation or unrecoverable refresh failure. Store all credentials and tokens behind a server-side vault. [OAuth 2.0 security guidance](https://www.rfc-editor.org/rfc/rfc9700)

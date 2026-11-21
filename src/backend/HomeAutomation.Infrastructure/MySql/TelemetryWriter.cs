@@ -57,6 +57,27 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
         return site.PropertyId;
     }
 
+    public async Task StoreDaikinAsync(long propertyId, long? roomId, DiscoveredDevice device, ObservationBatch batch,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await database.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await connection.ExecuteAsync(Query("""
+            INSERT INTO integration_connections(property_id,provider_code) VALUES (@propertyId,'daikin')
+            ON DUPLICATE KEY UPDATE id=integration_connections.id;
+            """, cancellationToken, new { propertyId }, transaction));
+        var connectionId = await connection.QuerySingleAsync<long>(Query("""
+            SELECT id FROM integration_connections WHERE property_id=@propertyId AND provider_code='daikin' FOR UPDATE
+            """, cancellationToken, new { propertyId }, transaction));
+        var room = roomId is null ? "" : await connection.QuerySingleAsync<string>(Query("""
+            SELECT room_key FROM rooms WHERE property_id=@propertyId AND id=@roomId
+            """, cancellationToken, new { propertyId, roomId }, transaction));
+        var site = new Site(propertyId, 0, connectionId);
+        await RegisterInventoryAsync(connection, transaction, site, "daikin", [device with { RoomKey = room }], cancellationToken);
+        await PersistAsync(connection, transaction, site, "daikin", batch, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     private static async Task RegisterInventoryAsync(MySqlConnection connection, MySqlTransaction transaction, Site site,
         string provider, IReadOnlyList<DiscoveredDevice> devices, CancellationToken cancellationToken)
     {
@@ -70,13 +91,16 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
                 """
                 INSERT INTO devices (property_id, room_id, inventory_key, name, kind, manufacturer, model)
                 VALUES (@PropertyId, @RoomId, @InventoryKey, @Name, @Kind, @Manufacturer, @Model)
-                ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)
+                ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id),
+                    room_id = IF(@Provider = 'daikin', @RoomId, room_id),
+                    name = IF(@Provider = 'daikin', @Name, name),
+                    model = IF(@Provider = 'daikin', @Model, model)
                 """,
                 new
                 {
                     site.PropertyId, RoomId = device.RoomKey == "" ? (long?)null : rooms[device.RoomKey], device.Name,
-                    InventoryKey = provider == "simulator" ? $"simulator:{device.ExternalId}" :
-                        "growatt:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    Provider = provider, InventoryKey = provider == "simulator" ? $"simulator:{device.ExternalId}" :
+                        provider + ":" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                             System.Text.Encoding.UTF8.GetBytes(device.ExternalId))),
                     Kind = device.Kind.ToString(), device.Manufacturer, device.Model
                 }, cancellationToken);

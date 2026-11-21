@@ -5,7 +5,7 @@ public enum Metric
     PvPower, HouseholdPower, GridAvailable, BatterySoc, BatteryPower,
     Voltage, Current, ActivePower, Energy, Temperature, Humidity,
     SwitchOn, TargetTemperature, OperatingMode, GridVoltage, GridFrequency, GridImportPower, PvVoltage, WarningStatus,
-    AcOutputVoltage, InverterLoadPercent, AcChargingPower
+    AcOutputVoltage, InverterLoadPercent, AcChargingPower, OutdoorTemperature, FanSpeed
 }
 
 public static class Telemetry
@@ -20,7 +20,8 @@ public static class Telemetry
         Metric.Current => "A",
         Metric.Energy => "kWh",
         Metric.BatterySoc or Metric.Humidity or Metric.InverterLoadPercent => "%",
-        Metric.Temperature or Metric.TargetTemperature => "°C",
+        Metric.Temperature or Metric.TargetTemperature or Metric.OutdoorTemperature => "°C",
+        Metric.FanSpeed => "step",
         _ => null
     };
 

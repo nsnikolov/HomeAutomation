@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowUpRight, ChartNoAxesCombined, ChevronDown, CircuitBoard, House, LayoutGrid, LogOut, Settings, Zap } from 'lucide-react'
+import { ArrowUpRight, ChartNoAxesCombined, ChevronDown, CircuitBoard, House, LayoutGrid, LogOut, Settings, Snowflake, Zap } from 'lucide-react'
 import { Link, NavLink, Navigate, Route, Routes, useMatch, useNavigate, useParams } from 'react-router'
 import { api } from './shared/api'
 import { useLiveUpdates } from './shared/live'
@@ -8,6 +8,7 @@ import type { Property } from './shared/types'
 import { Badge, Button, Card, Input } from './shared/ui'
 import { Dashboard } from './features/Dashboard'
 import { GrowattPanel } from './features/GrowattPanel'
+import { DaikinPanel } from './features/DaikinPanel'
 import { Devices, DevicePage } from './features/Devices'
 import { Energy } from './features/Energy'
 
@@ -77,6 +78,7 @@ function SelectedProperty({ properties, email }: { properties: Property[]; email
 const links = [
   { path: '', label: 'Dashboard', icon: LayoutGrid },
   { path: '/growatt', label: 'Live Growatt', icon: Zap },
+  { path: '/daikin', label: 'Daikin ONECTA', icon: Snowflake },
   { path: '/devices', label: 'Devices', icon: CircuitBoard },
   { path: '/energy', label: 'Energy', icon: ChartNoAxesCombined },
   { path: '/automations', label: 'Automations', icon: Zap },
@@ -86,15 +88,17 @@ const links = [
 function PropertyView({ property, properties, email }: { property: Property; properties: Property[]; email: string }) {
   const navigate = useNavigate()
   const growattView = useMatch('/properties/:propertyId/growatt') !== null
+  const daikinView = useMatch('/properties/:propertyId/daikin') !== null
+  const simulatorView = !growattView && !daikinView
   const live = useLiveUpdates(property.id)
   const snapshot = useQuery({
     queryKey: ['property', property.id, 'state'],
     queryFn: ({ signal }) => api.state(property.id, signal),
-    enabled: !growattView,
+    enabled: simulatorView,
     refetchInterval: live ? 30000 : 10000,
   })
   const health = useQuery({
-    queryKey: ['health'], queryFn: ({ signal }) => api.health(signal), enabled: !growattView, refetchInterval: 15000,
+    queryKey: ['health'], queryFn: ({ signal }) => api.health(signal), enabled: simulatorView, refetchInterval: 15000,
   })
   const [offlineNotice, setOfflineNotice] = useState(false)
   const root = `/properties/${property.id}`
@@ -118,7 +122,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
           <ChevronDown size={14} aria-hidden />
         </div>
         <div className="topbar-status">
-          <span className="sample-label">{growattView ? 'Growatt Cloud' : 'Simulated data'}</span>
+          <span className="sample-label">{growattView ? 'Growatt Cloud' : daikinView ? 'Daikin ONECTA' : 'Simulated data'}</span>
           <button className="live-toggle" type="button" aria-expanded={offlineNotice} onClick={() => setOfflineNotice(!offlineNotice)}>
             <Badge className={live ? 'tone-good' : 'tone-neutral'}><i />{live ? 'Live updates' : 'Auto refresh'}</Badge>
           </button>
@@ -128,10 +132,11 @@ function PropertyView({ property, properties, email }: { property: Property; pro
         {live ? 'The dashboard receives updates over SignalR.' : 'The dashboard refreshes regularly while the live connection is unavailable.'}
       </div>}
       <main className="content">
-        {!growattView && snapshot.isError && <div className="notice" role="alert">The property feed could not be refreshed. <Button variant="outline" onClick={() => void snapshot.refetch()}>Retry</Button></div>}
+        {simulatorView && snapshot.isError && <div className="notice" role="alert">The property feed could not be refreshed. <Button variant="outline" onClick={() => void snapshot.refetch()}>Retry</Button></div>}
         <Routes>
           <Route index element={<Dashboard property={property} state={snapshot.data} health={health.data} loading={snapshot.isPending} />} />
           <Route path="growatt" element={<GrowattPanel property={property} />} />
+          <Route path="daikin" element={<DaikinPanel property={property} />} />
           <Route path="devices" element={<Devices property={property} devices={snapshot.data?.devices} />} />
           <Route path="devices/:deviceId" element={<DevicePage property={property} />} />
           <Route path="energy" element={<Energy property={property} state={snapshot.data} pollSeconds={health.data?.pollSeconds ?? 10} />} />

@@ -1,4 +1,4 @@
-import type { Device, GrowattState, Health, Metric, Point, Property, PropertyState, Room } from './types'
+import type { DaikinOutcome, DaikinState, Device, GrowattState, Health, Metric, Point, Property, PropertyState, Room } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number) {
@@ -25,6 +25,14 @@ async function sessionAction(path: '/login' | '/logout', body?: { email: string;
   })
 }
 
+async function daikinAction<T>(id: number, action: string, body?: object) {
+  const { token } = await request<{ token: string }>('/session/csrf')
+  return request<T>(`/daikin/${id}/${action}`, {
+    method: 'POST', headers: { 'X-CSRF-TOKEN': token, ...(body && { 'Content-Type': 'application/json' }) },
+    body: body && JSON.stringify(body),
+  })
+}
+
 export const api = {
   session: async (signal?: AbortSignal) => {
     try {
@@ -40,6 +48,13 @@ export const api = {
   rooms: (id: number, signal?: AbortSignal) => request<Room[]>(`/properties/${id}/rooms`, { signal }),
   state: (id: number, signal?: AbortSignal) => request<PropertyState>(`/properties/${id}/state`, { signal }),
   growatt: (id: number, signal?: AbortSignal) => request<GrowattState>(`/properties/${id}/growatt`, { signal }),
+  daikin: (id: number, signal?: AbortSignal) => request<DaikinState>(`/daikin/${id}`, { signal }),
+  connectDaikin: (id: number) => daikinAction<{ authorizationUrl: string }>(id, 'connect'),
+  updateDaikin: (id: number, action: 'complete' | 'disconnect' | 'refresh') => daikinAction<void>(id, action),
+  assignDaikin: (id: number, device: string, roomId: number | null) =>
+    daikinAction<void>(id, `devices/${device}/assign`, { roomId }),
+  commandDaikin: (id: number, device: string, operation: string, value: string) =>
+    daikinAction<DaikinOutcome>(id, `devices/${device}/commands`, { operation, value }),
   device: (id: number, device: number, signal?: AbortSignal) =>
     request<Device>(`/properties/${id}/devices/${device}`, { signal }),
   health: (signal?: AbortSignal) => request<Health>('/system/health', { signal }),

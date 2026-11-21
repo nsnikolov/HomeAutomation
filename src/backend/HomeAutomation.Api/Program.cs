@@ -6,6 +6,7 @@ using HomeAutomation.Application;
 using HomeAutomation.Infrastructure.MySql;
 using HomeAutomation.Infrastructure.Simulator;
 using HomeAutomation.Infrastructure.Growatt;
+using HomeAutomation.Infrastructure.Daikin;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -55,9 +56,10 @@ builder.Services.AddSingleton(services =>
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<Migrations>();
 builder.Services.AddSingleton<IObservationProvider, SimulatorProvider>();
-builder.Services.AddScoped<ITelemetryWriter, TelemetryWriter>();
+builder.Services.AddScoped<TelemetryWriter>();
+builder.Services.AddScoped<ITelemetryWriter>(services => services.GetRequiredService<TelemetryWriter>());
 builder.Services.AddScoped<IMonitoringReader, MonitoringReader>();
-builder.Services.AddScoped<IGrowattTelemetryStore, TelemetryWriter>();
+builder.Services.AddScoped<IGrowattTelemetryStore>(services => services.GetRequiredService<TelemetryWriter>());
 builder.Services.AddScoped<IGrowattMonitoringReader, MonitoringReader>();
 builder.Services.AddSingleton(services =>
 {
@@ -84,6 +86,14 @@ builder.Services.AddHttpClient<GrowattCloudClient>(client =>
     .RemoveAllLoggers();
 builder.Services.AddScoped<IGrowattReadSource, GrowattCloudSource>();
 builder.Services.AddHostedService<GrowattWorker>();
+builder.Services.AddSingleton(services =>
+{
+    try { return services.GetRequiredService<IConfiguration>().GetSection("Daikin").Get<DaikinOptions>() ?? new DaikinOptions(); }
+    catch (InvalidOperationException) { return new DaikinOptions(); }
+});
+builder.Services.AddSingleton<DaikinFlow>();
+DaikinService.Register(builder.Services);
+builder.Services.AddHostedService<DaikinWorker>();
 builder.Services.AddScoped<IdentityStore>();
 builder.Services.AddIdentityCore<LocalUser>(options =>
 {
@@ -190,6 +200,7 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => fa
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = registration => registration.Tags.Contains("ready") });
 app.MapSession();
 app.MapMonitoring();
+app.MapDaikin();
 app.MapHub<MonitoringHub>("/hubs/monitoring", options => options.CloseOnAuthenticationExpiration = true).RequireAuthorization();
 app.Map("/api/{**path}", () => Results.NotFound());
 app.MapFallbackToFile("index.html");

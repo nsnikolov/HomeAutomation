@@ -6,7 +6,7 @@ public enum Capability
     SolarProduction, HouseholdConsumption, GridAvailability, BatteryLevel, BatteryPower,
     VoltageMeasurement, CurrentMeasurement, PowerMeasurement, EnergyMeasurement,
     Switch, TemperatureMeasurement, HumidityMeasurement, HeatingSetpoint, OperatingMode, FaultStatus,
-    FrequencyMeasurement, WarningStatus
+    FrequencyMeasurement, WarningStatus, FanSpeed
 }
 public enum Access { ReadOnly, Unsupported }
 public enum Connectivity { Online, Offline, Unknown }

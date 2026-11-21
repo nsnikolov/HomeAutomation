@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using HomeAutomation.Application;
+using HomeAutomation.Api;
 using HomeAutomation.Domain;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
@@ -56,6 +57,45 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal(expected, (await client.GetAsync("/api/v1/properties/1/telemetry?" + query)).StatusCode);
     }
 
+    [Fact]
+    public async Task DaikinEndpointsKeepTheExistingSessionAndPropertyBoundary()
+    {
+        using var guest = host.CreateClient();
+        using var viewer = AuthenticatedClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/daikin/1")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await guest.GetAsync("/api/v1/daikin/callback?state=forged&code=fixture")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/v1/daikin/99")).StatusCode);
+        Assert.Contains("notConfigured", await viewer.GetStringAsync("/api/v1/daikin/1"));
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsJsonAsync(
+            "/api/v1/daikin/1/devices/00000000000000000000000000000001/commands", new { operation = "power", value = "off" })).StatusCode);
+    }
+
+    [Fact]
+    public void DaikinStateIsBrowserAndUserBoundSingleUseAndExpiring()
+    {
+        var clock = new FlowClock();
+        var flow = new DaikinFlow(clock);
+        var pending = flow.Begin("owner", 1, true);
+        Assert.NotEqual(pending.Verifier, pending.Challenge);
+        Assert.Null(flow.Accept(pending.Cookie, "forged", "one"));
+        Assert.Null(flow.Accept("another-browser", pending.State, "one"));
+        Assert.Equal(1L, flow.Accept(pending.Cookie, pending.State, "one"));
+        Assert.Null(flow.Take("another-user", 1, pending.Cookie));
+        Assert.Null(flow.Accept(pending.Cookie, pending.State, "two"));
+        Assert.Equal("one", flow.Take("owner", 1, pending.Cookie)?.Code);
+        Assert.Null(flow.Take("owner", 1, pending.Cookie));
+        pending = flow.Begin("owner", 1, true);
+        clock.Advance();
+        Assert.Null(flow.Accept(pending.Cookie, pending.State, "expired"));
+    }
+
+    private sealed class FlowClock : TimeProvider
+    {
+        private DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        public override DateTimeOffset GetUtcNow() => now;
+        public void Advance() => now = now.AddMinutes(11);
+    }
+
     private HttpClient AuthenticatedClient()
     {
         var client = host.CreateClient();
@@ -73,6 +113,9 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             builder.UseSetting("Database:User", "test");
             builder.UseSetting("Database:Password", "test-configuration-only");
             builder.UseSetting("Simulator:Enabled", "false");
+            builder.UseSetting("Growatt:Enabled", "false");
+            builder.UseSetting("Daikin:ClientId", "");
+            builder.UseSetting("Daikin:ClientSecret", "");
             builder.ConfigureTestServices(services =>
             {
                 services.RemoveAll<IMonitoringReader>();

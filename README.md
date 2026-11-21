@@ -103,6 +103,10 @@ Use `docker compose logs migrate app` to inspect startup and `docker compose dow
 
 Sign in and choose **Live Growatt** in the property sidebar to open real readings. **Dashboard** opens the simulator. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.
 
+## Daikin ONECTA
+
+Use the [Daikin ONECTA setup guide](docs/integrations/daikin-onecta.md) to register the developer app, apply migration 003, and connect an account from the property sidebar. Physical writes are disabled by default.
+
 ## Verify changes
 
 ```powershell

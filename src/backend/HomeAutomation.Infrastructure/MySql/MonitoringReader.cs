@@ -62,8 +62,11 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
                    s.last_contact_utc AS LastContact, s.observed_at_utc AS StatusObserved
             FROM devices d LEFT JOIN device_state s ON s.device_id = d.id
             WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId)
-              AND (EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
-                           WHERE b.device_id = d.id AND c.provider_code = 'growatt')) = (@Provider = 'growatt')
+              AND (CASE WHEN @Provider = 'simulator' THEN NOT EXISTS (
+                  SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
+                  WHERE b.device_id = d.id AND c.provider_code IN ('growatt','daikin'))
+              ELSE EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
+                           WHERE b.device_id = d.id AND c.provider_code = @Provider) END)
             ORDER BY d.id;
 
             SELECT id AS Id, device_id AS DeviceId, name AS Name FROM device_endpoints
@@ -83,8 +86,11 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             SELECT a.device_id AS DeviceId, d.name AS DeviceName, a.alert_code AS Code, a.occurred_at_utc AS OccurredAt
             FROM devices d JOIN device_alerts a ON a.device_id = d.id
             WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId)
-              AND (EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
-                           WHERE b.device_id = d.id AND c.provider_code = 'growatt')) = (@Provider = 'growatt')
+              AND (CASE WHEN @Provider = 'simulator' THEN NOT EXISTS (
+                  SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
+                  WHERE b.device_id = d.id AND c.provider_code IN ('growatt','daikin'))
+              ELSE EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
+                           WHERE b.device_id = d.id AND c.provider_code = @Provider) END)
             ORDER BY a.occurred_at_utc DESC, a.id DESC LIMIT 12;
             """, cancellationToken, new { PropertyId = propertyId, DeviceId = deviceId, Provider = provider }));
 

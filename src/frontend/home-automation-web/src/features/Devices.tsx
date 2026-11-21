@@ -15,6 +15,7 @@ export const metricLabels: Record<Metric, string> = {
   gridVoltage: 'Grid voltage', gridFrequency: 'Grid frequency', gridImportPower: 'Grid import',
   pvVoltage: 'PV voltage', warningStatus: 'Reported warning',
   acOutputVoltage: 'AC output voltage', inverterLoadPercent: 'Inverter load', acChargingPower: 'AC charging power',
+  outdoorTemperature: 'Outdoor temperature', fanSpeed: 'Fan speed',
 }
 
 export function DeviceIcon({ kind, size = 18 }: { kind: string; size?: number }) {
