@@ -101,7 +101,7 @@ Use `docker compose logs migrate app` to inspect startup and `docker compose dow
 
 ## Growatt read-only monitoring
 
-The dashboard has a separate Growatt status panel. The simulator remains the default. Connecting the real inverters requires authorized access and a verified SPF 5000 ES read contract. See [Growatt access research and setup](docs/integrations/growatt.md) for the configuration, mapping policy and prerequisites.
+The dashboard has a separate Growatt status panel. The simulator remains enabled by default. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.
 
 ## Verify changes
 

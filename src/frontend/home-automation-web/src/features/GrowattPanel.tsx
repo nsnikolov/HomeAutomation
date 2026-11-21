@@ -7,12 +7,23 @@ import { DeviceBadge, formatReading, metricLabels } from './Devices'
 
 const messages: Record<string, string> = {
   notConfigured: 'Live Growatt monitoring is not configured. The dashboard above shows simulated data.',
-  invalidConfiguration: 'Check the Growatt site mapping and polling settings.',
+  invalidConfiguration: 'Check Growatt access, inverter mapping, time zone, and polling settings.',
   transportUnavailable: 'Waiting for authorized Growatt access and a verified read adapter.',
   waitingForSchema: 'Waiting for the database schema.',
   degraded: 'Growatt could not complete the latest poll. Readings may be stale.',
   paused: 'Growatt polling is backing off after a provider failure. Readings may be stale.',
   running: 'Live Growatt readings. Connection failures and stale readings are shown separately.',
+}
+
+const inverterMetricLabels = {
+  activePower: 'Inverter output',
+  gridFrequency: 'AC input frequency',
+  gridVoltage: 'AC input voltage',
+}
+
+function deviceMetricLabel(metric: Reading['metric']) {
+  return metric === 'activePower' || metric === 'gridFrequency' || metric === 'gridVoltage'
+    ? inverterMetricLabels[metric] : metricLabels[metric]
 }
 
 export function GrowattPanel({ property }: { property: Property }) {
@@ -41,7 +52,7 @@ export function GrowattSummary({ result, timeZone, message }: { result?: Growatt
           {device.lastContactAt && <p>Last observation {formatMoment(device.lastContactAt, timeZone)}</p>}
           {device.faultCode && <p>Reported fault {device.faultCode}{device.connectivity === 'unknown' ? ' (last known)' : ''}</p>}
           <dl className="device-readings">{device.endpoints.flatMap(endpoint => endpoint.measurements.map(reading =>
-            <div key={`${endpoint.id}:${reading.metric}`}><dt>{metricLabels[reading.metric]}</dt><dd><LiveReading reading={reading} /></dd></div>))}</dl>
+            <div key={`${endpoint.id}:${reading.metric}`}><dt>{deviceMetricLabel(reading.metric)}</dt><dd><LiveReading reading={reading} /></dd></div>))}</dl>
         </div>
         {device.kind === 'inverter' && <DeviceBadge device={device} />}
       </li>)}</ul>

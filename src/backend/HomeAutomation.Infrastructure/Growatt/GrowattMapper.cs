@@ -15,6 +15,7 @@ public sealed class GrowattMapper(GrowattOptions options, TimeProvider clock)
         [Metric.GridImportPower] = Capability.PowerMeasurement,
         [Metric.PvVoltage] = Capability.VoltageMeasurement,
         [Metric.PvPower] = Capability.SolarProduction,
+        [Metric.ActivePower] = Capability.PowerMeasurement,
         [Metric.HouseholdPower] = Capability.HouseholdConsumption,
         [Metric.OperatingMode] = Capability.OperatingMode,
         [Metric.WarningStatus] = Capability.WarningStatus

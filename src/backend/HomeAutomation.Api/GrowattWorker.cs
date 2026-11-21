@@ -19,10 +19,10 @@ internal sealed class GrowattWorker(IServiceScopeFactory scopes, GrowattOptions 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Enabled) return;
-        if (!options.HasValidMapping() || !options.HasValidCadence())
+        if (!options.HasCloudConfiguration())
         {
             progress.Set("invalidConfiguration");
-            logger.LogWarning("Growatt requires explicit site and inverter mapping, battery source and valid polling intervals.");
+            logger.LogWarning("Growatt requires a token, confirmed inverter and battery mapping, source time zone and polling at least five minutes apart.");
             return;
         }
         var schemaReady = false;

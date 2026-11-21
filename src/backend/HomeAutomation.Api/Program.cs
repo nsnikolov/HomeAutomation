@@ -16,7 +16,8 @@ using MySqlConnector;
 
 var migrate = args.Contains("--migrate", StringComparer.Ordinal);
 var bootstrap = args.Contains("--bootstrap-user", StringComparer.Ordinal);
-var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not ("--migrate" or "--bootstrap-user")).ToArray());
+var discoverGrowatt = args.Contains("--discover-growatt", StringComparer.Ordinal);
+var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not ("--migrate" or "--bootstrap-user" or "--discover-growatt")).ToArray());
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 builder.Services.AddProblemDetails();
@@ -73,6 +74,15 @@ builder.Services.AddSingleton(services =>
 builder.Services.AddSingleton<GrowattMapper>();
 builder.Services.AddSingleton<GrowattPoller>();
 builder.Services.AddSingleton<GrowattProgress>();
+builder.Services.AddMemoryCache();
+builder.Services.AddHttpClient<GrowattCloudClient>(client =>
+{
+    client.BaseAddress = new Uri("https://openapi.growatt.com/");
+    client.MaxResponseContentBufferSize = 1024 * 1024;
+    client.Timeout = Timeout.InfiniteTimeSpan; // The worker and discovery command each own their deadline.
+}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false })
+    .RemoveAllLoggers();
+builder.Services.AddScoped<IGrowattReadSource, GrowattCloudSource>();
 builder.Services.AddHostedService<GrowattWorker>();
 builder.Services.AddScoped<IdentityStore>();
 builder.Services.AddIdentityCore<LocalUser>(options =>
@@ -128,6 +138,12 @@ builder.Services.AddHealthChecks()
     .AddCheck<DatabaseReadiness>("database", tags: ["ready"], timeout: TimeSpan.FromSeconds(6));
 
 await using var app = builder.Build();
+if (discoverGrowatt)
+{
+    await GrowattDiscovery.RunAsync(app, migrate || bootstrap);
+    return;
+}
+
 if (migrate || bootstrap)
 {
     using var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
