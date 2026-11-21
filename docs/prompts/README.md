@@ -4,3 +4,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 
 1. 2026-11-21 · [Implement Milestone 1 — Home Automation Application Foundation](0001-milestone-1a-foundation.md)
 2. 2026-11-21 · [Prepare Home Automation for Local Windows Development Without Docker](0002-local-windows-development.md)
+3. 2026-11-21 · [Fix Local Startup and Verify Home Automation Dashboard](0003-fix-local-dashboard-startup.md)

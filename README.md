@@ -63,20 +63,24 @@ In a second terminal, start the React app.
 
 ```powershell
 Set-Location src/frontend/home-automation-web
-npm.cmd ci
+npm.cmd ci  # First setup or after package-lock.json changes
 npm.cmd run dev
 ```
 
-Open **http://localhost:5173** and sign in as the provisioned viewer. Vite proxies `/api`, `/health`, and `/hubs` to **http://localhost:5080**, including SignalR WebSockets.
+Wait for Vite to print its `Local: http://localhost:5173/` line, then open that URL and sign in as the provisioned viewer. The backend health endpoint and Vite run in separate processes. Keep both terminals open while developing. Vite proxies `/api`, `/health`, and `/hubs` to **http://localhost:5080**, including SignalR WebSockets.
 
 With frontend dependencies restored, select **Home Automation (API + web)** in VS Code to run both debug sessions. Select **Home Automation API** or **Home Automation web** to debug either one independently. The web launch starts Vite through its task. Start the API separately when debugging only React. Use **Tasks: Run Task** for terminal-only startup. Backend debugging uses the C# debugger and web debugging uses VS Code's JavaScript debugger with Chrome. If Vite is already running, use the existing browser tab or stop its terminal before starting the web launch.
+
+For terminal launches, press **Ctrl+C** in each terminal to stop both services. In VS Code, stop the debug sessions and use **Tasks: Terminate Task** if the Vite task is still running. Check the Vite task terminal for startup errors.
 
 | Symptom | Check |
 | --- | --- |
 | Missing database setting | Set the named key in Development User Secrets or in the process environment. Recheck inherited overrides. |
 | MySQL connection or access denied | Confirm the server, port, schema, and account with the database owner. Check `Database__SslMode` if the error reports TLS. |
 | `/health/live` is 200 and `/health/ready` is 503 | Check MySQL connectivity and whether the migrations ran on the configured schema. The simulator waits for the schema and retries database failures. |
-| Vite proxy error, port conflict, or blank dashboard | Confirm both processes are listening on their documented ports. Check http://localhost:5080/health/ready, then reload http://localhost:5173. Vite exits if port 5173 is occupied. |
+| `ERR_CONNECTION_REFUSED` at port 5173 | Start `npm.cmd run dev` from the frontend directory and check its terminal for the `Local:` line or a startup error. |
+| Vite starts but API requests fail | Check http://localhost:5080/health/ready directly, then http://localhost:5173/health/ready through Vite. |
+| Port 5080 or 5173 is occupied | Run `netstat -ano`, find the port's `LISTENING` entry, and identify its PID with `Get-Process -Id <PID>`. Reuse an existing Home Automation instance or stop the process from its own terminal or debugger. Vite exits when port 5173 is occupied. |
 | Sign-in fails after readiness succeeds | Use the provisioned dashboard email and password. Inspect the bootstrap command result if the viewer is missing. |
 
 ## Optional Docker Compose deployment
