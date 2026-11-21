@@ -1,4 +1,4 @@
-import type { Device, Health, Metric, Point, Property, PropertyState, Room } from './types'
+import type { Device, GrowattState, Health, Metric, Point, Property, PropertyState, Room } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number) {
@@ -39,6 +39,7 @@ export const api = {
   properties: (signal?: AbortSignal) => request<Property[]>('/properties', { signal }),
   rooms: (id: number, signal?: AbortSignal) => request<Room[]>(`/properties/${id}/rooms`, { signal }),
   state: (id: number, signal?: AbortSignal) => request<PropertyState>(`/properties/${id}/state`, { signal }),
+  growatt: (id: number, signal?: AbortSignal) => request<GrowattState>(`/properties/${id}/growatt`, { signal }),
   device: (id: number, device: number, signal?: AbortSignal) =>
     request<Device>(`/properties/${id}/devices/${device}`, { signal }),
   health: (signal?: AbortSignal) => request<Health>('/system/health', { signal }),

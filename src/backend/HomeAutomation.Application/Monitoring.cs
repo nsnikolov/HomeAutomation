@@ -9,7 +9,8 @@ public sealed record DiscoveredDevice(
 
 public sealed record EndpointObservation(string EndpointKey, IReadOnlyList<Sample> Samples);
 public sealed record DeviceObservation(
-    string ExternalId, Connectivity Connectivity, string? FaultCode, IReadOnlyList<EndpointObservation> Endpoints);
+    string ExternalId, Connectivity Connectivity, string? FaultCode, IReadOnlyList<EndpointObservation> Endpoints,
+    DateTimeOffset? ObservedAt = null);
 
 public sealed record ObservationBatch(
     DateTimeOffset ObservedAt, IReadOnlyList<DeviceObservation> Devices, IReadOnlyList<Sample> Installation);

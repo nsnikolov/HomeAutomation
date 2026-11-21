@@ -4,15 +4,16 @@ public enum Metric
 {
     PvPower, HouseholdPower, GridAvailable, BatterySoc, BatteryPower,
     Voltage, Current, ActivePower, Energy, Temperature, Humidity,
-    SwitchOn, TargetTemperature, OperatingMode
+    SwitchOn, TargetTemperature, OperatingMode, GridVoltage, GridFrequency, GridImportPower, PvVoltage, WarningStatus
 }
 
 public static class Telemetry
 {
     public static string? Unit(Metric metric) => metric switch
     {
-        Metric.PvPower or Metric.HouseholdPower or Metric.BatteryPower or Metric.ActivePower => "W",
-        Metric.Voltage => "V",
+        Metric.PvPower or Metric.HouseholdPower or Metric.BatteryPower or Metric.ActivePower or Metric.GridImportPower => "W",
+        Metric.Voltage or Metric.GridVoltage or Metric.PvVoltage => "V",
+        Metric.GridFrequency => "Hz",
         Metric.Current => "A",
         Metric.Energy => "kWh",
         Metric.BatterySoc or Metric.Humidity => "%",
@@ -50,7 +51,8 @@ public sealed record Sample
     {
         if (Telemetry.Unit(metric) is null || !double.IsFinite(value) ||
             (metric is Metric.BatterySoc or Metric.Humidity && (value < 0 || value > 100)) ||
-            (metric is Metric.PvPower or Metric.HouseholdPower or Metric.Energy or Metric.Voltage or Metric.Current && value < 0))
+            (metric is Metric.PvPower or Metric.HouseholdPower or Metric.Energy or Metric.Voltage or Metric.Current
+                or Metric.GridVoltage or Metric.PvVoltage or Metric.GridImportPower or Metric.GridFrequency && value < 0))
         {
             throw new ArgumentOutOfRangeException(nameof(value), "Invalid value for the metric.");
         }
@@ -68,7 +70,7 @@ public sealed record Sample
 
     public static Sample Status(Metric metric, DateTimeOffset time, string value)
     {
-        if (metric != Metric.OperatingMode || string.IsNullOrWhiteSpace(value) || value.Length > 32)
+        if (metric is not (Metric.OperatingMode or Metric.WarningStatus) || string.IsNullOrWhiteSpace(value) || value.Length > 32)
             throw new ArgumentException("Invalid status value.", nameof(value));
 
         return new Sample(metric, time, null, null, value);

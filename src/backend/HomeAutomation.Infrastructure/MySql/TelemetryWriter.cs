@@ -6,13 +6,60 @@ using static HomeAutomation.Infrastructure.MySql.Database;
 
 namespace HomeAutomation.Infrastructure.MySql;
 
-public sealed class TelemetryWriter(Database database, TimeProvider timeProvider) : ITelemetryWriter
+public sealed class TelemetryWriter(Database database, TimeProvider timeProvider) : ITelemetryWriter, IGrowattTelemetryStore
 {
     public async Task<long> RegisterDemoInventoryAsync(IReadOnlyList<DiscoveredDevice> devices, CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        var site = await LoadSiteAsync(connection, transaction, null, cancellationToken);
+        var site = await LoadSiteAsync(connection, transaction, "simulator", "countryside", null, cancellationToken);
+        await RegisterInventoryAsync(connection, transaction, site, "simulator", devices, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return site.PropertyId;
+    }
+
+    public async Task<long> StoreAsync(string siteKey, IReadOnlyList<DiscoveredDevice> devices, ObservationBatch batch,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await database.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var property = await connection.QuerySingleOrDefaultAsync<long?>(Query(
+            "SELECT id FROM properties WHERE site_key = @SiteKey FOR UPDATE", cancellationToken, new { SiteKey = siteKey }, transaction));
+        if (property is null) throw new InvalidOperationException("The configured Growatt property does not exist.");
+        var target = new { PropertyId = property.Value };
+        await connection.ExecuteAsync(Query(
+            """
+            INSERT INTO installations (property_id, installation_key, name)
+            VALUES (@PropertyId, 'growatt', 'Growatt solar installation')
+            ON DUPLICATE KEY UPDATE id = installations.id;
+            INSERT INTO integration_connections (property_id, provider_code)
+            VALUES (@PropertyId, 'growatt')
+            ON DUPLICATE KEY UPDATE id = integration_connections.id;
+            """, cancellationToken, target, transaction));
+        var site = await LoadSiteAsync(connection, transaction, "growatt", siteKey, property, cancellationToken);
+        var bindings = await connection.QueryAsync<string>(Query(
+            "SELECT external_id FROM provider_bindings WHERE connection_id = @ConnectionId",
+            cancellationToken, site, transaction));
+        var expected = devices.Select(device => device.ExternalId).ToHashSet(StringComparer.Ordinal);
+        if (bindings.Any(id => !expected.Contains(id)))
+            throw new InvalidOperationException("Growatt device bindings differ from the configured identities.");
+        var roles = await connection.QueryAsync<BoundRole>(Query(
+            """
+            SELECT b.external_id AS ExternalId, member.role_code AS Role
+            FROM provider_bindings b JOIN installation_devices member ON member.device_id = b.device_id
+            WHERE b.connection_id = @ConnectionId AND member.installation_id = @InstallationId
+            """, cancellationToken, site, transaction));
+        if (roles.Any(role => !devices.Any(device => device.ExternalId == role.ExternalId && device.InstallationRole == role.Role)))
+            throw new InvalidOperationException("Growatt installation roles differ from the configured roles.");
+        await RegisterInventoryAsync(connection, transaction, site, "growatt", devices, cancellationToken);
+        await PersistAsync(connection, transaction, site, "growatt", batch, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return site.PropertyId;
+    }
+
+    private static async Task RegisterInventoryAsync(MySqlConnection connection, MySqlTransaction transaction, Site site,
+        string provider, IReadOnlyList<DiscoveredDevice> devices, CancellationToken cancellationToken)
+    {
         var rooms = (await connection.QueryAsync<RoomBinding>(Query(
             "SELECT id AS Id, room_key AS RoomKey FROM rooms WHERE property_id = @PropertyId",
             cancellationToken, site, transaction))).ToDictionary(room => room.RoomKey, room => room.Id);
@@ -22,12 +69,15 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
             var deviceId = await InsertIdentityAsync(connection, transaction,
                 """
                 INSERT INTO devices (property_id, room_id, inventory_key, name, kind, manufacturer, model)
-                VALUES (@PropertyId, @RoomId, CONCAT('simulator:', @ExternalId), @Name, @Kind, @Manufacturer, @Model)
+                VALUES (@PropertyId, @RoomId, @InventoryKey, @Name, @Kind, @Manufacturer, @Model)
                 ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)
                 """,
                 new
                 {
-                    site.PropertyId, RoomId = rooms[device.RoomKey], device.ExternalId, device.Name,
+                    site.PropertyId, RoomId = device.RoomKey == "" ? (long?)null : rooms[device.RoomKey], device.Name,
+                    InventoryKey = provider == "simulator" ? $"simulator:{device.ExternalId}" :
+                        "growatt:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                            System.Text.Encoding.UTF8.GetBytes(device.ExternalId))),
                     Kind = device.Kind.ToString(), device.Manufacturer, device.Model
                 }, cancellationToken);
 
@@ -61,6 +111,7 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
                     VALUES (@BindingId, @DeviceId, @EndpointId, @Key)
                     ON DUPLICATE KEY UPDATE endpoint_id = provider_endpoint_bindings.endpoint_id
                     """, cancellationToken, new { BindingId = bindingId, DeviceId = deviceId, EndpointId = endpointId, endpoint.Key }, transaction));
+                if (endpoint.Capabilities.Count == 0) continue;
                 await connection.ExecuteAsync(Query(
                     """
                     INSERT INTO device_capabilities (endpoint_id, capability_code, readable, writable)
@@ -71,15 +122,20 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
             }
         }
 
-        await transaction.CommitAsync(cancellationToken);
-        return site.PropertyId;
     }
 
     public async Task PersistAsync(long propertyId, ObservationBatch batch, CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        var site = await LoadSiteAsync(connection, transaction, propertyId, cancellationToken);
+        var site = await LoadSiteAsync(connection, transaction, "simulator", "countryside", propertyId, cancellationToken);
+        await PersistAsync(connection, transaction, site, "simulator", batch, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task PersistAsync(MySqlConnection connection, MySqlTransaction transaction, Site site, string provider,
+        ObservationBatch batch, CancellationToken cancellationToken)
+    {
         var targets = (await connection.QueryAsync<BoundEndpoint>(Query(
             """
             SELECT b.device_id AS DeviceId, b.external_id AS ExternalId, e.external_endpoint_key AS EndpointKey,
@@ -91,20 +147,21 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
         var knownSeries = (await connection.QueryAsync<Series>(Query(
             """
             SELECT id AS Id, endpoint_id AS EndpointId, installation_id AS InstallationId, metric AS Metric
-            FROM telemetry_series WHERE property_id = @PropertyId AND source_key = 'simulator'
-            """, cancellationToken, site, transaction))).ToDictionary(row => (row.EndpointId, row.InstallationId, row.Metric), row => row.Id);
+            FROM telemetry_series WHERE property_id = @PropertyId AND source_key = @Provider
+            """, cancellationToken, new { site.PropertyId, Provider = provider }, transaction))).ToDictionary(row => (row.EndpointId, row.InstallationId, row.Metric), row => row.Id);
 
         var receivedAt = timeProvider.GetUtcNow().UtcDateTime;
         foreach (var observation in batch.Devices)
         {
             var endpoints = targets[observation.ExternalId].ToDictionary(row => row.EndpointKey, StringComparer.Ordinal);
-            if (endpoints.Count == 0) throw new InvalidOperationException("The simulator reported an unregistered identity.");
+            if (endpoints.Count == 0) throw new InvalidOperationException("The provider reported an unregistered identity.");
             var target = endpoints.Values.First();
+            var observed = (observation.ObservedAt ?? batch.ObservedAt).UtcDateTime;
             var status = new
             {
                 target.DeviceId, Connectivity = observation.Connectivity.ToString(),
-                Observed = batch.ObservedAt.UtcDateTime, observation.FaultCode,
-                Contact = observation.Connectivity == Connectivity.Online ? batch.ObservedAt.UtcDateTime : (DateTime?)null
+                Observed = observed, observation.FaultCode,
+                Contact = observation.Connectivity == Connectivity.Online ? observed : (DateTime?)null
             };
 
             var previous = await connection.QuerySingleOrDefaultAsync<StateRow>(Query(
@@ -139,7 +196,6 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
 
         foreach (var sample in batch.Installation)
             await SaveAsync(null, site.InstallationId, sample);
-        await transaction.CommitAsync(cancellationToken);
 
         async Task SaveAsync(long? endpointId, long? installationId, Sample sample)
         {
@@ -149,9 +205,9 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
                 seriesId = await InsertIdentityAsync(connection, transaction,
                     """
                     INSERT INTO telemetry_series (property_id, endpoint_id, installation_id, source_key, metric)
-                    VALUES (@PropertyId, @EndpointId, @InstallationId, 'simulator', @Metric)
+                    VALUES (@PropertyId, @EndpointId, @InstallationId, @Provider, @Metric)
                     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)
-                    """, new { site.PropertyId, EndpointId = endpointId, InstallationId = installationId, Metric = key.Item3 }, cancellationToken);
+                    """, new { site.PropertyId, EndpointId = endpointId, InstallationId = installationId, Provider = provider, Metric = key.Item3 }, cancellationToken);
                 knownSeries.Add(key, seriesId);
             }
 
@@ -177,15 +233,16 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
     }
 
     private static Task<Site> LoadSiteAsync(MySqlConnection connection, MySqlTransaction transaction,
-        long? propertyId, CancellationToken cancellationToken) =>
+        string provider, string siteKey, long? propertyId, CancellationToken cancellationToken) =>
         connection.QuerySingleAsync<Site>(Query(
             """
             SELECT p.id AS PropertyId, i.id AS InstallationId, c.id AS ConnectionId
             FROM properties p JOIN installations i ON i.property_id = p.id
             JOIN integration_connections c ON c.property_id = p.id
-            WHERE p.site_key = 'countryside' AND i.installation_key = 'solar' AND c.provider_code = 'simulator'
+            WHERE p.site_key = @SiteKey AND i.installation_key = @InstallationKey AND c.provider_code = @Provider
               AND (@PropertyId IS NULL OR p.id = @PropertyId)
-            """, cancellationToken, new { PropertyId = propertyId }, transaction));
+            """, cancellationToken, new { PropertyId = propertyId, SiteKey = siteKey,
+                InstallationKey = provider == "simulator" ? "solar" : "growatt", Provider = provider }, transaction));
 
     private static async Task<long> InsertIdentityAsync(MySqlConnection connection, MySqlTransaction transaction,
         string sql, object parameters, CancellationToken cancellationToken)
@@ -199,4 +256,5 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
     private sealed record BoundEndpoint(long DeviceId, string ExternalId, string EndpointKey, long EndpointId);
     private sealed record StateRow(string Connectivity, string? FaultCode, DateTime Observed);
     private sealed record Series(long Id, long? EndpointId, long? InstallationId, string Metric);
+    private sealed record BoundRole(string ExternalId, string Role);
 }

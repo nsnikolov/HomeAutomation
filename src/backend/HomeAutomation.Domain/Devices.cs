@@ -5,7 +5,8 @@ public enum Capability
 {
     SolarProduction, HouseholdConsumption, GridAvailability, BatteryLevel, BatteryPower,
     VoltageMeasurement, CurrentMeasurement, PowerMeasurement, EnergyMeasurement,
-    Switch, TemperatureMeasurement, HumidityMeasurement, HeatingSetpoint, OperatingMode, FaultStatus
+    Switch, TemperatureMeasurement, HumidityMeasurement, HeatingSetpoint, OperatingMode, FaultStatus,
+    FrequencyMeasurement, WarningStatus
 }
 public enum Access { ReadOnly, Unsupported }
 public enum Connectivity { Online, Offline, Unknown }
@@ -20,7 +21,7 @@ public sealed record DeviceEndpoint
         Key = key;
         Name = name;
         Capabilities = Array.AsReadOnly(capabilities.ToArray());
-        if (key.Length > 64 || name.Length > 128 || Capabilities.Count == 0 ||
+        if (key.Length > 64 || name.Length > 128 ||
             Capabilities.Any(capability => !Enum.IsDefined(capability)) ||
             Capabilities.Distinct().Count() != Capabilities.Count)
         {

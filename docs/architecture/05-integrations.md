@@ -4,6 +4,8 @@ Provider research below uses public documentation. Validate field availability, 
 
 ## Growatt Cloud and local options
 
+See [Milestone 2 Growatt access research and normalized integration](../integrations/growatt.md) for the implementation boundary and account prerequisites.
+
 Growatt publicly describes API-based forwarding from its cloud, a cloud push option, dual-channel collectors and local serial integration in general. Its product materials identify the SPF family as parallel-capable and supported by remote monitoring. Its installer manual documents token-backed data access in installer workflows. None of that establishes this ShinePhone account's eligibility or which SPF 5000 ES fields an authorized API exposes. [Growatt integration options](https://www.growatt.com/media/news/355) · [SPF product documentation](https://us.growatt.com/products/spf-3000-5000-es) · [Growatt installer manual](https://cdn.growatt.com/pdf/Installer%20Operation%20Manual.pdf)
 
 | Option | Plan and dependency |

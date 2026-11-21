@@ -12,6 +12,8 @@ export const metricLabels: Record<Metric, string> = {
   batterySoc: 'Battery charge', batteryPower: 'Battery power', voltage: 'Voltage', current: 'Current',
   activePower: 'Active power', energy: 'Energy counter', temperature: 'Temperature', humidity: 'Relative humidity',
   switchOn: 'Switch state', targetTemperature: 'Target temperature', operatingMode: 'Operating mode',
+  gridVoltage: 'Grid voltage', gridFrequency: 'Grid frequency', gridImportPower: 'Grid import',
+  pvVoltage: 'PV voltage', warningStatus: 'Reported warning',
 }
 
 export function DeviceIcon({ kind, size = 18 }: { kind: string; size?: number }) {

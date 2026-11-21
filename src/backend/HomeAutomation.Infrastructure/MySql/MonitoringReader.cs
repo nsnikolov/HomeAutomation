@@ -2,11 +2,13 @@ using Dapper;
 using HomeAutomation.Application;
 using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.Simulator;
+using HomeAutomation.Infrastructure.Growatt;
 using static HomeAutomation.Infrastructure.MySql.Database;
 
 namespace HomeAutomation.Infrastructure.MySql;
 
-public sealed class MonitoringReader(Database database, TimeProvider timeProvider, SimulatorOptions simulator) : IMonitoringReader
+public sealed class MonitoringReader(Database database, TimeProvider timeProvider, SimulatorOptions simulator, GrowattOptions growatt)
+    : IMonitoringReader, IGrowattMonitoringReader
 {
     public async Task<IReadOnlyList<PropertySummary>> PropertiesAsync(string userId, CancellationToken cancellationToken)
     {
@@ -36,12 +38,21 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
     }
 
     public Task<PropertyState> StateAsync(long propertyId, CancellationToken cancellationToken) =>
-        ReadStateAsync(propertyId, null, cancellationToken);
+        ReadStateAsync(propertyId, null, "simulator", cancellationToken);
 
     public async Task<DeviceDetails?> DeviceAsync(long propertyId, long deviceId, CancellationToken cancellationToken) =>
-        (await ReadStateAsync(propertyId, deviceId, cancellationToken)).Devices.SingleOrDefault();
+        (await ReadStateAsync(propertyId, deviceId, "simulator", cancellationToken)).Devices.SingleOrDefault();
 
-    private async Task<PropertyState> ReadStateAsync(long propertyId, long? deviceId, CancellationToken cancellationToken)
+    public async Task<PropertyState?> GrowattStateAsync(long propertyId, string siteKey, CancellationToken cancellationToken)
+    {
+        await using var connection = await database.OpenAsync(cancellationToken);
+        var matches = await connection.ExecuteScalarAsync<bool>(Query(
+            "SELECT EXISTS(SELECT 1 FROM properties WHERE id = @PropertyId AND site_key = @SiteKey)",
+            cancellationToken, new { PropertyId = propertyId, SiteKey = siteKey }));
+        return matches ? await ReadStateAsync(propertyId, null, "growatt", cancellationToken) : null;
+    }
+
+    private async Task<PropertyState> ReadStateAsync(long propertyId, long? deviceId, string provider, CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
         using var results = await connection.QueryMultipleAsync(Query(
@@ -50,7 +61,10 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
                    d.model AS Model, s.connectivity AS Connectivity, s.fault_code AS FaultCode,
                    s.last_contact_utc AS LastContact, s.observed_at_utc AS StatusObserved
             FROM devices d LEFT JOIN device_state s ON s.device_id = d.id
-            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId) ORDER BY d.id;
+            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId)
+              AND (EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
+                           WHERE b.device_id = d.id AND c.provider_code = 'growatt')) = (@Provider = 'growatt')
+            ORDER BY d.id;
 
             SELECT id AS Id, device_id AS DeviceId, name AS Name FROM device_endpoints
             WHERE property_id = @PropertyId AND (@DeviceId IS NULL OR device_id = @DeviceId) ORDER BY id;
@@ -63,14 +77,16 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
                    l.numeric_value AS Number, l.boolean_value AS Flag, l.status_value AS Code
             FROM telemetry_series t LEFT JOIN latest_readings l ON l.series_id = t.id
             LEFT JOIN device_endpoints e ON e.id = t.endpoint_id
-            WHERE t.property_id = @PropertyId AND t.source_key = 'simulator'
+            WHERE t.property_id = @PropertyId AND t.source_key = @Provider
                   AND (@DeviceId IS NULL OR e.device_id = @DeviceId) ORDER BY t.metric;
 
             SELECT a.device_id AS DeviceId, d.name AS DeviceName, a.alert_code AS Code, a.occurred_at_utc AS OccurredAt
             FROM devices d JOIN device_alerts a ON a.device_id = d.id
             WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId)
+              AND (EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
+                           WHERE b.device_id = d.id AND c.provider_code = 'growatt')) = (@Provider = 'growatt')
             ORDER BY a.occurred_at_utc DESC, a.id DESC LIMIT 12;
-            """, cancellationToken, new { PropertyId = propertyId, DeviceId = deviceId }));
+            """, cancellationToken, new { PropertyId = propertyId, DeviceId = deviceId, Provider = provider }));
 
         var devices = await results.ReadAsync<DeviceRow>();
         var endpoints = (await results.ReadAsync<EndpointRow>()).ToLookup(row => row.DeviceId);
@@ -79,7 +95,7 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
         var alerts = (await results.ReadAsync<AlertRow>()).Select(row =>
             new DeviceAlert(row.DeviceId, row.DeviceName, row.Code, Utc(row.OccurredAt))).ToArray();
         var now = timeProvider.GetUtcNow();
-        var freshness = TimeSpan.FromSeconds(simulator.FreshnessSeconds);
+        var freshness = TimeSpan.FromSeconds(provider == "growatt" ? growatt.FreshnessSeconds : simulator.FreshnessSeconds);
 
         return new PropertyState(devices.Select(device =>
         {

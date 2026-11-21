@@ -7,6 +7,7 @@ import { useLiveUpdates } from './shared/live'
 import type { Property } from './shared/types'
 import { Badge, Button, Card, Input } from './shared/ui'
 import { Dashboard } from './features/Dashboard'
+import { GrowattPanel } from './features/GrowattPanel'
 import { Devices, DevicePage } from './features/Devices'
 import { Energy } from './features/Energy'
 
@@ -126,7 +127,10 @@ function PropertyView({ property, properties, email }: { property: Property; pro
       <main className="content">
         {snapshot.isError && <div className="notice" role="alert">The property feed could not be refreshed. <Button variant="outline" onClick={() => void snapshot.refetch()}>Retry</Button></div>}
         <Routes>
-          <Route index element={<Dashboard property={property} state={snapshot.data} health={health.data} loading={snapshot.isPending} />} />
+          <Route index element={<>
+            <Dashboard property={property} state={snapshot.data} health={health.data} loading={snapshot.isPending} />
+            <div className="mt-4"><GrowattPanel property={property} /></div>
+          </>} />
           <Route path="devices" element={<Devices property={property} devices={snapshot.data?.devices} />} />
           <Route path="devices/:deviceId" element={<DevicePage property={property} />} />
           <Route path="energy" element={<Energy property={property} state={snapshot.data} pollSeconds={health.data?.pollSeconds ?? 10} />} />

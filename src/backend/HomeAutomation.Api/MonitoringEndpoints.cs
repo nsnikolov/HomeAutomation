@@ -2,6 +2,7 @@ using System.Security.Claims;
 using HomeAutomation.Application;
 using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.Simulator;
+using HomeAutomation.Infrastructure.Growatt;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -40,6 +41,15 @@ internal static class MonitoringEndpoints
             reader.RoomsAsync(propertyId, cancellationToken));
         property.MapGet("/state", (long propertyId, IMonitoringReader reader, CancellationToken cancellationToken) =>
             reader.StateAsync(propertyId, cancellationToken));
+        property.MapGet("/growatt", async (long propertyId, GrowattOptions options, GrowattProgress progress,
+            IGrowattMonitoringReader reader, CancellationToken cancellationToken) =>
+        {
+            var current = progress.Current;
+            if (!options.Enabled || current is "notConfigured" or "invalidConfiguration" or "transportUnavailable")
+                return Results.Ok(new { status = current, data = (PropertyState?)null });
+            var data = await reader.GrowattStateAsync(propertyId, options.SiteKey, cancellationToken);
+            return Results.Ok(new { status = data is null ? "notConfigured" : current, data });
+        });
         property.MapGet("/devices", async (long propertyId, IMonitoringReader reader, CancellationToken cancellationToken) =>
             (await reader.StateAsync(propertyId, cancellationToken)).Devices);
         property.MapGet("/devices/{deviceId:long}", async (long propertyId, long deviceId,

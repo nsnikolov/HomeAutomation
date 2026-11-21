@@ -5,6 +5,7 @@ using HomeAutomation.Api;
 using HomeAutomation.Application;
 using HomeAutomation.Infrastructure.MySql;
 using HomeAutomation.Infrastructure.Simulator;
+using HomeAutomation.Infrastructure.Growatt;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -55,6 +56,24 @@ builder.Services.AddSingleton<Migrations>();
 builder.Services.AddSingleton<IObservationProvider, SimulatorProvider>();
 builder.Services.AddScoped<ITelemetryWriter, TelemetryWriter>();
 builder.Services.AddScoped<IMonitoringReader, MonitoringReader>();
+builder.Services.AddScoped<IGrowattTelemetryStore, TelemetryWriter>();
+builder.Services.AddScoped<IGrowattMonitoringReader, MonitoringReader>();
+builder.Services.AddSingleton(services =>
+{
+    try
+    {
+        return services.GetRequiredService<IConfiguration>().GetSection("Growatt").Get<GrowattOptions>() ?? new GrowattOptions();
+    }
+    catch (InvalidOperationException)
+    {
+        // Route malformed optional provider settings to its isolated configuration check.
+        return new GrowattOptions { Enabled = true };
+    }
+});
+builder.Services.AddSingleton<GrowattMapper>();
+builder.Services.AddSingleton<GrowattPoller>();
+builder.Services.AddSingleton<GrowattProgress>();
+builder.Services.AddHostedService<GrowattWorker>();
 builder.Services.AddScoped<IdentityStore>();
 builder.Services.AddIdentityCore<LocalUser>(options =>
 {

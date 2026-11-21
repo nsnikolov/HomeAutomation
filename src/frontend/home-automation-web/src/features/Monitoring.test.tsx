@@ -3,6 +3,7 @@ import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { Dashboard } from './Dashboard'
+import { GrowattSummary } from './GrowattPanel'
 import { DeviceBadge } from './Devices'
 import { mergeHistory } from './Energy'
 import type { Device, Point, Reading } from '../shared/types'
@@ -14,6 +15,12 @@ const meter: Device = {
 }
 
 describe('Monitoring dashboard', () => {
+  it('shows the unconfigured Growatt state without rendering fabricated readings', () => {
+    render(<GrowattSummary result={{ status: 'notConfigured', data: null }} timeZone="Europe/Sofia" />)
+    expect(screen.getByText(/Live Growatt monitoring is not configured/)).toBeInTheDocument()
+    expect(screen.queryByText('Solar installation')).not.toBeInTheDocument()
+  })
+
   it('shows current data, known faults, and unknown grid rather than an outage for stale readings', () => {
     const reading = { unit: null, observedAt: null, number: null, flag: false, code: null, quality: 'stale' } as const
     const installation: Reading[] = [{ ...reading, metric: 'gridAvailable' }, {

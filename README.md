@@ -99,6 +99,10 @@ Compose binds the app and MySQL to loopback. A one-shot service applies the embe
 
 Use `docker compose logs migrate app` to inspect startup and `docker compose down` to stop. MySQL initialization creates the database users on the first start of a volume. Changing the bootstrap password in `.env` does not reset an existing account. For a new viewer, set a different email and rerun `docker compose run --rm migrate`.
 
+## Growatt read-only monitoring
+
+The dashboard has a separate Growatt status panel. The simulator remains the default. Connecting the real inverters requires authorized access and a verified SPF 5000 ES read contract. See [Growatt access research and setup](docs/integrations/growatt.md) for the configuration, mapping policy and prerequisites.
+
 ## Verify changes
 
 ```powershell
