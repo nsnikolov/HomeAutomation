@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Dashboard } from './Dashboard'
 import { GrowattSummary } from './GrowattPanel'
 import { DeviceBadge } from './Devices'
@@ -40,6 +40,44 @@ describe('Monitoring dashboard', () => {
     expect(screen.getByText('241 V')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Recent Growatt alerts' })).toBeInTheDocument()
     expect(screen.queryByText('Outage')).not.toBeInTheDocument()
+  })
+
+  it('keeps the saved inverter order and distinguishes voltage, generation, and stale power', () => {
+    const observedAt = '2026-11-21T12:00:00Z'
+    const reading = (metric: Reading['metric'], unit: string, number: number, quality: Reading['quality'] = 'fresh'): Reading =>
+      ({ metric, unit, observedAt, number, flag: null, code: null, quality })
+    const update = vi.fn()
+    render(<GrowattSummary timeZone={property.timeZone} preferences={{
+      data: { order: { assigned: ['2', '5', '1'] }, hidden: [] }, ready: true, loading: false, busy: false, error: '', update,
+    }} result={{ status: 'running', lastSuccess: observedAt, data: {
+      installation: [reading('pvPower', 'W', 800)], alerts: [],
+      devices: [
+        { ...meter, id: 1, name: 'Growatt master', kind: 'inverter',
+          endpoints: [{ id: 1, name: 'Main', capabilities: [], measurements: [reading('pvVoltage', 'V', 102), reading('pvPower', 'W', 800)] }] },
+        { ...meter, id: 2, name: 'Growatt slave', kind: 'inverter',
+          endpoints: [
+            { id: 2, name: 'PV 1', capabilities: [], measurements: [reading('pvVoltage', 'V', 105)] },
+            { id: 3, name: 'PV 2', capabilities: [], measurements: [reading('pvPower', 'W', 70, 'stale')] },
+          ] },
+        { ...meter, name: 'Growatt shared battery', kind: 'battery' },
+      ],
+    } }} />)
+    const master = screen.getByRole('region', { name: 'Growatt master' })
+    const slave = screen.getByRole('region', { name: 'Growatt slave' })
+    expect(slave.compareDocumentPosition(master) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(master.closest('.growatt-inverters')).toContainElement(slave)
+    expect(within(master).getByText('PV generating')).toBeInTheDocument()
+    expect(within(master).getByText('800 W')).toBeInTheDocument()
+    expect(within(slave).getByText('PV voltage present')).toBeInTheDocument()
+    expect(within(slave).getByText('PV readings stale')).toBeInTheDocument()
+    expect(within(slave).getByText('70 W (stale)')).toBeInTheDocument()
+    expect(within(slave).queryByText('PV generating')).not.toBeInTheDocument()
+    expect(within(slave).getByRole('heading', { name: 'PV 1' })).toBeInTheDocument()
+    expect(within(slave).getByRole('heading', { name: 'PV 2' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Reorder Growatt slave' }), { key: 'ArrowDown' })
+    expect(update).toHaveBeenCalledWith({ group: 'assigned', ids: ['5', '2', '1'] })
+    expect(screen.getByRole('button', { name: 'Reorder Growatt shared battery' })).toBeInTheDocument()
+    expect(screen.getByText('Shared battery flow unavailable')).toBeInTheDocument()
   })
 
   it('shows current data, known faults, and unknown grid rather than an outage for stale readings', () => {

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../shared/api'
-import type { GrowattState, Property, Reading } from '../shared/types'
-import { Card } from '../shared/ui'
+import type { Device, GrowattState, Property, Reading } from '../shared/types'
+import { Badge, Card } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
 import { DeviceBadge, formatReading, metricLabels } from './Devices'
 import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
@@ -56,24 +56,9 @@ export function GrowattSummary({ result, timeZone, message, preferences }: {
       {master?.connectivity === 'online' && slave?.connectivity === 'offline' &&
         <p className="notice">Growatt reports Master online and Slave offline. Check the Slave locally if this persists after recovery.</p>}
       {preferences?.error && <p className="muted" role="alert">{preferences.error}</p>}
-      <DeviceCardOrder rows items={state.devices} group="assigned" preferences={preferences}>{device => {
-        const observations = device.endpoints.flatMap(endpoint => endpoint.measurements)
-        const latest = observations.map(reading => reading.observedAt).filter(at => at !== null)
-          .sort((a, b) => Date.parse(b) - Date.parse(a))[0]
-        return <>
-        <div>
-          <h3>{device.name}</h3>
-          {latest && <p>Latest source reading {formatMoment(latest, timeZone)} · {humanize(device.quality)}</p>}
-          {device.connectivity === 'offline' && device.quality === 'fresh' &&
-            <p>Growatt reports offline and has recently supplied readings.</p>}
-          {device.faultCode && <p>Reported fault {device.faultCode}{device.connectivity === 'unknown' ? ' (last known)' : ''}</p>}
-          {device.kind === 'battery' && !observations.some(reading => reading.metric === 'batteryPower' && reading.quality === 'fresh') &&
-            <p>Shared battery flow unavailable</p>}
-          <dl className="device-readings">{device.endpoints.flatMap(endpoint => endpoint.measurements.map(reading =>
-            <div key={`${endpoint.id}:${reading.metric}`}><dt>{deviceMetricLabel(reading.metric)}</dt><dd><LiveReading reading={reading} /></dd></div>))}</dl>
-        </div>
-        {device.kind === 'inverter' && <DeviceBadge device={device} />}
-      </>}}</DeviceCardOrder>
+      <DeviceCardOrder className="growatt-inverters" items={state.devices} group="assigned" preferences={preferences}>
+        {device => <GrowattDeviceCard device={device} timeZone={timeZone} />}
+      </DeviceCardOrder>
       {state.alerts.length > 0 && <>
         <h3>Recent Growatt alerts</h3>
         <ul className="rows">{state.alerts.map(alert => <li key={`${alert.deviceId}:${alert.code}:${alert.occurredAt}`}>
@@ -82,6 +67,57 @@ export function GrowattSummary({ result, timeZone, message, preferences }: {
       </>}
     </>}
   </Card>
+}
+
+const isPvReading = (reading: Reading) => reading.metric === 'pvVoltage' || reading.metric === 'pvPower'
+
+function GrowattDeviceCard({ device, timeZone }: { device: Device; timeZone: string }) {
+  const inverter = device.kind === 'inverter'
+  const observations = device.endpoints.flatMap(endpoint => endpoint.measurements)
+  const latest = observations.map(reading => reading.observedAt).filter(at => at !== null)
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0]
+  const pvInputs = device.endpoints.filter(endpoint => endpoint.measurements.some(isPvReading))
+  const details = device.endpoints.flatMap(endpoint => endpoint.measurements
+    .filter(reading => !inverter || !isPvReading(reading)).map(reading =>
+      <div key={`${endpoint.id}:${reading.metric}`}><dt>{deviceMetricLabel(reading.metric)}</dt><dd><LiveReading reading={reading} /></dd></div>))
+
+  return <Card className={inverter ? 'device-card growatt-device' : 'device-card growatt-device growatt-auxiliary'}
+    aria-label={device.name}>
+    <div className="device-card-top"><h3>{device.name}</h3>{inverter && <DeviceBadge device={device} />}</div>
+    {latest && <p className="muted">Latest source reading {formatMoment(latest, timeZone)} · {humanize(device.quality)}</p>}
+    {device.connectivity === 'offline' && device.quality === 'fresh' &&
+      <p>Growatt reports offline and has recently supplied readings.</p>}
+    {device.faultCode && <p>Reported fault {device.faultCode}{device.connectivity === 'unknown' ? ' (last known)' : ''}</p>}
+    {device.kind === 'battery' && !observations.some(reading => reading.metric === 'batteryPower' && reading.quality === 'fresh') &&
+      <p>Shared battery flow unavailable</p>}
+    {inverter && (pvInputs.length ? pvInputs.map(endpoint =>
+      <PvInput key={endpoint.id} readings={endpoint.measurements} name={pvInputs.length > 1 ? endpoint.name : undefined} />)
+      : <PvInput readings={[]} />)}
+    {!!details.length && <dl className="device-readings">{details}</dl>}
+  </Card>
+}
+
+function PvInput({ readings, name }: { readings: Reading[]; name?: string }) {
+  const voltage = readings.find(reading => reading.metric === 'pvVoltage')
+  const power = readings.find(reading => reading.metric === 'pvPower')
+  const voltagePresent = voltage?.quality === 'fresh' && (voltage.number ?? 0) > 0
+  const generating = power?.quality === 'fresh' && (power.number ?? 0) > 0
+  const zeroPower = power?.quality === 'fresh' && power.number === 0
+  const stale = voltage?.quality === 'stale' || power?.quality === 'stale'
+  const status = generating ? 'PV generating' : voltagePresent ? 'PV voltage present' :
+    zeroPower ? 'No PV generation reported' : stale ? 'PV readings stale' :
+      voltage?.quality === 'fresh' ? 'PV power unavailable' : 'PV readings unavailable'
+
+  return <div className="growatt-pv-input">
+    <div className="growatt-pv-heading"><h4>{name ?? 'PV input'}</h4>
+      <Badge className={generating ? 'tone-good' : stale && !voltagePresent && !zeroPower ? 'tone-warn' : 'tone-neutral'}>{status}</Badge>
+    </div>
+    <dl className="growatt-pv-readings">
+      <div><dt>Voltage</dt><dd><LiveReading reading={voltage} /></dd></div>
+      <div><dt>Current</dt><dd>Unavailable</dd></div>
+      <div><dt>Power</dt><dd><LiveReading reading={power} /></dd></div>
+    </dl>
+  </div>
 }
 
 function LiveReading({ reading }: { reading?: Reading }) {

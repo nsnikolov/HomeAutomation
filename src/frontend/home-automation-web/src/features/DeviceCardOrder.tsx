@@ -56,9 +56,9 @@ export function moveVisible(saved: string[], all: readonly Card[], visible: read
   return ordered.map(id => visibleIds.has(id) ? shown[next++] : id)
 }
 
-export function DeviceCardOrder<T extends Card>({ items, group, preferences, rows = false, visible, children }: {
+export function DeviceCardOrder<T extends Card>({ items, group, preferences, rows = false, visible, className, children }: {
   items: readonly T[]; group: string; preferences?: ReturnType<typeof useDevicePreferences>;
-  rows?: boolean; visible?: (item: T) => boolean; children: (item: T) => ReactNode
+  rows?: boolean; visible?: (item: T) => boolean; className?: string; children: (item: T) => ReactNode
 }) {
   const saved = preferences?.data.order[group] ?? []
   const sorted = orderDevices(items, saved).filter(visible ?? (() => true))
@@ -82,7 +82,7 @@ export function DeviceCardOrder<T extends Card>({ items, group, preferences, row
     }
   }
   return <>
-    <Container className={rows ? 'rows' : 'device-grid'}
+    <Container className={[rows ? 'rows' : 'device-grid', className].filter(Boolean).join(' ')}
       ref={(element: HTMLElement | null) => { list.current = element }}>
       {sorted.map((item, index) => {
         const id = String(item.id)
