@@ -5,6 +5,7 @@ import { api, ApiError } from '../shared/api'
 import type { EwelinkDevice, Property, Room } from '../shared/types'
 import { Badge, Button, Card } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
+import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
 
 const statuses: Record<string, string> = {
   notConfigured: 'eWeLink Cloud needs approved Developer credentials.',
@@ -25,6 +26,7 @@ const statuses: Record<string, string> = {
 }
 
 export function EwelinkPanel({ property }: { property: Property }) {
+  const preferences = useDevicePreferences(property.id, 'ewelink')
   const cache = useQueryClient()
   const [params] = useSearchParams()
   const key = ['property', property.id, 'ewelink']
@@ -64,12 +66,15 @@ export function EwelinkPanel({ property }: { property: Property }) {
       {action.isError && <p role="alert">{errorCode && statuses[errorCode] || 'eWeLink account action failed.'}</p>}
       {rooms.isError && <p role="alert">Rooms could not be loaded.</p>}
     </div>}
-    {!!view?.unassigned.length && <section className="room"><h2>Unassigned devices</h2>
-      <div className="device-grid">{view.unassigned.map(device =>
-        <EwelinkCard key={device.id} device={device} property={property} rooms={rooms.data} />)}</div>
+    {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
+    {!!view?.devices.length && <section className="room"><h2>Assigned devices</h2>
+      <DeviceCardOrder items={view.devices} group="assigned" preferences={preferences}>{device =>
+        <EwelinkCard device={device} property={property} rooms={view.manage ? rooms.data : undefined} />}</DeviceCardOrder>
     </section>}
-    {!!view?.devices.length && <div className="device-grid">{view.devices.map(device =>
-      <EwelinkCard key={device.id} device={device} property={property} rooms={view.manage ? rooms.data : undefined} />)}</div>}
+    {!!view?.unassigned.length && <section className="room"><h2>Unassigned devices</h2>
+      <DeviceCardOrder items={view.unassigned} group="unassigned" preferences={preferences}>{device =>
+        <EwelinkCard device={device} property={property} rooms={rooms.data} />}</DeviceCardOrder>
+    </section>}
     {view?.manage && connected && !view.devices.length && !view.unassigned.length && <p>No eWeLink devices have been discovered.</p>}
   </section>
 }

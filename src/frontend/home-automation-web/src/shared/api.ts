@@ -1,4 +1,4 @@
-import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, TuyaState } from './types'
+import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePageKey, DevicePreferences, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, SensorHistory, SensorPeriod, TuyaState } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code?: string) {
@@ -37,6 +37,13 @@ async function providerAction<T>(provider: 'daikin' | 'ewelink' | 'tuya', id: nu
   })
 }
 
+async function replacePreference(path: string, body: object) {
+  const { token } = await request<{ token: string }>('/session/csrf')
+  return request<void>(path, {
+    method: 'PUT', headers: { 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+}
+
 export const api = {
   session: async (signal?: AbortSignal) => {
     try {
@@ -65,6 +72,14 @@ export const api = {
   assignEwelink: (id: number, device: string, roomId: number | null) =>
     providerAction<void>('ewelink', id, `devices/${device}/assign`, { roomId }),
   tuya: (id: number, signal?: AbortSignal) => request<TuyaState>(`/tuya/${id}`, { signal }),
+  tuyaHistory: (id: number, device: string, period: SensorPeriod, signal?: AbortSignal) =>
+    request<SensorHistory>(`/tuya/${id}/devices/${device}/sensor-history?period=${period}`, { signal }),
+  devicePreferences: (id: number, page: DevicePageKey, signal?: AbortSignal) =>
+    request<DevicePreferences>(`/properties/${id}/device-preferences/${page}`, { signal }),
+  orderDevices: (id: number, page: DevicePageKey, group: string, ids: string[]) =>
+    replacePreference(`/properties/${id}/device-preferences/${page}/order`, { group, ids }),
+  setTuyaVisibility: (id: number, device: string, hidden: boolean) =>
+    replacePreference(`/properties/${id}/device-preferences/tuya/visibility/${device}`, { hidden }),
   refreshTuya: (id: number) => providerAction<void>('tuya', id, 'refresh'),
   assignTuya: (id: number, device: string, roomId: number | null) =>
     providerAction<void>('tuya', id, `devices/${device}/assign`, { roomId }),

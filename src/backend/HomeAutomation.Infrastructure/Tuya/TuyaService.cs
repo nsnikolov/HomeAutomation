@@ -19,17 +19,19 @@ public sealed class TuyaService
 {
     private static readonly TimeSpan SpecificationLifetime = TimeSpan.FromDays(1);
     private static readonly TimeSpan SpecificationRetry = TimeSpan.FromHours(1);
+    private const string SensorReportSource = "tuya-sensor-report";
     private readonly TuyaOptions options;
     private readonly TuyaSession session;
     private readonly TuyaClient client;
     private readonly TuyaStore store;
     private readonly Migrations migrations;
     private readonly TelemetryWriter writer;
+    private readonly SensorHistoryReader history;
     private readonly IMonitoringReader permissions;
     private readonly TimeProvider clock;
 
     internal TuyaService(TuyaOptions options, TuyaSession session, TuyaClient client, TuyaStore store, Migrations migrations,
-        TelemetryWriter writer, IMonitoringReader permissions, TimeProvider clock)
+        TelemetryWriter writer, SensorHistoryReader history, IMonitoringReader permissions, TimeProvider clock)
     {
         this.options = options;
         this.session = session;
@@ -37,6 +39,7 @@ public sealed class TuyaService
         this.store = store;
         this.migrations = migrations;
         this.writer = writer;
+        this.history = history;
         this.permissions = permissions;
         this.clock = clock;
     }
@@ -45,6 +48,7 @@ public sealed class TuyaService
     {
         services.AddSingleton<TuyaSession>();
         services.AddScoped<TuyaStore>();
+        services.AddScoped<SensorHistoryReader>();
         services.AddHttpClient<TuyaClient>(http =>
         {
             http.Timeout = TimeSpan.FromSeconds(10);
@@ -53,11 +57,27 @@ public sealed class TuyaService
             .RemoveAllLoggers();
         services.AddScoped(provider => new TuyaService(provider.GetRequiredService<TuyaOptions>(), provider.GetRequiredService<TuyaSession>(),
             provider.GetRequiredService<TuyaClient>(), provider.GetRequiredService<TuyaStore>(), provider.GetRequiredService<Migrations>(),
-            provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<IMonitoringReader>(), provider.GetRequiredService<TimeProvider>()));
+            provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<SensorHistoryReader>(),
+            provider.GetRequiredService<IMonitoringReader>(), provider.GetRequiredService<TimeProvider>()));
         services.AddHostedService<TuyaWorker>();
     }
 
     public Task<bool> SchemaReadyAsync(CancellationToken ct) => migrations.VerifyAsync(ct, includeTuya: true);
+
+    public async Task<SensorHistory?> HistoryAsync(long property, string id, TimeSpan period, CancellationToken ct)
+    {
+        if (!options.IsConfigured || !await SchemaReadyAsync(ct)) return null;
+        var external = await store.FindIdentityAsync(id, property, ct);
+        if (external is null) return null;
+        var end = clock.GetUtcNow();
+        var start = end - period;
+        return new(start, end, options.PollMinutes * 60,
+            await history.ReadAsync(property, "tuya", external, SensorReportSource, start, end, ct));
+    }
+
+    public async Task<bool> CanHideAsync(long property, string id, bool allowUnassigned, CancellationToken ct) =>
+        options.IsConfigured && await SchemaReadyAsync(ct) &&
+        await store.FindIdentityAsync(id, property, ct, allowUnassigned) is not null;
 
     public async Task<TuyaView> ViewAsync(long property, bool manage, CancellationToken ct)
     {
@@ -135,6 +155,12 @@ public sealed class TuyaService
             var pending = inventory.Devices.Where(seed => SpecificationDue(seed, previous.GetValueOrDefault(seed.Id), now))
                 .OrderBy(seed => previous.GetValueOrDefault(seed.Id)?.SpecificationAttemptAt).Take(5)
                 .Select(seed => seed.Id).ToHashSet(StringComparer.Ordinal);
+            var historyPending = inventory.Devices.Where(seed => seed.Connectivity == Connectivity.Online &&
+                    rows.GetValueOrDefault(seed.Id)?.PropertyId is not null &&
+                    previous.GetValueOrDefault(seed.Id) is { } device && device.ProductId == seed.ProductId &&
+                    device.Points.Any(TuyaMapping.IsHistoricalSensor) && !(device.HistoryRetryAt > now))
+                .OrderBy(seed => previous[seed.Id].HistoryAttemptAt).Take(Math.Clamp(options.HistoryReadsPerPoll, 0, 4))
+                .Select(seed => seed.Id).ToHashSet(StringComparer.Ordinal);
             var partial = inventory.Partial;
             int? diagnostic = null;
             foreach (var seed in inventory.Devices)
@@ -161,7 +187,24 @@ public sealed class TuyaService
                 }
                 partial |= !valid;
                 var device = TuyaMapping.Snapshot(seed, prior, points, attempted, valid);
-                if (row?.PropertyId is { } property) await IngestAsync(device, property, row.RoomId, ct);
+                IReadOnlyDictionary<string, Sample>? sensorReports = null;
+                if (valid && historyPending.Contains(seed.Id))
+                {
+                    device = device with { HistoryAttemptAt = clock.GetUtcNow(), HistoryRetryAt = null };
+                    try
+                    {
+                        var reported = await client.ReportedPropertiesAsync(seed.Id, ct);
+                        sensorReports = TuyaMapping.SensorReports(reported, points, clock.GetUtcNow());
+                    }
+                    catch (TuyaFailure error) when (error.Status is "deviceUnavailable" or "accessDenied" or "invalidResponse"
+                        or "subscriptionExpired")
+                    {
+                        diagnostic ??= error.ProviderCode;
+                        partial = true;
+                        device = device with { HistoryRetryAt = clock.GetUtcNow().AddHours(6) };
+                    }
+                }
+                if (row?.PropertyId is { } property) await IngestAsync(device, property, row.RoomId, ct, sensorReports: sensorReports);
                 await store.SaveAsync(device, ct);
             }
             if (!inventory.Partial)
@@ -205,10 +248,11 @@ public sealed class TuyaService
         return store.ReportAsync(failure.Status, null, failure.RetryAt > next ? failure.RetryAt.Value : next, failure.ProviderCode, ct);
     }
 
-    private Task IngestAsync(TuyaDevice device, long property, long? room, CancellationToken ct, bool includeLastKnown = false)
+    private Task IngestAsync(TuyaDevice device, long property, long? room, CancellationToken ct, bool includeLastKnown = false,
+        IReadOnlyDictionary<string, Sample>? sensorReports = null)
     {
-        var (inventory, batch) = device.Telemetry(includeLastKnown);
-        return writer.StoreCloudDeviceAsync("tuya", property, room, inventory, batch, ct);
+        var (inventory, batch) = device.Telemetry(includeLastKnown, sensorReports);
+        return writer.StoreCloudDeviceAsync("tuya", property, room, inventory, batch, ct, SensorReportSource);
     }
 }
 

@@ -1,10 +1,15 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
-import { expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { api } from '../shared/api'
 import { TuyaPanel } from './TuyaPanel'
+import type { DevicePreferences, TuyaDevice } from '../shared/types'
 
 const property = { id: 1, name: 'Fixture', timeZone: 'Europe/Sofia' }
+const timestamp = '2026-11-22T12:00:00Z'
+
+beforeEach(() => { vi.spyOn(api, 'devicePreferences').mockResolvedValue({ order: {}, hidden: [] }) })
+afterEach(() => { vi.restoreAllMocks() })
 
 function view() {
   return render(<QueryClientProvider client={new QueryClient()}>
@@ -19,7 +24,7 @@ it('shows the provisioning boundary when the project is unconfigured', async () 
   try {
     view()
     expect(await screen.findByText(/linked Smart Life account are required/)).toBeInTheDocument()
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Refresh discovery' })).not.toBeInTheDocument()
   } finally { status.mockRestore() }
 })
 
@@ -40,6 +45,47 @@ it('renders scaled, stale and undated readings as read-only values', async () =>
     expect(screen.getByText(/21[.,]5 °C · Last known/)).toBeInTheDocument()
     expect(screen.getByText('99% · Report time unavailable')).toBeInTheDocument()
     expect(screen.getByText('Off')).toBeInTheDocument()
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Off' })).not.toBeInTheDocument()
+    const history = vi.spyOn(api, 'tuyaHistory').mockResolvedValue({ from: timestamp, to: timestamp, pollSeconds: 1800, series: [] })
+    fireEvent.click(screen.getByRole('button', { name: 'Temperature and humidity history' }))
+    await screen.findByText(/No timestamped temperature/)
+    fireEvent.change(screen.getByRole('combobox', { name: 'History period' }), { target: { value: '30d' } })
+    await waitFor(() => expect(history).toHaveBeenLastCalledWith(1, 'fixture', '30d', expect.anything()))
   } finally { status.mockRestore() }
+})
+
+it('shows assigned devices before unassigned and keeps a hidden card out until restored', async () => {
+  let saved: DevicePreferences = { order: {}, hidden: [] }
+  vi.mocked(api.devicePreferences).mockImplementation(async () => saved)
+  const visibility = vi.spyOn(api, 'setTuyaVisibility').mockImplementation(async (_property, id, hidden) => {
+    saved = { ...saved, hidden: hidden ? [id] : [] }
+  })
+  const device: TuyaDevice = {
+    id: 'one', name: 'Assigned sensor', model: '', roomId: 12, connectivity: 'online',
+    receivedAt: timestamp, quality: 'fresh', specificationsAvailable: true, readings: [],
+  }
+  const candidate = { ...device, id: 'two', name: 'Unassigned sensor', roomId: null }
+  const state = { status: 'connected', manage: true, lastSuccess: timestamp, nextSync: null, providerCode: null,
+    devices: [device], unassigned: [candidate] }
+  const provider = vi.spyOn(api, 'tuya').mockResolvedValue(state)
+  vi.spyOn(api, 'rooms').mockResolvedValue([{ id: 12, name: 'Room' }])
+  const first = view()
+  const assigned = await screen.findByRole('heading', { name: 'Assigned devices' })
+  const unassigned = await screen.findByRole('heading', { name: 'Unassigned devices' })
+  expect(assigned.compareDocumentPosition(unassigned) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  fireEvent.click(await screen.findByRole('button', { name: 'Hide Assigned sensor' }))
+  await waitFor(() => expect(visibility).toHaveBeenCalledWith(1, 'one', true))
+  expect(screen.queryByRole('heading', { name: 'Assigned sensor' })).not.toBeInTheDocument()
+  first.unmount()
+
+  provider.mockResolvedValue({ ...state, devices: [{ ...device, name: 'Rediscovered sensor' }] })
+  view()
+  fireEvent.click(await screen.findByRole('button', { name: 'Show hidden (1)' }))
+  const hiddenSection = screen.getByRole('heading', { name: 'Hidden devices' }).closest('section')!
+  await within(hiddenSection).findByRole('heading', { name: 'Rediscovered sensor' })
+  expect(within(hiddenSection).getByRole('combobox', { name: 'Room for Rediscovered sensor' })).toBeInTheDocument()
+  fireEvent.click(within(hiddenSection).getByRole('button', { name: 'Restore Rediscovered sensor' }))
+  await waitFor(() => expect(visibility).toHaveBeenLastCalledWith(1, 'one', false))
+  expect(await screen.findByRole('heading', { name: 'Assigned devices' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'Hidden devices' })).not.toBeInTheDocument()
 })

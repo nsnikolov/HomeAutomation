@@ -14,9 +14,11 @@ internal sealed record TuyaReading(string Code, double? Number, bool? Flag, Date
 
 internal sealed record TuyaDevice(string Id, string Name, string ProductId, string Model, Connectivity Connectivity,
     DateTimeOffset ReceivedAt, DateTimeOffset? ReportedAt, DateTimeOffset? SpecificationAttemptAt,
-    bool SpecificationAvailable, TuyaPoint[] Points, TuyaReading[] Readings, bool Present = true)
+    bool SpecificationAvailable, TuyaPoint[] Points, TuyaReading[] Readings, bool Present = true,
+    DateTimeOffset? HistoryAttemptAt = null, DateTimeOffset? HistoryRetryAt = null)
 {
-    public (DiscoveredDevice Inventory, ObservationBatch Batch) Telemetry(bool includeLastKnown = false)
+    public (DiscoveredDevice Inventory, ObservationBatch Batch) Telemetry(bool includeLastKnown = false,
+        IReadOnlyDictionary<string, Sample>? sensorReports = null)
     {
         var endpoints = Points.Select(point => new DeviceEndpoint(point.Code, point.Code, [point.Capability])).ToArray();
         var kind = Points.Length == 0 ? DeviceKind.Unknown :
@@ -27,6 +29,8 @@ internal sealed record TuyaDevice(string Id, string Name, string ProductId, stri
             .ToDictionary(reading => reading.Code, StringComparer.Ordinal);
         var observations = Points.Select(point =>
         {
+            if (TuyaMapping.IsHistoricalSensor(point))
+                return new EndpointObservation(point.Code, sensorReports?.GetValueOrDefault(point.Code) is { } report ? [report] : []);
             var samples = readings.TryGetValue(point.Code, out var reading)
                 ? new[] { reading.Flag is { } flag ? Sample.Boolean(Metric.SwitchOn, reading.At!.Value, flag) :
                     Sample.Numeric(point.Metric, reading.At!.Value, reading.Number!.Value) }
@@ -39,6 +43,25 @@ internal sealed record TuyaDevice(string Id, string Name, string ProductId, stri
 
 internal static class TuyaMapping
 {
+    public static bool IsHistoricalSensor(TuyaPoint point) => point.Metric is Metric.Temperature or Metric.Humidity;
+
+    public static IReadOnlyDictionary<string, Sample> SensorReports(JsonElement properties, TuyaPoint[] points, DateTimeOffset now)
+    {
+        var fields = properties.EnumerateArray().ToLookup(item => TuyaJson.Text(item, "code", 64), StringComparer.Ordinal);
+        var earliest = now.AddDays(-30).ToUnixTimeMilliseconds();
+        var latest = now.ToUnixTimeMilliseconds();
+        var samples = new Dictionary<string, Sample>(StringComparer.Ordinal);
+        foreach (var point in points.Where(IsHistoricalSensor))
+        {
+            if (fields[point.Code].Take(2).ToArray() is not [var item] ||
+                TuyaJson.Long(item, "time") is not { } stamp || stamp < earliest || stamp > latest) continue;
+            var at = DateTimeOffset.FromUnixTimeMilliseconds(stamp);
+            if (Read(point, TuyaJson.Get(item, "value"), at)?.Number is { } value)
+                samples.Add(point.Code, Sample.Numeric(point.Metric, at, value));
+        }
+        return samples;
+    }
+
     public static TuyaSeed? Device(JsonElement data, DateTimeOffset received)
     {
         var id = TuyaJson.Text(data, "id", 96);
@@ -122,7 +145,8 @@ internal static class TuyaMapping
             else if (previous is not null) readings.Add(previous with { InLatestReport = false });
         }
         return new(seed.Id, seed.Name, seed.ProductId, seed.Model, seed.Connectivity, seed.ReceivedAt,
-            seed.ReportedAt, attemptedAt, specificationAvailable, points, readings.ToArray());
+            seed.ReportedAt, attemptedAt, specificationAvailable, points, readings.ToArray(),
+            HistoryAttemptAt: prior?.HistoryAttemptAt, HistoryRetryAt: prior?.HistoryRetryAt);
     }
 
     private static TuyaReading? Read(TuyaPoint point, JsonElement value, DateTimeOffset? at)

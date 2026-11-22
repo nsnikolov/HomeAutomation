@@ -6,6 +6,7 @@ import { Button, Card, Input } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
 import type { DaikinDevice, DaikinRange, Property, Room } from '../shared/types'
 import { HistoryChart } from './Energy'
+import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
 
 const statusText: Record<string, string> = {
   notConfigured: 'ONECTA developer credentials are required.',
@@ -43,6 +44,7 @@ const waterCurves = [
 ] as const
 
 export function DaikinPanel({ property }: { property: Property }) {
+  const preferences = useDevicePreferences(property.id, 'daikin')
   const cache = useQueryClient()
   const [params, setParams] = useSearchParams()
   const key = ['property', property.id, 'daikin']
@@ -85,15 +87,17 @@ export function DaikinPanel({ property }: { property: Property }) {
       </>}
       {action.isError && <p role="alert">ONECTA account action failed. Check the connection status.</p>}
     </div>}
-    {state?.unassigned.length ? <Card className="panel">
-      <h2>Unassigned devices</h2>
-      {state.unassigned.map(unit => <div key={unit.id}><p>{unit.name}</p>
-        <AssignRoom property={property.id} device={unit} rooms={rooms.data ?? []} /></div>)}
-    </Card> : null}
-    {state?.devices.length ? <div className="device-grid">
-      {state.devices.map(unit => <DaikinDeviceCard key={unit.id} device={unit} property={property}
-        writes={state.writes} rooms={state.manage ? rooms.data ?? [] : undefined} />)}
-    </div> : null}
+    {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
+    {!!state?.devices.length && <section className="room"><h2>Assigned devices</h2>
+      <DeviceCardOrder items={state.devices} group="assigned" preferences={preferences}>{unit =>
+        <DaikinDeviceCard device={unit} property={property}
+          writes={state.writes} rooms={state.manage ? rooms.data ?? [] : undefined} />}</DeviceCardOrder>
+    </section>}
+    {!!state?.unassigned.length && <section className="room"><h2>Unassigned devices</h2>
+      <DeviceCardOrder items={state.unassigned} group="unassigned" preferences={preferences}>{unit =>
+        <Card className="device-card"><h3>{unit.name}</h3>
+          <AssignRoom property={property.id} device={unit} rooms={rooms.data ?? []} /></Card>}</DeviceCardOrder>
+    </section>}
   </section>
 }
 

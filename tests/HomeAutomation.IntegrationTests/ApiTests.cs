@@ -64,6 +64,23 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     }
 
     [Fact]
+    public async Task DeviceHistoryAndPreferencesRequirePropertyAuthorizationAndCsrf()
+    {
+        using var guest = host.CreateClient();
+        using var member = AuthenticatedClient();
+        const string device = "00000000000000000000000000000001";
+        Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/properties/1/device-preferences/tuya")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await member.GetAsync("/api/v1/properties/99/device-preferences/tuya")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await member.PutAsJsonAsync("/api/v1/properties/99/device-preferences/tuya/order",
+            new { group = "assigned", ids = new[] { device } })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await member.PutAsJsonAsync($"/api/v1/properties/1/device-preferences/tuya/visibility/{device}",
+            new { hidden = true })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await member.GetAsync($"/api/v1/tuya/99/devices/{device}/sensor-history?period=30d")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await member.GetAsync($"/api/v1/tuya/1/devices/{device}/sensor-history?period=365d")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await member.GetAsync($"/api/v1/tuya/1/devices/{device}/sensor-history?period=7d")).StatusCode);
+    }
+
+    [Fact]
     public async Task TuyaIsPropertyScopedAndHasNoDeviceCommandRoute()
     {
         using var guest = host.CreateClient();

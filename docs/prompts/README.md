@@ -20,3 +20,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 16. 2026-11-22 · [Milestone 4A — eWeLink Cloud Discovery & Read-only Monitoring](0016-ewelink-read-only-monitoring.md)
 17. 2026-11-22 · [Milestone 5A — Smart Life / Tuya Cloud Integration](0017-tuya-cloud-read-only-monitoring.md)
 18. 2026-11-22 · [Hotfix — Tuya discovery fails with ambiguous MySQL column](0018-tuya-mysql-upsert-hotfix.md)
+19. 2026-11-22 · [Milestone 5B — Historical Charts and Dashboard UX](0019-history-and-dashboard-ux.md)

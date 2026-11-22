@@ -72,6 +72,14 @@ export type TuyaState = {
   devices: TuyaDevice[]; unassigned: TuyaDevice[]
 }
 
+export type DevicePageKey = 'dashboard' | 'devices' | 'growatt' | 'daikin' | 'ewelink' | 'tuya'
+export type DevicePreferences = { order: Record<string, string[]>; hidden: string[] }
+export type SensorPeriod = '24h' | '7d' | '30d'
+export type SensorHistory = {
+  from: string; to: string; pollSeconds: number
+  series: { code: string; metric: 'temperature' | 'humidity'; unit: string; points: Point[]; truncated: boolean }[]
+}
+
 export type DaikinRange = { min: number; max: number; step: number }
 export type DaikinOutcome = { id: string; operation: string; value: string; status: string; updatedAt: string }
 export type DaikinDevice = {

@@ -14,6 +14,7 @@ public sealed class TuyaOptions
     public string? DataCenter { get; set; }
     public string? OperatorEmail { get; set; }
     public int PollMinutes { get; set; } = 30;
+    public int HistoryReadsPerPoll { get; set; } = 3;
 
     internal string? Host => DataCenter?.ToLowerInvariant() switch
     {
@@ -88,6 +89,14 @@ internal sealed class TuyaClient(HttpClient http, TuyaOptions options, TimeProvi
         if (!TuyaJson.IsId(device)) throw new TuyaFailure("invalidResponse");
         var result = await AuthorizedAsync($"/v1.0/iot-03/devices/{device}/specification", ct);
         return TuyaMapping.Specifications(result);
+    }
+
+    public async Task<JsonElement> ReportedPropertiesAsync(string device, CancellationToken ct)
+    {
+        if (!TuyaJson.IsId(device)) throw new TuyaFailure("invalidResponse");
+        var result = await AuthorizedAsync($"/v2.0/cloud/thing/{device}/shadow/properties", ct);
+        var properties = TuyaJson.Get(result, "properties");
+        return properties.ValueKind == JsonValueKind.Array ? properties : throw new TuyaFailure("invalidResponse");
     }
 
     private async Task<JsonElement> AuthorizedAsync(string path, CancellationToken ct)

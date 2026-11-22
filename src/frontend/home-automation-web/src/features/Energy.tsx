@@ -48,23 +48,26 @@ export function TrendCard({ property, title, curves = production, hours = 1, pol
 }
 
 export function HistoryChart({ property, title, curves, hours, pollSeconds, unit, action, pending, failed, series,
-  minimumPoints = 1 }: {
+  minimumPoints = 1, window }: {
   property: Property; title: string; curves: Curve[]; hours: number; pollSeconds: number; unit: string
   action?: React.ReactNode; pending: boolean; failed: boolean; series: Parameters<typeof mergeHistory>[0]
-  minimumPoints?: number
+  minimumPoints?: number; window?: { from: string; to: string }
 }) {
   const points = mergeHistory(series, pollSeconds)
   const ready = curves.some(curve => points.filter(point => typeof point[curve.metric] === 'number').length >= minimumPoints)
   const showSeconds = points.length > 0 && points.at(-1)!.time - points[0].time < 5 * 60 * 1000
   const formatter = new Intl.DateTimeFormat(undefined, {
+    ...(window && hours > 24 ? { month: 'short', day: 'numeric' } as const : {}),
     hour: '2-digit', minute: '2-digit', second: showSeconds ? '2-digit' : undefined, timeZone: property.timeZone,
   })
   const time = (value: number) => formatter.format(value)
-  const range = hours === 1 ? 'last hour' : `last ${hours} hours`
+  const range = hours === 1 ? 'last hour' : hours > 24 && window ? `last ${hours / 24} days` : `last ${hours} hours`
+  const headingRange = range[0].toUpperCase() + range.slice(1)
+  const domain: [number | 'dataMin', number | 'dataMax'] = window ? [Date.parse(window.from), Date.parse(window.to)] : ['dataMin', 'dataMax']
 
   return <Card className="trend-card">
     <div className="card-heading">
-      <div><h2>{title}</h2><p>{hours === 1 ? 'Last hour' : `Last ${hours} hours`} · {unit}</p></div>
+      <div><h2>{title}</h2><p>{headingRange} · {unit}</p></div>
       {action}
     </div>
     <ul className="chart-legend">{curves.map(curve => <li key={curve.metric}><span style={{ background: curve.color }} />{curve.label}</li>)}</ul>
@@ -73,14 +76,14 @@ export function HistoryChart({ property, title, curves, hours, pollSeconds, unit
       <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <ComposedChart data={points} margin={{ left: -12, right: 12, top: 10, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke="#e5eaf0" strokeDasharray="4 4" />
-          <XAxis type="number" dataKey="time" domain={['dataMin', 'dataMax']} tickFormatter={time} minTickGap={28} tickLine={false} axisLine={false} tick={{ fill: '#5f6c7e', fontSize: 11 }} />
+          <XAxis type="number" dataKey="time" domain={domain} tickFormatter={time} minTickGap={28} tickLine={false} axisLine={false} tick={{ fill: '#5f6c7e', fontSize: 11 }} />
           <YAxis unit={unit === 'W' ? '' : unit} tickLine={false} axisLine={false} tick={{ fill: '#5f6c7e', fontSize: 11 }} />
           <Tooltip labelFormatter={value => time(Number(value))} formatter={(value, name) => [`${value} ${unit}`, name]} />
           {curves.map((curve, index) => index === 0
             ? <Area key={curve.metric} name={curve.label} dataKey={curve.metric} stroke={curve.color} fill={curve.color}
-              fillOpacity={0.08} strokeWidth={2} type="linear" dot={false} isAnimationActive={false} connectNulls={false} />
+              fillOpacity={0.08} strokeWidth={2} type="linear" dot={window ? { r: 2 } : false} isAnimationActive={false} connectNulls={false} />
             : <Line key={curve.metric} name={curve.label} dataKey={curve.metric} stroke={curve.color}
-              strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />)}
+              strokeWidth={2} dot={window ? { r: 2 } : false} isAnimationActive={false} connectNulls={false} />)}
         </ComposedChart>
       </ResponsiveContainer>
     </div> : <div className="chart-empty" role="status">{pending ? 'Loading readings…' : 'Waiting for recorded readings.'}</div>}

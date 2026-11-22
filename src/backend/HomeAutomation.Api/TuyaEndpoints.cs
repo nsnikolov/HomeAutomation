@@ -42,6 +42,14 @@ internal static class TuyaEndpoints
         });
         group.MapGet("/", (HttpContext http, long property, TuyaService service, TuyaOptions options, CancellationToken ct) =>
             service.ViewAsync(property, options.IsOperator(http.User.Identity?.Name), ct));
+        group.MapGet("/devices/{device:guid}/sensor-history", async (long property, Guid device, string? period,
+            TuyaService service, CancellationToken ct) =>
+        {
+            var days = period switch { null or "24h" => 1, "7d" => 7, "30d" => 30, _ => 0 };
+            if (days == 0) return Results.BadRequest();
+            return await service.HistoryAsync(property, device.ToString("N"), TimeSpan.FromDays(days), ct) is { } history
+                ? Results.Ok(history) : Results.NotFound();
+        });
         group.MapPost("/refresh", async (TuyaService service, CancellationToken ct) =>
         {
             await service.SyncAsync(true, ct);

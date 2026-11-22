@@ -131,8 +131,49 @@ public sealed class TuyaTests
         Assert.All(mapped.Inventory.Endpoints, endpoint =>
             Assert.All(endpoint.Capabilities, capability => Assert.Equal(Access.ReadOnly, endpoint.AccessFor(capability))));
         var history = Assert.Single(mapped.Batch.Devices).Endpoints.SelectMany(endpoint => endpoint.Samples).ToArray();
-        Assert.Equal(8, history.Length);
+        Assert.Equal(6, history.Length);
         Assert.All(history, value => Assert.Equal(report.ReportedAt, value.ObservedAt));
+    }
+
+    [Fact]
+    public async Task HistoryUsesTheReportedPropertiesReadEndpoint()
+    {
+        using var session = new TuyaSession { Token = new("fixture-token", Now.AddMinutes(5)) };
+        using var client = Client(new FixtureClock(), session, request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("/v2.0/cloud/thing/fixture-device/shadow/properties", request.RequestUri!.AbsolutePath);
+            return Success(new { properties = Array.Empty<object>() });
+        });
+        Assert.Equal(0, (await client.ReportedPropertiesAsync("fixture-device", default)).GetArrayLength());
+    }
+
+    [Fact]
+    public void HistoryRequiresMatchingDatapointsAndTheirOwnValidTimestamps()
+    {
+        var points = Specs(Point("temp_current", "Integer", """{"unit":"℃","scale":1}"""),
+            Point("humidity_value", "Integer", """{"unit":"%","scale":0}"""),
+            Point("va_humidity", "Integer", """{"unit":"%","scale":0}"""),
+            Point("humidity", "Integer", """{"unit":"%","scale":0}"""));
+        var reportAt = Now.AddMinutes(-10);
+        var reported = JsonSerializer.SerializeToElement(new object[]
+        {
+            new { code = "temp_current", time = reportAt.ToUnixTimeMilliseconds(), value = 215 },
+            new { code = "humidity_value", value = 54 },
+            new { code = "va_humidity", time = Now.AddDays(-31).ToUnixTimeMilliseconds(), value = 42 },
+            new { code = "humidity", time = Now.AddSeconds(1).ToUnixTimeMilliseconds(), value = 70 },
+        });
+        var reports = TuyaMapping.SensorReports(reported, points, Now);
+        var sample = Assert.Single(reports).Value;
+        Assert.Equal(reportAt, sample.ObservedAt);
+        Assert.Equal(21.5, sample.Number);
+
+        var inventory = Seed(true, Now, ("temp_current", 215), ("humidity_value", 54));
+        var device = TuyaMapping.Snapshot(inventory, null, points, Now, true);
+        Assert.Empty(Assert.Single(device.Telemetry().Batch.Devices).Endpoints.SelectMany(x => x.Samples));
+        var persisted = Assert.Single(Assert.Single(device.Telemetry(sensorReports: reports).Batch.Devices).Endpoints.SelectMany(x => x.Samples));
+        Assert.Equal(sample, persisted);
+        Assert.Equal(reportAt, TuyaMapping.SensorReports(reported, points, Now.AddMinutes(30))["temp_current"].ObservedAt);
     }
 
     [Fact]

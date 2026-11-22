@@ -42,6 +42,15 @@ internal sealed class TuyaStore(Database database, TuyaOptions options)
             """, ct, new { scope = options.Scope }))).AsList();
     }
 
+    public async Task<string?> FindIdentityAsync(string id, long property, CancellationToken ct, bool allowUnassigned = false)
+    {
+        await using var db = await database.OpenAsync(ct);
+        return await db.QuerySingleOrDefaultAsync<string>(Query("""
+            SELECT external_id FROM tuya_devices WHERE project_scope=@scope AND public_id=@id
+              AND (property_id=@property OR (@allowUnassigned AND property_id IS NULL))
+            """, ct, new { scope = options.Scope, id, property, allowUnassigned }));
+    }
+
     public async Task SaveAsync(TuyaDevice device, CancellationToken ct)
     {
         await using var db = await database.OpenAsync(ct);

@@ -61,7 +61,7 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
         CancellationToken cancellationToken) => StoreCloudDeviceAsync("daikin", propertyId, roomId, device, batch, cancellationToken);
 
     internal async Task StoreCloudDeviceAsync(string provider, long propertyId, long? roomId, DiscoveredDevice device,
-        ObservationBatch batch, CancellationToken cancellationToken)
+        ObservationBatch batch, CancellationToken cancellationToken, string? sensorReportSource = null)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -77,7 +77,7 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
             """, cancellationToken, new { propertyId, roomId }, transaction));
         var site = new Site(propertyId, 0, connectionId);
         await RegisterInventoryAsync(connection, transaction, site, provider, [device with { RoomKey = room }], cancellationToken);
-        await PersistAsync(connection, transaction, site, provider, batch, cancellationToken);
+        await PersistAsync(connection, transaction, site, provider, batch, cancellationToken, sensorReportSource);
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -163,7 +163,7 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
     }
 
     private async Task PersistAsync(MySqlConnection connection, MySqlTransaction transaction, Site site, string provider,
-        ObservationBatch batch, CancellationToken cancellationToken)
+        ObservationBatch batch, CancellationToken cancellationToken, string? sensorReportSource = null)
     {
         var targets = (await connection.QueryAsync<BoundEndpoint>(Query(
             """
@@ -175,9 +175,10 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
 
         var knownSeries = (await connection.QueryAsync<Series>(Query(
             """
-            SELECT id AS Id, endpoint_id AS EndpointId, installation_id AS InstallationId, metric AS Metric
-            FROM telemetry_series WHERE property_id = @PropertyId AND source_key = @Provider
-            """, cancellationToken, new { site.PropertyId, Provider = provider }, transaction))).ToDictionary(row => (row.EndpointId, row.InstallationId, row.Metric), row => row.Id);
+            SELECT id AS Id, endpoint_id AS EndpointId, installation_id AS InstallationId, metric AS Metric, source_key AS Source
+            FROM telemetry_series WHERE property_id = @PropertyId AND source_key IN (@Provider,@SensorReportSource)
+            """, cancellationToken, new { site.PropertyId, Provider = provider, SensorReportSource = sensorReportSource }, transaction)))
+            .ToDictionary(row => (row.EndpointId, row.InstallationId, row.Metric, row.Source), row => row.Id);
 
         var receivedAt = timeProvider.GetUtcNow().UtcDateTime;
         foreach (var observation in batch.Devices)
@@ -228,7 +229,9 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
 
         async Task SaveAsync(long? endpointId, long? installationId, Sample sample)
         {
-            var key = (endpointId, installationId, sample.Metric.ToString());
+            var source = sensorReportSource is not null && sample.Metric is (Metric.Temperature or Metric.Humidity)
+                ? sensorReportSource : provider;
+            var key = (endpointId, installationId, sample.Metric.ToString(), source);
             if (!knownSeries.TryGetValue(key, out var seriesId))
             {
                 seriesId = await InsertIdentityAsync(connection, transaction,
@@ -236,7 +239,7 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
                     INSERT INTO telemetry_series (property_id, endpoint_id, installation_id, source_key, metric)
                     VALUES (@PropertyId, @EndpointId, @InstallationId, @Provider, @Metric)
                     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)
-                    """, new { site.PropertyId, EndpointId = endpointId, InstallationId = installationId, Provider = provider, Metric = key.Item3 }, cancellationToken);
+                    """, new { site.PropertyId, EndpointId = endpointId, InstallationId = installationId, Provider = source, Metric = key.Item3 }, cancellationToken);
                 knownSeries.Add(key, seriesId);
             }
 
@@ -284,6 +287,6 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
     private sealed record RoomBinding(long Id, string RoomKey);
     private sealed record BoundEndpoint(long DeviceId, string ExternalId, string EndpointKey, long EndpointId);
     private sealed record StateRow(string Connectivity, string? FaultCode, DateTime Observed);
-    private sealed record Series(long Id, long? EndpointId, long? InstallationId, string Metric);
+    private sealed record Series(long Id, long? EndpointId, long? InstallationId, string Metric, string Source);
     private sealed record BoundRole(string ExternalId, string Role);
 }

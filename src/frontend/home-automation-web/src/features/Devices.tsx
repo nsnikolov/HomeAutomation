@@ -6,6 +6,7 @@ import { api } from '../shared/api'
 import type { Device, Metric, Property, Reading } from '../shared/types'
 import { Badge, Card, Input } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
+import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
 
 export const metricLabels: Record<Metric, string> = {
   pvPower: 'PV production', householdPower: 'Household consumption', gridAvailable: 'Grid availability',
@@ -49,10 +50,11 @@ export function formatReading(reading: Reading | undefined) {
 export function Devices({ property, devices }: { property: Property; devices?: Device[] }) {
   const [search, setSearch] = useState('')
   const [kind, setKind] = useState('')
+  const preferences = useDevicePreferences(property.id, 'devices')
   const rooms = useQuery({ queryKey: ['property', property.id, 'rooms'], queryFn: ({ signal }) => api.rooms(property.id, signal) })
-  const matching = (devices ?? []).filter(device => (!kind || device.kind === kind) &&
-    `${device.name} ${device.manufacturer} ${device.model}`.toLowerCase().includes(search.trim().toLowerCase()))
-  const groups = [...(rooms.data ?? []), { id: null, name: 'Unassigned' }]
+  const matches = (device: Device) => (!kind || device.kind === kind) &&
+    `${device.name} ${device.manufacturer} ${device.model}`.toLowerCase().includes(search.trim().toLowerCase())
+  const groups = [...(rooms.data ?? []), { id: null, name: 'Unassigned room' }]
 
   return <>
     <div className="page-heading"><h1>Devices</h1><p>Monitor device state, readings and available capabilities.</p></div>
@@ -66,13 +68,15 @@ export function Devices({ property, devices }: { property: Property; devices?: D
     </div>
     {(!devices || rooms.isPending) && <p role="status">Loading devices…</p>}
     {rooms.isError && <p role="alert">Rooms could not be loaded.</p>}
-    {devices && !matching.length && <Card className="placeholder">No devices match your filters.</Card>}
+    {devices && !devices.some(matches) && <Card className="placeholder">No devices match your filters.</Card>}
+    {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
     {groups.map(room => {
-      const items = matching.filter(device => device.roomId === room.id)
-      if (!items.length) return null
+      const items = (devices ?? []).filter(device => device.roomId === room.id)
+      if (!items.some(matches)) return null
       return <section className="room" key={room.id ?? 'unassigned'}>
         <h2>{room.name}</h2>
-        <div className="device-grid">{items.map(device => <DeviceCard key={device.id} device={device} property={property} />)}</div>
+        <DeviceCardOrder items={items} group={room.id === null ? 'unassigned' : `room-${room.id}`}
+          preferences={preferences} visible={matches}>{device => <DeviceCard device={device} property={property} />}</DeviceCardOrder>
       </section>
     })}
   </>
