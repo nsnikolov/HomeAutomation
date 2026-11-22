@@ -63,6 +63,36 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     }
 
     [Fact]
+    public async Task EwelinkRequiresAPropertySessionAndExposesNoDeviceCommandRoute()
+    {
+        using var guest = host.CreateClient();
+        using var viewer = AuthenticatedClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/ewelink/1")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/ewelink/callback")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/v1/ewelink/99")).StatusCode);
+        Assert.Contains("notConfigured", await viewer.GetStringAsync("/api/v1/ewelink/1"));
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsync("/api/v1/ewelink/1/connect", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await viewer.PostAsJsonAsync(
+            "/api/v1/ewelink/1/devices/00000000000000000000000000000001/commands", new { operation = "power" })).StatusCode);
+    }
+
+    [Fact]
+    public void EwelinkConsentIsOneTimeAndBoundToTheSameBrowserAndUser()
+    {
+        var clock = new FlowClock();
+        var consent = new EwelinkConsent(clock);
+        var flow = consent.Begin("operator", 1);
+        Assert.Null(consent.Take("another-user", flow.State, flow.Cookie));
+        Assert.Null(consent.Take("operator", flow.State, null));
+        Assert.Null(consent.Take("operator", "unrelated", flow.Cookie));
+        Assert.Equal(1, consent.Take("operator", flow.State, flow.Cookie)?.Property);
+        Assert.Null(consent.Take("operator", flow.State, flow.Cookie));
+        flow = consent.Begin("operator", 1);
+        clock.Advance();
+        Assert.Null(consent.Take("operator", flow.State, flow.Cookie));
+    }
+
+    [Fact]
     public async Task DaikinEndpointsKeepTheExistingSessionAndPropertyBoundary()
     {
         using var guest = host.CreateClient();

@@ -1,6 +1,6 @@
 namespace HomeAutomation.Domain;
 
-public enum DeviceKind { Inverter, Battery, AirConditioner, SmartSwitch, Sensor, HeatPump }
+public enum DeviceKind { Inverter, Battery, AirConditioner, SmartSwitch, Sensor, HeatPump, Unknown }
 public enum Capability
 {
     SolarProduction, HouseholdConsumption, GridAvailability, BatteryLevel, BatteryPower,

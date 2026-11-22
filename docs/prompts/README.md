@@ -17,3 +17,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 13. 2026-11-22 · [Milestone 3D — Daikin Altherma Telemetry and Manual AC Control](0013-altherma-telemetry-manual-ac-control.md)
 14. 2026-11-22 · [Milestone 3E — Enable Daikin ONECTA Manual AC Control](0014-enable-daikin-manual-ac-control.md)
 15. 2026-11-22 · [Daikin ONECTA — Debounced Command Confirmation](0015-daikin-debounced-command-confirmation.md)
+16. 2026-11-22 · [Milestone 4A — eWeLink Cloud Discovery & Read-only Monitoring](0016-ewelink-read-only-monitoring.md)

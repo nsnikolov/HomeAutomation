@@ -62,14 +62,15 @@ public sealed class Migrations(Database database)
         }
     }
 
-    public async Task<bool> VerifyAsync(CancellationToken cancellationToken, bool includeDaikin = false)
+    public async Task<bool> VerifyAsync(CancellationToken cancellationToken, bool includeDaikin = false, bool includeEwelink = false)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
         try
         {
             var applied = await connection.QueryAsync<string>(Query("SELECT name FROM schema_migrations", cancellationToken));
             var installed = applied.ToHashSet(StringComparer.Ordinal);
-            return Scripts.Where(name => includeDaikin || !name.EndsWith(".003_daikin_onecta.sql", StringComparison.Ordinal))
+            return Scripts.Where(name => (includeDaikin || !name.EndsWith(".003_daikin_onecta.sql", StringComparison.Ordinal)) &&
+                (includeEwelink || !name.EndsWith(".004_ewelink_cloud.sql", StringComparison.Ordinal)))
                 .All(installed.Contains);
         }
         catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.NoSuchTable)

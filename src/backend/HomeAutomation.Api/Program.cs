@@ -8,6 +8,7 @@ using HomeAutomation.Infrastructure.MySql;
 using HomeAutomation.Infrastructure.Simulator;
 using HomeAutomation.Infrastructure.Growatt;
 using HomeAutomation.Infrastructure.Daikin;
+using HomeAutomation.Infrastructure.Ewelink;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -96,6 +97,13 @@ builder.Services.AddSingleton(services =>
 builder.Services.AddSingleton<DaikinFlow>();
 DaikinService.Register(builder.Services);
 builder.Services.AddHostedService<DaikinWorker>();
+builder.Services.AddSingleton(services =>
+{
+    try { return services.GetRequiredService<IConfiguration>().GetSection("Ewelink").Get<EwelinkOptions>() ?? new EwelinkOptions(); }
+    catch (InvalidOperationException) { return new EwelinkOptions(); }
+});
+builder.Services.AddSingleton<EwelinkConsent>();
+EwelinkService.Register(builder.Services);
 builder.Services.AddScoped<IdentityStore>();
 builder.Services.AddIdentityCore<LocalUser>(options =>
 {
@@ -213,6 +221,7 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = regist
 app.MapSession();
 app.MapMonitoring();
 app.MapDaikin();
+app.MapEwelink();
 app.MapHub<MonitoringHub>("/hubs/monitoring", options => options.CloseOnAuthenticationExpiration = true).RequireAuthorization();
 app.Map("/api/{**path}", () => Results.NotFound());
 app.MapFallbackToFile("index.html");

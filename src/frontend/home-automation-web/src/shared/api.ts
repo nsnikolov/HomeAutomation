@@ -1,4 +1,4 @@
-import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, GrowattState, Health, Metric, Point, Property, PropertyState, Room } from './types'
+import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code?: string) {
@@ -13,7 +13,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     credentials: 'same-origin',
   })
   if (!response.ok) {
-    const error: { status?: unknown } | null = path.startsWith('/daikin/') ? await response.json().catch(() => null) : null
+    const error: { status?: unknown } | null = path.startsWith('/daikin/') || path.startsWith('/ewelink/')
+      ? await response.json().catch(() => null) : null
     throw new ApiError(response.status, typeof error?.status === 'string' ? error.status : undefined)
   }
   return response.status === 204 ? undefined as T : await response.json() as T
@@ -28,9 +29,9 @@ async function sessionAction(path: '/login' | '/logout', body?: { email: string;
   })
 }
 
-async function daikinAction<T>(id: number, action: string, body?: object) {
+async function providerAction<T>(provider: 'daikin' | 'ewelink', id: number, action: string, body?: object) {
   const { token } = await request<{ token: string }>('/session/csrf')
-  return request<T>(`/daikin/${id}/${action}`, {
+  return request<T>(`/${provider}/${id}/${action}`, {
     method: 'POST', headers: { 'X-CSRF-TOKEN': token, ...(body && { 'Content-Type': 'application/json' }) },
     body: body && JSON.stringify(body),
   })
@@ -52,12 +53,17 @@ export const api = {
   state: (id: number, signal?: AbortSignal) => request<PropertyState>(`/properties/${id}/state`, { signal }),
   growatt: (id: number, signal?: AbortSignal) => request<GrowattState>(`/properties/${id}/growatt`, { signal }),
   daikin: (id: number, signal?: AbortSignal) => request<DaikinState>(`/daikin/${id}`, { signal }),
-  connectDaikin: (id: number) => daikinAction<{ authorizationUrl: string }>(id, 'connect'),
-  updateDaikin: (id: number, action: 'complete' | 'disconnect' | 'refresh') => daikinAction<void>(id, action),
+  connectDaikin: (id: number) => providerAction<{ authorizationUrl: string }>('daikin', id, 'connect'),
+  updateDaikin: (id: number, action: 'complete' | 'disconnect' | 'refresh') => providerAction<void>('daikin', id, action),
   assignDaikin: (id: number, device: string, roomId: number | null) =>
-    daikinAction<void>(id, `devices/${device}/assign`, { roomId }),
+    providerAction<void>('daikin', id, `devices/${device}/assign`, { roomId }),
   commandDaikin: (id: number, device: string, operation: string, value: string, expectedMode?: string | null) =>
-    daikinAction<DaikinOutcome>(id, `devices/${device}/commands`, { operation, value, expectedMode }),
+    providerAction<DaikinOutcome>('daikin', id, `devices/${device}/commands`, { operation, value, expectedMode }),
+  ewelink: (id: number, signal?: AbortSignal) => request<EwelinkState>(`/ewelink/${id}`, { signal }),
+  connectEwelink: (id: number) => providerAction<{ authorizationUrl: string }>('ewelink', id, 'connect'),
+  updateEwelink: (id: number, action: 'disconnect' | 'refresh') => providerAction<void>('ewelink', id, action),
+  assignEwelink: (id: number, device: string, roomId: number | null) =>
+    providerAction<void>('ewelink', id, `devices/${device}/assign`, { roomId }),
   daikinWaterHistory: (id: number, device: string, signal?: AbortSignal) =>
     request<DaikinWaterHistory>(`/daikin/${id}/devices/${device}/water-history`, { signal }),
   device: (id: number, device: number, signal?: AbortSignal) =>

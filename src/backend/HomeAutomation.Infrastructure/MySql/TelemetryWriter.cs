@@ -57,24 +57,27 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
         return site.PropertyId;
     }
 
-    public async Task StoreDaikinAsync(long propertyId, long? roomId, DiscoveredDevice device, ObservationBatch batch,
-        CancellationToken cancellationToken)
+    public Task StoreDaikinAsync(long propertyId, long? roomId, DiscoveredDevice device, ObservationBatch batch,
+        CancellationToken cancellationToken) => StoreCloudDeviceAsync("daikin", propertyId, roomId, device, batch, cancellationToken);
+
+    internal async Task StoreCloudDeviceAsync(string provider, long propertyId, long? roomId, DiscoveredDevice device,
+        ObservationBatch batch, CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await connection.ExecuteAsync(Query("""
-            INSERT INTO integration_connections(property_id,provider_code) VALUES (@propertyId,'daikin')
+            INSERT INTO integration_connections(property_id,provider_code) VALUES (@propertyId,@provider)
             ON DUPLICATE KEY UPDATE id=integration_connections.id;
-            """, cancellationToken, new { propertyId }, transaction));
+            """, cancellationToken, new { propertyId, provider }, transaction));
         var connectionId = await connection.QuerySingleAsync<long>(Query("""
-            SELECT id FROM integration_connections WHERE property_id=@propertyId AND provider_code='daikin' FOR UPDATE
-            """, cancellationToken, new { propertyId }, transaction));
+            SELECT id FROM integration_connections WHERE property_id=@propertyId AND provider_code=@provider FOR UPDATE
+            """, cancellationToken, new { propertyId, provider }, transaction));
         var room = roomId is null ? "" : await connection.QuerySingleAsync<string>(Query("""
             SELECT room_key FROM rooms WHERE property_id=@propertyId AND id=@roomId
             """, cancellationToken, new { propertyId, roomId }, transaction));
         var site = new Site(propertyId, 0, connectionId);
-        await RegisterInventoryAsync(connection, transaction, site, "daikin", [device with { RoomKey = room }], cancellationToken);
-        await PersistAsync(connection, transaction, site, "daikin", batch, cancellationToken);
+        await RegisterInventoryAsync(connection, transaction, site, provider, [device with { RoomKey = room }], cancellationToken);
+        await PersistAsync(connection, transaction, site, provider, batch, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -92,10 +95,11 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
                 INSERT INTO devices (property_id, room_id, inventory_key, name, kind, manufacturer, model)
                 VALUES (@PropertyId, @RoomId, @InventoryKey, @Name, @Kind, @Manufacturer, @Model)
                 ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id),
-                    room_id = IF(@Provider = 'daikin', @RoomId, room_id),
-                    kind = IF(@Provider = 'daikin', @Kind, kind),
-                    name = IF(@Provider = 'daikin', @Name, name),
-                    model = IF(@Provider = 'daikin', @Model, model)
+                    room_id = IF(@Provider IN ('daikin','ewelink'), @RoomId, room_id),
+                    kind = IF(@Provider IN ('daikin','ewelink'), @Kind, kind),
+                    name = IF(@Provider IN ('daikin','ewelink'), @Name, name),
+                    model = IF(@Provider IN ('daikin','ewelink'), @Model, model),
+                    manufacturer = IF(@Provider = 'ewelink', @Manufacturer, manufacturer)
                 """,
                 new
                 {

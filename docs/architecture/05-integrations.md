@@ -40,6 +40,8 @@ Daikin's public developer guidance confirms official monitoring and control, sel
 
 Sonoff is a manufacturer. eWeLink is the account and integration ecosystem, and can include devices from other manufacturers. Identify the hardware and its approved connection separately.
 
+See the [eWeLink Cloud setup and supported readings](../integrations/ewelink-cloud.md) for Milestone 4A.
+
 | Option | Evidence and decision |
 | --- | --- |
 | Official eWeLink Cloud OpenAPI | CoolKit documents developer application review, OAuth 2.0 authorization code, device discovery/status/control and WebSocket updates. Use an approved app with its own entitlement. Verify region, brand and model access, request limits and the permitted update stream before relying on them. Use supported status reads for initial sync and reconnect. [CoolKit OAuth and device API](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md) · [CoolKit API limits and brand authorization](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/APICenterV2.md) |
