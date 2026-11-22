@@ -107,6 +107,40 @@ Sign in and choose **Live Growatt** in the property sidebar to open real reading
 
 Use the [Daikin ONECTA setup guide](docs/integrations/daikin-onecta.md) to register the developer app, apply migration 003, and connect an account from the property sidebar. Physical writes are disabled by default.
 
+### Local HTTPS for ONECTA on Windows
+
+The HTTPS development origin is `https://ha-dev.britishlab.org:5443`. Confirm the Windows hosts file resolves `ha-dev.britishlab.org` to `127.0.0.1`. The following one-time setup uses [mkcert](https://github.com/FiloSottile/mkcert). Put its official portable Windows executable on your PATH or invoke it by absolute path. It can run without a system-wide installation.
+
+```powershell
+$tls = Join-Path $env:LOCALAPPDATA 'HomeAutomation/tls'
+$env:CAROOT = Join-Path $tls 'ca'
+New-Item -ItemType Directory -Path $tls,$env:CAROOT -Force | Out-Null
+mkcert -cert-file (Join-Path $tls 'ha-dev.britishlab.org.pem') -key-file (Join-Path $tls 'ha-dev.britishlab.org-key.pem') ha-dev.britishlab.org
+```
+
+Trust the public CA used for this development certificate in the current Windows user's **Trusted Root Certification Authorities** store. This gives the current user's applications trust in certificates signed by that CA. Windows may prompt for confirmation. Keep both the host key and the CA key private under LocalAppData.
+
+```powershell
+certutil.exe -user -addstore Root (Join-Path $env:CAROOT 'rootCA.pem')
+```
+
+From the repository root, save only the new callback and start the backend in Development mode.
+
+```powershell
+dotnet user-secrets set 'Daikin:RedirectUri' 'https://ha-dev.britishlab.org:5443/api/v1/daikin/callback' --project src/backend/HomeAutomation.Api
+dotnet run --project src/backend/HomeAutomation.Api
+```
+
+In another terminal, from `src/frontend/home-automation-web`, run:
+
+```powershell
+npm.cmd run dev:https
+```
+
+Open [https://ha-dev.britishlab.org:5443/](https://ha-dev.britishlab.org:5443/) and sign in on that origin. Vite listens on `127.0.0.1:5443`, ends browser TLS there, and forwards `/api`, `/health`, and SignalR over the local loopback hop to port 5080. The backend recognizes the forwarded scheme only for that named Development origin from its trusted loopback peer. The ordinary `npm.cmd run dev` workflow remains available on port 5173.
+
+Set the existing Daikin app's redirect URI to `https://ha-dev.britishlab.org:5443/api/v1/daikin/callback`. Start and finish Daikin consent from the HTTPS origin in the same browser. See the [ONECTA 403 diagnosis](docs/integrations/daikin-onecta.md#diagnosing-cloudfront-403) if the provider rejects the authorization request.
+
 ## Verify changes
 
 ```powershell

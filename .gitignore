@@ -9,4 +9,8 @@
 !.env.example
 .vs/
 TestResults/
+*.pem
+*.key
+*.pfx
+*.p12
 coverage/

@@ -9,3 +9,7 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 5. 2026-11-21 · [Milestone 2B — Activate Live Growatt Cloud Monitoring](0005-activate-live-growatt-cloud-monitoring.md)
 6. 2026-11-21 · [Milestone 2C — Activate Live Growatt Monitoring](0006-activate-live-growatt-monitoring.md)
 7. 2026-11-21 · [Milestone 3 — Daikin ONECTA Cloud Integration](0007-daikin-onecta-cloud-integration.md)
+8. 2026-11-21 · [Daikin ONECTA OAuth — Diagnose CloudFront 403](0008-daikin-oauth-cloudfront-403.md)
+9. 2026-11-21 · [Home Automation — Local HTTPS for Daikin OAuth](0009-local-https-daikin-oauth.md)
+10. 2026-11-22 · [Home Automation — Daikin ONECTA OAuth Callback Investigation and Fix](0010-daikin-oauth-callback.md)
+11. 2026-11-22 · [Continue the existing Daikin ONECTA OAuth callback task](0011-verify-daikin-oauth-callback.md)

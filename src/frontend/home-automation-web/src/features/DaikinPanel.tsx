@@ -39,8 +39,8 @@ export function DaikinPanel({ property }: { property: Property }) {
         const result = await api.connectDaikin(property.id)
         window.location.assign(result.authorizationUrl)
       } else {
-        if (operation === 'complete') setParams({}, { replace: true })
         await api.updateDaikin(property.id, operation)
+        if (operation === 'complete') setParams({}, { replace: true })
       }
     },
     onSettled: () => cache.invalidateQueries({ queryKey: key }),

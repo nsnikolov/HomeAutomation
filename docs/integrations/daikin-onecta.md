@@ -2,14 +2,14 @@
 
 ## API and verification
 
-Daikin offers self-service private EMEA integrations through its Developer Portal. Create an application, accept the applicable terms, and register the exact redirect URI. Daikin publishes a private-app quota of 200 calls per day with sliding-window accounting. Its authenticated documentation catalog returned HTTP 401 without a developer session. No local ONECTA developer credentials were present. The official gateway endpoint also returned HTTP 401 without a token. [Daikin developer FAQ](https://www.daikin.eu/en_us/product-group/control-systems/daikin-developer-portal.html) · [ONECTA Developer Portal](https://developer.cloud.daikineurope.com/)
+Daikin offers self-service private EMEA integrations through its Developer Portal. Create an application, accept the applicable terms, and register the exact redirect URI. Daikin publishes a private-app quota of 200 calls per day with sliding-window accounting. Its documentation catalog returned HTTP 401 without a developer session. At initial implementation, the official gateway endpoint also returned HTTP 401 without a token. [Daikin developer FAQ](https://www.daikin.eu/en_us/product-group/control-systems/daikin-developer-portal.html) · [ONECTA Developer Portal](https://developer.cloud.daikineurope.com/)
 
 The adapter targets the ONECTA developer API, using the identity provider's `/v1/oidc/authorize` and `/v1/oidc/token` endpoints, scopes `openid onecta:basic.integration offline_access`, and a bearer-authenticated `GET /v1/gateway-devices`. Manual commands target an individual management point characteristic using PATCH. The public portal confirms the service and quota. The detailed wire mappings, credential exchange, PKCE, scopes and control paths were exercised with fixtures and still require validation against the authenticated app contract and hardware. Public identity metadata was unavailable during this check. [Public gateway endpoint](https://api.onecta.daikineurope.com/v1/gateway-devices) · [OAuth security best practice](https://www.rfc-editor.org/rfc/rfc9700.html)
 
 ## Connect the local account
 
 1. Sign in to the [Daikin Developer Portal](https://developer.cloud.daikineurope.com/) and register a private application. Use the ONECTA account that can see the intended units. Review the app's API access, supported PKCE methods, client authentication, scopes, and redirect requirements.
-2. Register the browser-facing callback exactly. For the Windows Vite workflow it is `http://localhost:5173/api/v1/daikin/callback` if the portal accepts loopback HTTP. If the portal requires HTTPS, use the same HTTPS application origin for sign-in and the callback, with that exact URI registered. The existing Vite proxy forwards the API callback to ASP.NET Core. Keep `localhost` and `127.0.0.1` distinct.
+2. Register the browser-facing callback exactly. Use a named HTTPS origin that the browser can reach, such as `https://ha-dev.example.net:5443/api/v1/daikin/callback` with a hostname you control. Use that same origin for sign-in, starting OAuth, and finishing the connection. See [Diagnosing CloudFront 403](#diagnosing-cloudfront-403) for the loopback results and a local HTTPS setup.
 3. Set `Daikin:ClientId`, `Daikin:ClientSecret`, `Daikin:OperatorEmail`, `Daikin:RedirectUri`, and `Daikin:TokenKey` in the backend's .NET User Secrets. Use the existing trusted local user's sign-in email. That account still requires a property membership. Generate the token key **once** per database and keep it out of the database and backups of the database. This PowerShell example reads the secret without echoing it and avoids placing either key value in command arguments.
 
    ```powershell
@@ -20,7 +20,7 @@ The adapter targets the ONECTA developer API, using the identity provider's `/v1
      'Daikin:ClientId' = Read-Host 'Daikin client ID'
      'Daikin:ClientSecret' = [System.Net.NetworkCredential]::new('', (Read-Host 'Daikin client secret' -AsSecureString)).Password
      'Daikin:OperatorEmail' = Read-Host 'Home Automation operator email'
-     'Daikin:RedirectUri' = 'http://localhost:5173/api/v1/daikin/callback'
+     'Daikin:RedirectUri' = 'https://ha-dev.example.net:5443/api/v1/daikin/callback'
      'Daikin:TokenKey' = [Convert]::ToBase64String($daikinKey)
      'Daikin:EnableWrites' = $false
    }
@@ -34,7 +34,63 @@ The adapter targets the ONECTA developer API, using the identity provider's `/v1
 
 **Disconnect account** stops polling and clears the stored access and refresh tokens locally. Historical telemetry and assignments are retained. The authenticated contract for upstream revocation could not be verified, so use Daikin's account or app management to revoke its grant where available. Reconnect may be required after expiration or revocation.
 
-The local MySQL 8.0.46 runtime account was checked and lacks `CREATE`. Migration 003 is pending. It uses additive tables in the configured schema and leaves the existing simulator and Growatt migrations in place. The runtime account should retain its existing scoped DML grants.
+Migration 003 uses additive tables in the configured schema and leaves the existing simulator and Growatt migrations in place. Apply it with the dedicated migration account and keep the runtime account's scoped DML grants.
+
+## Diagnosing CloudFront 403
+
+On 2026-11-21, the bare ONECTA authorize path returned HTTP 302. A controlled comparison held a synthetic, deliberately invalid client ID, scope, response type, state and S256 challenge constant. Only the callback URI changed. The checks stopped at the initial response.
+
+| Callback variant | Initial response |
+| --- | --- |
+| HTTP on `localhost` | HTTP 403 CloudFront error page |
+| HTTPS on `localhost` | HTTP 403 CloudFront error page |
+| HTTPS on `127.0.0.1` | HTTP 403 CloudFront error page |
+| HTTP on a named host | HTTP 302 to Daikin's login proxy |
+| HTTPS on a named host | HTTP 302 to Daikin's login proxy |
+
+The callback hostname is the strongest explanation for this early 403. HTTPS alone on a loopback hostname did not resolve it. The named HTTP response advanced to the login proxy, so it only establishes initial routing. It does not establish whether Daikin accepts HTTP later. The maintained `daikin-controller-cloud` client reports loopback rejection and recommends HTTPS. AWS documents that CloudFront alone cannot distinguish origin 403s from WAF blocks. [Community client documentation](https://github.com/Apollon77/daikin-controller-cloud#pre-requisites) · [CloudFront 403 documentation](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/http-403-permission-denied.html)
+
+The authorization builder uses `client_id`, the configured `redirect_uri`, `response_type=code`, `scope=openid onecta:basic.integration offline_access`, and browser-bound `state`. With PKCE enabled it sends `code_challenge` and `code_challenge_method=S256`. The authorization-code exchange sends the exact configured redirect and the stored verifier. The official Developer Portal requires sign-in for the detailed contract. Public identity discovery did not return usable metadata during the check. Matching maintained client code corroborates the endpoint and scopes. The named HTTPS probe with S256 got past the initial CloudFront rejection. Full PKCE support and the redirect policy for the registered app still need an authenticated check. [Daikin developer documentation](https://developer.cloud.daikineurope.com/docs/b0dffcaa-7b51-428a-bdff-a7c8a64195c0/getting_started) · [Maintained ONECTA client endpoints](https://github.com/jwillemsen/daikin_onecta/blob/master/custom_components/daikin_onecta/const.py) · [Maintained client scopes](https://github.com/jwillemsen/daikin_onecta/blob/master/custom_components/daikin_onecta/config_flow.py)
+
+### One HTTPS origin on Windows
+
+For the Vite development workflow on the confirmed `ha-dev.britishlab.org` hostname, use [Local HTTPS for ONECTA on Windows](../../README.md#local-https-for-onecta-on-windows). Register `https://ha-dev.britishlab.org:5443/api/v1/daikin/callback` on the existing Daikin app, then start and finish the consent flow from that origin. The Kestrel-only setup below also serves a single HTTPS origin.
+
+Use an existing trusted HTTPS deployment if available. For local-only development, use a hostname you control that resolves to `127.0.0.1` on the browser machine, for example through a Windows hosts entry or local DNS. Use a browser-trusted certificate with that hostname in its subject alternative names. A browser on a different machine needs a reachable address instead of its own loopback. The OAuth callback runs in the browser, so the local HTTPS listener can remain private.
+
+1. Edit the existing Daikin app's registered redirect to `https://ha-dev.example.net:5443/api/v1/daikin/callback` with your hostname and port. Use the exact same URI in `Daikin:RedirectUri`. Keep `Daikin:UsePkce=true`. Leave the client credentials and writes flag as configured.
+2. Serve the React build and API from that one HTTPS origin. The following example assumes a password-protected PFX for your hostname. Use the normal private certificate configuration for a shared environment. Use one running backend to avoid duplicate polling.
+
+   ```powershell
+   npm.cmd --prefix src/frontend/home-automation-web run build
+   $daikinWebRoot = (Resolve-Path 'src/frontend/home-automation-web/dist').Path
+   $env:ASPNETCORE_ENVIRONMENT = 'Development'
+   $env:AllowedHosts = 'ha-dev.example.net'
+   $env:Daikin__RedirectUri = 'https://ha-dev.example.net:5443/api/v1/daikin/callback'
+   $env:Kestrel__Certificates__Default__Path = 'C:\path\to\ha-dev.pfx'
+   $env:Kestrel__Certificates__Default__Password = [System.Net.NetworkCredential]::new('', (Read-Host 'Certificate password' -AsSecureString)).Password
+   try {
+     dotnet run --project src/backend/HomeAutomation.Api --no-launch-profile -- --urls https://127.0.0.1:5443 --webroot $daikinWebRoot
+   } finally {
+     Remove-Item Env:Kestrel__Certificates__Default__Password -ErrorAction SilentlyContinue
+   }
+   ```
+
+3. Open `https://ha-dev.example.net:5443/` in the browser, sign in there, and use **Daikin ONECTA → Connect account**. Complete consent and **Finish connecting** in the same browser. That keeps the correlation cookie and the original operator session on the same host. [Kestrel HTTPS configuration](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0)
+
+This controlled comparison with the existing registered app is the next diagnostic step. If the named HTTPS request still returns 403 before login, send Daikin support the UTC time, HTTP status, `x-amz-cf-id` or page Request ID, endpoint path, and callback URI. Ask whether they see a redirect-policy, application registration, or edge rejection and whether the app supports S256. Keep the full authorization URL, state, challenge, verifier, authorization code, cookies, and credentials out of diagnostics.
+
+## Diagnosing the return from Daikin
+
+Open the named HTTPS application origin, sign in with the operator account, and start one connection attempt. Use the same browser for consent and **Finish connecting**. The correlation window is ten minutes. If the confirmation page asks for local sign-in, sign in there with the same account. The page keeps **Finish connecting** available after sign-in.
+
+| Where the attempt stops | Evidence to capture |
+| --- | --- |
+| Daikin's page before returning | HTTP status and the provider's request ID, if shown |
+| Home Automation callback returns 400 | The fixed `Reason` from the backend's `ONECTA callback rejected` event |
+| **Finish connecting** fails | The HTTP status and optional short `status` field from the local `/complete` response |
+
+The backend logs `ONECTA callback accepted. Waiting for local confirmation.` when it has received the code and validated the browser correlation. That event precedes the token exchange, which starts with **Finish connecting**. A credential-free callback probe returns 400 by design. Restart the connection if its state has expired or was already used.
 
 ## Monitoring, quotas and manual requests
 

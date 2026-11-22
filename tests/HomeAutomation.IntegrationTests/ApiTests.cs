@@ -1,12 +1,17 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text.Json;
 using System.Text.Encodings.Web;
 using HomeAutomation.Application;
 using HomeAutomation.Api;
 using HomeAutomation.Domain;
+using HomeAutomation.Infrastructure.MySql;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -77,16 +82,148 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         var flow = new DaikinFlow(clock);
         var pending = flow.Begin("owner", 1, true);
         Assert.NotEqual(pending.Verifier, pending.Challenge);
-        Assert.Null(flow.Accept(pending.Cookie, "forged", "one"));
-        Assert.Null(flow.Accept("another-browser", pending.State, "one"));
-        Assert.Equal(1L, flow.Accept(pending.Cookie, pending.State, "one"));
+        Assert.Null(flow.Accept(pending.Cookie, "forged", "one", out var mismatch));
+        Assert.Equal("correlationMismatch", mismatch);
+        Assert.Null(flow.Accept(null, pending.State, "one", out var missingCookie));
+        Assert.Equal("missingCorrelationCookie", missingCookie);
+        Assert.Null(flow.Accept("another-browser", pending.State, "one", out _));
+        Assert.Equal(1L, flow.Accept(pending.Cookie, pending.State, "one", out _));
         Assert.Null(flow.Take("another-user", 1, pending.Cookie));
-        Assert.Null(flow.Accept(pending.Cookie, pending.State, "two"));
+        Assert.Null(flow.Accept(pending.Cookie, pending.State, "two", out _));
         Assert.Equal("one", flow.Take("owner", 1, pending.Cookie)?.Code);
         Assert.Null(flow.Take("owner", 1, pending.Cookie));
         pending = flow.Begin("owner", 1, true);
         clock.Advance();
-        Assert.Null(flow.Accept(pending.Cookie, pending.State, "expired"));
+        Assert.Null(flow.Accept(pending.Cookie, pending.State, "expired", out var expired));
+        Assert.Equal("expiredConnection", expired);
+    }
+
+    [Fact]
+    public async Task DaikinCallbackRedirectsToTheLocalConfirmationWithoutExposingTheCode()
+    {
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var pending = host.Services.GetRequiredService<DaikinFlow>().Begin("viewer", 1, true);
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/v1/daikin/callback?state={pending.State}&code=fixture-code");
+        request.Headers.TryAddWithoutValidation("Cookie", $"homeautomation.onecta={pending.Cookie}");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/properties/1/daikin?onecta=finish", response.Headers.Location?.OriginalString);
+        Assert.Equal("no-referrer", Assert.Single(response.Headers.GetValues("Referrer-Policy")));
+    }
+
+    [Theory]
+    [InlineData("ha-dev.britishlab.org:5443", "127.0.0.1", true)]
+    [InlineData("ha-dev.britishlab.org:5443", "192.0.2.20", false)]
+    [InlineData("localhost:5080", "127.0.0.1", false)]
+    public async Task DevelopmentProxyMarksCsrfCookieSecureOnlyForTheNamedLoopbackHop(
+        string authority, string upstream, bool secure)
+    {
+        var response = await host.Server.SendAsync(context =>
+        {
+            context.Connection.RemoteIpAddress = IPAddress.Parse(upstream);
+            context.Request.Scheme = "http";
+            context.Request.Host = new HostString(authority);
+            context.Request.Path = "/api/v1/session/csrf";
+            context.Request.Headers["X-Forwarded-Proto"] = "https";
+        });
+
+        Assert.Equal(StatusCodes.Status200OK, response.Response.StatusCode);
+        var cookie = Assert.Single(response.Response.Headers.SetCookie)!;
+        Assert.Equal(secure, cookie.Contains("; secure", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ForwardedHttpsLoginIssuesSecureSessionAndAllowsAuthenticatedReads()
+    {
+        using var loginHost = host.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.AddAuthentication(options =>
+            {
+                options.DefaultAuthenticateScheme = IdentityConstants.ApplicationScheme;
+                options.DefaultChallengeScheme = IdentityConstants.ApplicationScheme;
+            });
+            services.RemoveAll<IUserStore<LocalUser>>();
+            services.AddSingleton<IUserStore<LocalUser>, PasswordFixture>();
+        }));
+
+        var csrf = await Request("/api/v1/session/csrf");
+        using var payload = await JsonDocument.ParseAsync(csrf.Response.Body);
+        var token = payload.RootElement.GetProperty("token").GetString()!;
+        var csrfCookie = Assert.Single(csrf.Response.Headers.SetCookie)!.Split(';')[0];
+        var form = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            email = PasswordFixture.Email, password = PasswordFixture.Password
+        });
+        var missingCsrf = await Request("/api/v1/session/login", SetForm);
+        Assert.Equal(StatusCodes.Status400BadRequest, missingCsrf.Response.StatusCode);
+        var login = await Request("/api/v1/session/login", context =>
+        {
+            SetForm(context);
+            context.Request.Headers.Cookie = csrfCookie;
+            context.Request.Headers["X-CSRF-TOKEN"] = token;
+        });
+        Assert.Equal(StatusCodes.Status204NoContent, login.Response.StatusCode);
+        var session = Assert.Single(login.Response.Headers.SetCookie, value =>
+            value?.StartsWith("homeautomation.session=", StringComparison.Ordinal) == true)!;
+        Assert.Contains("; secure", session, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=strict", session, StringComparison.OrdinalIgnoreCase);
+
+        var result = await Request("/api/v1/properties", context => context.Request.Headers.Cookie = session.Split(';')[0]);
+        Assert.Equal(StatusCodes.Status200OK, result.Response.StatusCode);
+        using var properties = await JsonDocument.ParseAsync(result.Response.Body);
+        Assert.Equal(1, properties.RootElement[0].GetProperty("id").GetInt32());
+
+        void SetForm(HttpContext context)
+        {
+            context.Request.Method = "POST";
+            context.Request.ContentType = "application/json";
+            context.Request.ContentLength = form.Length;
+            context.Request.Body = new MemoryStream(form, writable: false);
+            context.Features.Set<IHttpRequestBodyDetectionFeature>(new RequestHasBody());
+        }
+
+        Task<HttpContext> Request(string path, Action<HttpContext>? configure = null) =>
+            loginHost.Server.SendAsync(context =>
+            {
+                context.Connection.RemoteIpAddress = IPAddress.Loopback;
+                context.Request.Scheme = "http";
+                context.Request.Host = new HostString("ha-dev.britishlab.org", 5443);
+                context.Request.Path = path;
+                context.Request.Headers["X-Forwarded-Proto"] = "https";
+                configure?.Invoke(context);
+            });
+    }
+
+    private sealed class RequestHasBody : IHttpRequestBodyDetectionFeature
+    {
+        public bool CanHaveBody => true;
+    }
+
+    private sealed class PasswordFixture : IUserPasswordStore<LocalUser>
+    {
+        public const string Email = "viewer@example.test";
+        public const string Password = "fixture-password-for-tests";
+        private readonly LocalUser user = new() { Id = "viewer", UserName = Email, NormalizedUserName = Email.ToUpperInvariant() };
+
+        public PasswordFixture() => user.PasswordHash = new PasswordHasher<LocalUser>().HashPassword(user, Password);
+        public Task<LocalUser?> FindByIdAsync(string id, CancellationToken ct) => Task.FromResult(id == user.Id ? user : null);
+        public Task<LocalUser?> FindByNameAsync(string name, CancellationToken ct) =>
+            Task.FromResult(name == user.NormalizedUserName ? user : null);
+        public Task<string> GetUserIdAsync(LocalUser item, CancellationToken ct) => Task.FromResult(item.Id);
+        public Task<string?> GetUserNameAsync(LocalUser item, CancellationToken ct) => Task.FromResult(item.UserName);
+        public Task<string?> GetNormalizedUserNameAsync(LocalUser item, CancellationToken ct) => Task.FromResult(item.NormalizedUserName);
+        public Task<string?> GetPasswordHashAsync(LocalUser item, CancellationToken ct) => Task.FromResult(item.PasswordHash);
+        public Task<bool> HasPasswordAsync(LocalUser item, CancellationToken ct) => Task.FromResult(item.PasswordHash is not null);
+        public Task SetUserNameAsync(LocalUser item, string? name, CancellationToken ct) => throw new NotSupportedException();
+        public Task SetNormalizedUserNameAsync(LocalUser item, string? name, CancellationToken ct) => throw new NotSupportedException();
+        public Task SetPasswordHashAsync(LocalUser item, string? hash, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IdentityResult> CreateAsync(LocalUser item, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IdentityResult> UpdateAsync(LocalUser item, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IdentityResult> DeleteAsync(LocalUser item, CancellationToken ct) => throw new NotSupportedException();
+        public void Dispose() { }
     }
 
     private sealed class FlowClock : TimeProvider

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowUpRight, ChartNoAxesCombined, ChevronDown, CircuitBoard, House, LayoutGrid, LogOut, Settings, Snowflake, Zap } from 'lucide-react'
-import { Link, NavLink, Navigate, Route, Routes, useMatch, useNavigate, useParams } from 'react-router'
+import { Link, NavLink, Navigate, Route, Routes, useMatch, useNavigate, useParams, useSearchParams } from 'react-router'
 import { api } from './shared/api'
 import { useLiveUpdates } from './shared/live'
 import type { Property } from './shared/types'
@@ -23,11 +23,13 @@ export function App() {
 function Login() {
   const client = useQueryClient()
   const navigate = useNavigate()
+  const finishRoute = useMatch('/properties/:propertyId/daikin')
+  const [parameters] = useSearchParams()
   const login = useMutation({
     mutationFn: (values: { email: string; password: string }) => api.login(values.email, values.password),
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ['session'] })
-      void navigate('/')
+      if (!finishRoute || parameters.get('onecta') !== 'finish') void navigate('/')
     },
   })
   function submit(event: FormEvent<HTMLFormElement>) {

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -10,6 +11,7 @@ using HomeAutomation.Infrastructure.Daikin;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
@@ -173,6 +175,16 @@ if (migrate || bootstrap)
         Environment.ExitCode = 1;
     }
     return;
+}
+
+if (app.Environment.IsDevelopment())
+{
+    var localHttps = new HostString("ha-dev.britishlab.org", 5443);
+    var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedProto, ForwardLimit = 1 };
+    forwarded.KnownIPNetworks.Clear();
+    forwarded.KnownProxies.Clear();
+    forwarded.KnownProxies.Add(IPAddress.Loopback);
+    app.UseWhen(context => context.Request.Host == localHttps, proxy => proxy.UseForwardedHeaders(forwarded));
 }
 
 app.UseExceptionHandler();

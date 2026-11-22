@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.Daikin;
+using Microsoft.AspNetCore.WebUtilities;
 
 namespace HomeAutomation.UnitTests;
 
@@ -54,6 +55,7 @@ public sealed class DaikinTests
             if (++calls == 1)
             {
                 Assert.Contains("code_verifier=fixture-verifier", form);
+                Assert.Equal(Options().RedirectUri, QueryHelpers.ParseQuery(form)["redirect_uri"].ToString());
                 return Response(HttpStatusCode.OK, """{"token_type":"Bearer","access_token":"fixture-access","refresh_token":"fixture-refresh","expires_in":3600}""");
             }
             if (calls == 2)
@@ -73,6 +75,31 @@ public sealed class DaikinTests
         Assert.Equal("fixture-rotated", next.RefreshToken);
         Assert.Equal("reauthorizationRequired", (await Assert.ThrowsAsync<DaikinFailure>(() =>
             client.TokenAsync("refresh_token", next.RefreshToken, null, default))).Status);
+    }
+
+    [Theory]
+    [InlineData("http://localhost:5173/api/v1/daikin/callback")]
+    [InlineData("https://ha-dev.example.com:5443/api/v1/daikin/callback")]
+    public void OAuthAuthorizePreservesTheExactRedirectAndEncodesTheExpectedParameters(string redirect)
+    {
+        var options = Options();
+        options.RedirectUri = redirect;
+        Assert.True(options.IsConfigured);
+        using var client = new DaikinClient(new HttpClient(new Handler((_, _) =>
+            throw new InvalidOperationException("URL generation should not make a request."))), options, new FixedClock());
+
+        var uri = new Uri(client.Authorize("fixture-state", "fixture-challenge"));
+        Assert.Equal("https://idp.onecta.daikineurope.com/v1/oidc/authorize", uri.GetLeftPart(UriPartial.Path));
+        var query = QueryHelpers.ParseQuery(uri.Query);
+        Assert.Equal(7, query.Count);
+        Assert.All(query.Values, value => Assert.Single(value));
+        Assert.Equal(options.ClientId, query["client_id"].ToString());
+        Assert.Equal(redirect, query["redirect_uri"].ToString());
+        Assert.Equal("code", query["response_type"].ToString());
+        Assert.Equal("openid onecta:basic.integration offline_access", query["scope"].ToString());
+        Assert.Equal("fixture-state", query["state"].ToString());
+        Assert.Equal("fixture-challenge", query["code_challenge"].ToString());
+        Assert.Equal("S256", query["code_challenge_method"].ToString());
     }
 
     [Fact]

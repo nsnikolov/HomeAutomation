@@ -23,12 +23,19 @@ internal sealed class DaikinFlow(TimeProvider clock)
         }
     }
 
-    public long? Accept(string? cookie, string? state, string? code)
+    public long? Accept(string? cookie, string? state, string? code, out string? failure)
     {
         lock (sync)
         {
-            if (pending is not { Code: null } flow || flow.ExpiresAt <= clock.GetUtcNow() ||
-                cookie != flow.Cookie || state != flow.State || string.IsNullOrWhiteSpace(code) || code.Length > 4096)
+            var flow = pending;
+            failure = flow is null ? "noPendingConnection"
+                : flow.ExpiresAt <= clock.GetUtcNow() ? "expiredConnection"
+                : string.IsNullOrEmpty(cookie) ? "missingCorrelationCookie"
+                : cookie != flow.Cookie || state != flow.State ? "correlationMismatch"
+                : flow.Code is not null ? "callbackAlreadyAccepted"
+                : string.IsNullOrWhiteSpace(code) || code.Length > 4096 ? "invalidAuthorizationCode"
+                : null;
+            if (flow is null || failure is not null)
                 return null;
 
             pending = flow with { Code = code };
@@ -66,12 +73,20 @@ internal static class DaikinEndpoints
 
     public static void MapDaikin(this WebApplication app)
     {
-        app.MapGet(Route + "/callback", (HttpContext http, DaikinFlow flow, string? code, string? state) =>
+        app.MapGet(Route + "/callback", (HttpContext http, DaikinFlow flow, ILogger<DaikinFlow> logger,
+            string? code, string? state, string? error) =>
         {
             http.Response.Headers["Referrer-Policy"] = "no-referrer";
-            var property = flow.Accept(http.Request.Cookies[Cookie], state, code);
-            return property is null ? Results.BadRequest("ONECTA authorization did not complete. Restart the connection from Home Automation.")
-                : Results.Redirect($"/properties/{property}/daikin?onecta=finish");
+            var property = flow.Accept(http.Request.Cookies[Cookie], state, error is null ? code : null, out var failure);
+            if (property is null)
+            {
+                logger.LogInformation("ONECTA callback rejected with {Reason}.",
+                    error is not null && failure == "invalidAuthorizationCode" ? "providerRejected" : failure);
+                return Results.BadRequest("ONECTA authorization did not complete. Restart the connection from Home Automation.");
+            }
+
+            logger.LogInformation("ONECTA callback accepted. Waiting for local confirmation.");
+            return Results.Redirect($"/properties/{property}/daikin?onecta=finish");
         }).RequireRateLimiting("session");
 
         var group = app.MapGroup(Route + "/{property:long}").RequireAuthorization();
