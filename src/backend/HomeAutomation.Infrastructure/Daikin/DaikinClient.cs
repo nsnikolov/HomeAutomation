@@ -65,9 +65,11 @@ internal sealed class DaikinClient(HttpClient http, DaikinOptions options, TimeP
     public async Task<IReadOnlyList<DaikinDevice>> DiscoverAsync(string token, CancellationToken ct)
     {
         using var request = Api(HttpMethod.Get, Devices, token);
+        request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
         using var response = await http.SendAsync(request, ct);
         Check(response);
-        return DaikinMapping.Discover(await ReadAsync<JsonElement>(response, ct), clock.GetUtcNow());
+        return DaikinMapping.Discover(await ReadAsync<JsonElement>(response, ct), clock.GetUtcNow(),
+            cachedResponse: response.Headers.Age > TimeSpan.Zero);
     }
 
     public async Task PatchAsync(string token, DaikinDevice device, DaikinChange change, CancellationToken ct)

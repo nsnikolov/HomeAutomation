@@ -57,6 +57,42 @@ public sealed class DaikinTests
         Assert.Equal(Now.AddMinutes(-3), device.GatewayTimestamp);
         Assert.Null(device.SourceAt);
         Assert.Equal(Now, device.ObservedAt);
+        Assert.Equal(Now, device.ProviderReceivedAt);
+        Assert.True(DaikinService.CanUseForManualCommand(device with { Connectivity = Connectivity.Online },
+            Now, TimeSpan.FromMinutes(35)));
+    }
+
+    [Fact]
+    public void ManualEligibilityRequiresRecentReceiptAndExplicitReachability()
+    {
+        using var json = JsonDocument.Parse(Fixture);
+        var ac = Assert.Single(DaikinMapping.Discover(json.RootElement, Now)) with { Connectivity = Connectivity.Online };
+        bool Eligible(DaikinDevice device) => DaikinService.CanUseForManualCommand(device, Now, TimeSpan.FromMinutes(35));
+        Assert.True(Eligible(ac with { SourceAt = null, ProviderReceivedAt = Now.AddMinutes(-2) }));
+        Assert.False(Eligible(ac with { ProviderReceivedAt = Now.AddMinutes(-2).AddTicks(-1) }));
+        Assert.False(Eligible(ac with { ProviderReceivedAt = Now.AddTicks(1) }));
+        Assert.False(Eligible(ac with { ProviderReceivedAt = null }));
+        Assert.False(Eligible(ac with { SourceAt = null, InvalidSourceTime = true }));
+        Assert.False(Eligible(ac with { SourceAt = Now.AddHours(-1) }));
+        Assert.False(Eligible(ac with { Connectivity = Connectivity.Offline }));
+        Assert.False(Eligible(ac with { Connectivity = Connectivity.Unknown }));
+        Assert.False(Eligible(ac with { Available = false }));
+        Assert.False(Eligible(ac with { CachedResponse = true }));
+        Assert.False(Eligible(ac with { Equipment = DaikinEquipment.HeatPump }));
+    }
+
+    [Fact]
+    public void ManualChangeSkipsMatchingStateAndRequiresTheReviewedMode()
+    {
+        using var json = JsonDocument.Parse(Fixture);
+        var ac = Assert.Single(DaikinMapping.Discover(json.RootElement, Now));
+        Assert.True(DaikinService.ResolveManualChange(ac, new("power", "on")).AlreadyApplied);
+        Assert.True(DaikinService.ResolveManualChange(ac, new("temperature", "18", "heating")).AlreadyApplied);
+        Assert.False(DaikinService.ResolveManualChange(ac, new("temperature", "18.5", "heating")).AlreadyApplied);
+        Assert.Equal("modeChanged", Assert.Throws<DaikinFailure>(() =>
+            DaikinService.ResolveManualChange(ac, new("temperature", "18.5", "cooling"))).Status);
+        Assert.Equal("unsupportedCommand", Assert.Throws<DaikinFailure>(() =>
+            DaikinService.ResolveManualChange(ac, new("temperature", "18.1", "heating"))).Status);
     }
 
     [Theory]
@@ -113,7 +149,10 @@ public sealed class DaikinTests
         var ac = Assert.Single(DaikinMapping.Discover(json.RootElement, Now)) with { Connectivity = Connectivity.Online };
         var command = new DaikinOutcome("fixture", "temperature", "18", "uncertain", Now.AddMinutes(-10), "heating");
         Assert.True(DaikinService.MatchesCommand(ac, command));
-        Assert.False(DaikinService.MatchesCommand(ac with { SourceAt = null }, command));
+        Assert.True(DaikinService.MatchesCommand(ac with { SourceAt = null }, command));
+        Assert.False(DaikinService.MatchesCommand(ac with { SourceAt = null, ProviderReceivedAt = command.UpdatedAt }, command));
+        Assert.False(DaikinService.MatchesCommand(ac with { SourceAt = null, ProviderReceivedAt = null }, command));
+        Assert.False(DaikinService.MatchesCommand(ac with { SourceAt = null, InvalidSourceTime = true }, command));
         Assert.False(DaikinService.MatchesCommand(ac with { SourceAt = command.UpdatedAt }, command));
         Assert.False(DaikinService.MatchesCommand(ac, command with { ModeContext = "cooling" }));
         Assert.False(DaikinService.MatchesCommand(ac with { Target = 19 }, command));
@@ -205,6 +244,33 @@ public sealed class DaikinTests
     }
 
     [Fact]
+    public void ManualAdmissionRetainsTwoBackgroundSlots()
+    {
+        var options = Options();
+        var history = Enumerable.Range(0, 158).Select(i => Now.UtcDateTime.AddMinutes(i - 158)).ToArray();
+        var manualLimit = options.DailyLimit - options.ManualCommandHeadroom;
+        Assert.Null(DaikinStore.BudgetRetryAt(history[..^1], manualLimit, 0, false));
+        Assert.NotNull(DaikinStore.BudgetRetryAt(history, manualLimit, 0, false));
+        Assert.Null(DaikinStore.BudgetRetryAt(history, options.DailyLimit, options.ManualReserve, true));
+    }
+
+    [Fact]
+    public async Task DiscoveryRequestsRevalidationAndIdentifiesAgedResponses()
+    {
+        using var client = Client((request, _) =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.True(request.Headers.CacheControl?.NoCache);
+            var response = Response(HttpStatusCode.OK, Fixture);
+            response.Headers.Age = TimeSpan.FromSeconds(10);
+            return Task.FromResult(response);
+        });
+        var device = Assert.Single(await client.DiscoverAsync("fixture", default));
+        Assert.True(device.CachedResponse);
+        Assert.Equal(Now, device.ProviderReceivedAt);
+    }
+
+    [Fact]
     public async Task ThrottleCarriesRetryAfterAndAmbiguousPatchIsSentOnlyOnce()
     {
         var requests = 0;
@@ -231,6 +297,31 @@ public sealed class DaikinTests
         Assert.Equal("unavailable", (await Assert.ThrowsAsync<DaikinFailure>(() =>
             client.PatchAsync("fixture", device, change, default))).Status);
         Assert.Equal(2, requests);
+    }
+
+    [Fact]
+    public async Task AcceptedTemperaturePatchWaitsForASeparateMatchingProviderRead()
+    {
+        using var json = JsonDocument.Parse(Fixture);
+        var ac = Assert.Single(DaikinMapping.Discover(json.RootElement, Now)) with { Connectivity = Connectivity.Online };
+        var requested = new DaikinCommand("temperature", "18.5", "heating");
+        var change = DaikinService.ResolveManualChange(ac, requested);
+        using var client = Client(async (request, ct) =>
+        {
+            Assert.Equal(HttpMethod.Patch, request.Method);
+            Assert.EndsWith("/characteristics/temperatureControl", request.RequestUri!.AbsolutePath);
+            using var content = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            Assert.Equal("/operationModes/heating/setpoints/roomTemperature", content.RootElement.GetProperty("path").GetString());
+            Assert.Equal(18.5m, content.RootElement.GetProperty("value").GetDecimal());
+            return Response(HttpStatusCode.NoContent, "");
+        }, writes: true);
+
+        await client.PatchAsync("fixture", ac, change, default);
+        var audit = new DaikinOutcome("fixture", requested.Operation, requested.Value, "pending", Now, "heating");
+        Assert.False(DaikinService.MatchesCommand(ac, audit));
+        var readback = ac with { Target = 18.5m, SourceAt = null, ProviderReceivedAt = Now.AddSeconds(5) };
+        Assert.True(DaikinService.MatchesCommand(readback, audit));
+        Assert.False(DaikinService.MatchesCommand(readback with { Connectivity = Connectivity.Unknown }, audit));
     }
 
     private static DaikinOptions Options() => new()

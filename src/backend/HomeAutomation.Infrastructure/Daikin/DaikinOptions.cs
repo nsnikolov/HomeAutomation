@@ -14,6 +14,8 @@ public sealed class DaikinOptions
     public int ManualReserve { get; set; } = 40;
     public int FreshMinutes { get; set; } = 35;
 
+    internal int ManualCommandHeadroom => ManualReserve + 2;
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(ClientId) && !string.IsNullOrWhiteSpace(ClientSecret) &&
         !string.IsNullOrWhiteSpace(OperatorEmail) && ValidCallback() && EncryptionKey() is not null &&
         PollMinutes is >= 5 and <= 1440 && DailyLimit is >= 10 and <= 200 &&

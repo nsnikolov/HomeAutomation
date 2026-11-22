@@ -49,16 +49,24 @@ it('shows hydronic temperatures and monitoring only even when AC writes are enab
   expect(screen.queryByRole('button', { name: 'Off' })).not.toBeInTheDocument()
 })
 
-it('uses the provider increment and keeps the actual setpoint while a command awaits readback', async () => {
+it('coalesces target edits until Apply and submits only once while awaiting readback', async () => {
   const command = vi.spyOn(api, 'commandDaikin').mockResolvedValue({
-    id: 'fixture-command', operation: 'temperature', value: '16.5', status: 'uncertain', updatedAt: device.observedAt,
+    id: 'fixture-command', operation: 'temperature', value: '17', status: 'uncertain', updatedAt: device.observedAt,
   })
   try {
     view(device, true)
     expect(screen.getByRole('button', { name: 'Lower target temperature' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Raise target temperature' }))
-    await waitFor(() => expect(command).toHaveBeenCalledWith(1, device.id, 'temperature', '16.5'))
-    expect(await screen.findByText(/Outcome uncertain.*16.5/)).toBeInTheDocument()
+    const raise = screen.getByRole('button', { name: 'Raise target temperature' })
+    fireEvent.click(raise)
+    fireEvent.click(raise)
+    expect(screen.getByText('Requested target 17 °C')).toBeInTheDocument()
+    expect(command).not.toHaveBeenCalled()
+    const apply = screen.getByRole('button', { name: 'Apply target' })
+    fireEvent.click(apply)
+    fireEvent.click(apply)
+    await waitFor(() => expect(command).toHaveBeenCalledWith(1, device.id, 'temperature', '17', 'heating'))
+    expect(command).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText(/Outcome uncertain.*17/)).toBeInTheDocument()
     expect(screen.getByText('16 °C')).toBeInTheDocument()
   } finally {
     command.mockRestore()

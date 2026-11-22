@@ -2,6 +2,7 @@ using HomeAutomation.Application;
 using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.MySql;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using static HomeAutomation.Infrastructure.MySql.Database;
 
 namespace HomeAutomation.Infrastructure.Daikin;
@@ -9,7 +10,8 @@ namespace HomeAutomation.Infrastructure.Daikin;
 public sealed record DaikinDeviceView(string Id, string Name, string Model, long? RoomId, Connectivity Connectivity,
     DateTimeOffset ObservedAt, DateTimeOffset? SourceAt, ReadingQuality Quality, string? Power, string? Mode,
     decimal? Indoor, decimal? Outdoor, decimal? Target, decimal? Humidity, decimal? Fan, string? FanMode,
-    string? Fault, DaikinControls Controls, DaikinOutcome? Command, DaikinEquipment Equipment, DaikinWater? Water);
+    string? Fault, DaikinControls Controls, DaikinOutcome? Command, DaikinEquipment Equipment, DaikinWater? Water,
+    DateTimeOffset? ProviderReceivedAt);
 
 public sealed record DaikinHistorySeries(Metric Metric, IReadOnlyList<HistoryPoint> Points);
 public sealed record DaikinWaterHistory(int PollSeconds, IReadOnlyList<DaikinHistorySeries> Series);
@@ -24,6 +26,7 @@ internal sealed class DaikinGate : SemaphoreSlim
 
 public sealed class DaikinService
 {
+    private static readonly TimeSpan ManualReadAge = TimeSpan.FromMinutes(2);
     private readonly DaikinOptions options;
     private readonly DaikinStore store;
     private readonly DaikinClient client;
@@ -32,9 +35,10 @@ public sealed class DaikinService
     private readonly TelemetryWriter telemetry;
     private readonly IMonitoringReader permissions;
     private readonly TimeProvider clock;
+    private readonly ILogger<DaikinService> logger;
 
     internal DaikinService(DaikinOptions options, DaikinStore store, DaikinClient client, DaikinSecrets secrets,
-        DaikinGate gate, TelemetryWriter telemetry, IMonitoringReader permissions, TimeProvider clock)
+        DaikinGate gate, TelemetryWriter telemetry, IMonitoringReader permissions, TimeProvider clock, ILogger<DaikinService> logger)
     {
         this.options = options;
         this.store = store;
@@ -44,6 +48,7 @@ public sealed class DaikinService
         this.telemetry = telemetry;
         this.permissions = permissions;
         this.clock = clock;
+        this.logger = logger;
     }
 
     public static void Register(IServiceCollection services)
@@ -59,7 +64,8 @@ public sealed class DaikinService
             .RemoveAllLoggers();
         services.AddScoped(provider => new DaikinService(provider.GetRequiredService<DaikinOptions>(), provider.GetRequiredService<DaikinStore>(),
             provider.GetRequiredService<DaikinClient>(), provider.GetRequiredService<DaikinSecrets>(), provider.GetRequiredService<DaikinGate>(),
-            provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<IMonitoringReader>(), provider.GetRequiredService<TimeProvider>()));
+            provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<IMonitoringReader>(), provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<ILogger<DaikinService>>()));
     }
 
     public string AuthorizationUrl(string state, string? challenge) => client.Authorize(state, challenge);
@@ -82,7 +88,8 @@ public sealed class DaikinService
                 device.ObservedAt, device.SourceAt, quality, device.Power, device.Mode, device.Indoor, device.Outdoor,
                 device.Target, device.Humidity, device.Fan, device.FanMode, device.Fault,
                 device.Equipment == DaikinEquipment.AirConditioner ? device.Controls : DaikinMapping.ReadOnlyControls,
-                row.PropertyId is not null ? await store.LatestCommandAsync(row.Id, ct) : null, device.Equipment, device.Water);
+                row.PropertyId is not null ? await store.LatestCommandAsync(row.Id, ct) : null, device.Equipment, device.Water,
+                device.ProviderReceivedAt);
             (row.PropertyId is null ? unassigned : devices).Add(view);
         }
         return new(manage || devices.Count > 0 ? account.Status : "unavailableForProperty",
@@ -165,25 +172,30 @@ public sealed class DaikinService
         finally { gate.Release(); }
     }
 
-    private async Task PollAccountAsync(DaikinAccount account, bool background, CancellationToken ct)
+    private async Task<IReadOnlyList<DaikinDevice>> PollAccountAsync(DaikinAccount account, bool background, CancellationToken ct,
+        ManualCalls? manual = null)
     {
         try
         {
-            var tokens = await TokensAsync(account, background, force: false, ct);
-            await store.ReserveAsync(background, ct);
+            var tokens = await TokensAsync(account, background, force: false, ct, manual);
+            await ReserveAsync(background, ct, manual);
+            if (manual is not null) manual.Reads++;
             IReadOnlyList<DaikinDevice> devices;
             try { devices = await client.DiscoverAsync(tokens.AccessToken, ct); }
             catch (DaikinFailure error) when (error.Status == "reauthorizationRequired")
             {
-                tokens = await TokensAsync(account with { Envelope = secrets.Seal(account.Owner, tokens) }, background, force: true, ct);
-                await store.ReserveAsync(background, ct);
+                tokens = await TokensAsync(account with { Envelope = secrets.Seal(account.Owner, tokens) }, background, force: true, ct, manual);
+                await ReserveAsync(background, ct, manual);
+                if (manual is not null) manual.Reads++;
                 devices = await client.DiscoverAsync(tokens.AccessToken, ct);
             }
             await PersistAsync(account.Owner, devices, ct);
+            return devices;
         }
         catch (DaikinFailure error)
         {
-            if (error.Status != "pollBudgetReserved") await RecordFailureAsync(error, ct);
+            if (error.Status != "pollBudgetReserved" && !(manual is not null && error.Status == "manualBudgetReserved"))
+                await RecordFailureAsync(error, ct);
             throw;
         }
         catch (HttpRequestException)
@@ -203,6 +215,8 @@ public sealed class DaikinService
         if (!options.EnableWrites) throw new DaikinFailure("readOnly");
         if (!await permissions.CanReadAsync(user, property, ct)) throw new DaikinFailure("notFound");
         await gate.WaitAsync(ct);
+        var manual = new ManualCalls();
+        string? audit = null;
         try
         {
             var account = await store.AccountAsync(ct);
@@ -212,18 +226,33 @@ public sealed class DaikinService
             var row = (await store.DevicesAsync(user, ct)).SingleOrDefault(item => item.Id == id && item.PropertyId == property);
             if (row?.Device is not { } device) throw new DaikinFailure("notFound");
             if (device.Equipment != DaikinEquipment.AirConditioner) throw new DaikinFailure("unsupportedCommand");
-            if (device.SourceAt is null || Quality(device) != ReadingQuality.Fresh || device.Connectivity != Connectivity.Online)
-                throw new DaikinFailure("deviceUnavailable");
-            var change = DaikinMapping.Validate(device, command) ?? throw new DaikinFailure("unsupportedCommand");
             if ((await store.LatestCommandAsync(id, ct))?.Status is "pending" or "uncertain")
                 throw new DaikinFailure("unresolvedCommand");
-            var tokens = change.AlreadyApplied ? null : await TokensAsync(account, false, force: false, ct);
-            if (tokens is not null) await store.ReserveAsync(false, ct, retain: 1);
+            if (!RecentlyRead(device, clock.GetUtcNow()))
+            {
+                var fresh = await PollAccountAsync(account, false, ct, manual);
+                var previousSource = device.SourceAt;
+                device = fresh.SingleOrDefault(candidate => candidate.ExternalId == row.ExternalId)
+                    ?? throw new DaikinFailure("deviceUnavailable");
+                if (device.SourceAt is { } source && previousSource is { } previous && source < previous)
+                    throw new DaikinFailure("deviceUnavailable");
+                account = await store.AccountAsync(ct) ?? throw new DaikinFailure("disconnected");
+            }
+            if (device.Equipment != DaikinEquipment.AirConditioner) throw new DaikinFailure("unsupportedCommand");
+            if (!CanUseForManualCommand(device, clock.GetUtcNow(), TimeSpan.FromMinutes(options.FreshMinutes)))
+                throw new DaikinFailure("deviceUnavailable");
+            var change = ResolveManualChange(device, command);
+            var tokens = change.AlreadyApplied ? null : await TokensAsync(account, false, force: false, ct, manual);
+            if (!await permissions.CanReadAsync(user, property, ct)) throw new DaikinFailure("notFound");
+            if (tokens is not null) await ReserveAsync(false, ct, manual);
+            if (!CanUseForManualCommand(device, clock.GetUtcNow(), TimeSpan.FromMinutes(options.FreshMinutes)))
+                throw new DaikinFailure("deviceUnavailable");
             var modeContext = command.Operation is "temperature" or "fan" ? device.Mode : null;
-            var audit = await store.StartCommandAsync(user, id, property, command, modeContext, ct);
-            var status = change.AlreadyApplied ? "alreadyApplied" : "uncertain";
+            audit = await store.StartCommandAsync(user, id, property, command, modeContext, ct);
+            var status = change.AlreadyApplied ? "alreadyApplied" : "pending";
             if (tokens is not null)
             {
+                manual.Writes++;
                 try { await client.PatchAsync(tokens.AccessToken, device, change, ct); }
                 catch (DaikinFailure error)
                 {
@@ -231,19 +260,49 @@ public sealed class DaikinService
                     if (error.Status is "rateLimited" or "reauthorizationRequired")
                         await RecordFailureAsync(error, CancellationToken.None);
                 }
-                catch (Exception error) when (error is HttpRequestException or OperationCanceledException) { }
+                catch (Exception error) when (error is HttpRequestException or OperationCanceledException) { status = "uncertain"; }
             }
             await store.FinishCommandAsync(audit, status, CancellationToken.None);
             return new(audit, command.Operation, command.Value, status, clock.GetUtcNow(), modeContext);
         }
-        finally { gate.Release(); }
+        finally
+        {
+            gate.Release();
+            if (audit is not null || manual.Reads + manual.Writes + manual.Refreshes > 0)
+                logger.LogInformation("ONECTA manual command {AuditId} used {Reads} GET, {Writes} PATCH and {Refreshes} token requests.",
+                    audit, manual.Reads, manual.Writes, manual.Refreshes);
+        }
     }
 
-    private async Task<DaikinTokens> TokensAsync(DaikinAccount account, bool background, bool force, CancellationToken ct)
+    private async Task ReserveAsync(bool background, CancellationToken ct, ManualCalls? manual)
+    {
+        var retained = manual is null ? 0 : options.ManualCommandHeadroom;
+        if (options.DailyLimit <= retained)
+            throw new DaikinFailure("manualBudgetReserved");
+        try
+        {
+            await store.ReserveAsync(background, ct, retain: retained);
+        }
+        catch (DaikinFailure error) when (manual is not null && error.Status == "rateLimited")
+        {
+            throw new DaikinFailure("manualBudgetReserved", error.RetryAt);
+        }
+    }
+
+    private sealed class ManualCalls
+    {
+        public int Reads { get; set; }
+        public int Writes { get; set; }
+        public int Refreshes { get; set; }
+    }
+
+    private async Task<DaikinTokens> TokensAsync(DaikinAccount account, bool background, bool force, CancellationToken ct,
+        ManualCalls? manual = null)
     {
         var current = secrets.Open(account.Owner, account.Envelope!);
         if (!force && !current.NeedsRefresh(clock.GetUtcNow())) return current;
-        await store.ReserveAsync(background, ct);
+        await ReserveAsync(background, ct, manual);
+        if (manual is not null) manual.Refreshes++;
         var refreshed = await client.TokenAsync("refresh_token", current.RefreshToken, null, ct);
         // Persist a rotated refresh token before making any further provider calls.
         await store.SaveTokensAsync(account.Owner, secrets.Seal(account.Owner, refreshed), account.Status, ct);
@@ -260,14 +319,18 @@ public sealed class DaikinService
         foreach (var device in devices)
         {
             bindings.TryGetValue(device.ExternalId, out var assigned);
-            if (assigned?.Device is { } previous && device.ObservedAt < previous.ObservedAt) continue;
+            if (device.SourceAt is { } source && assigned?.Device?.SourceAt is { } previousSource && source < previousSource)
+                continue;
             if (assigned?.PropertyId is { } property && !await permissions.CanReadAsync(owner, property, ct)) continue;
             if (assigned?.PropertyId is { } propertyId)
-            {
                 await StoreTelemetryAsync(propertyId, assigned.RoomId, device, ct);
+            await store.SaveSnapshotAsync(owner, device, ct);
+            if (assigned?.PropertyId is not null)
+            {
                 var last = await store.LatestCommandAsync(assigned.Id, ct);
-                if (last?.Status is "pending" or "uncertain" && device.SourceAt > last.UpdatedAt &&
-                    device.Connectivity == Connectivity.Online && Quality(device) == ReadingQuality.Fresh)
+                if (last?.Status is "pending" or "uncertain" &&
+                    CanUseForManualCommand(device, clock.GetUtcNow(), TimeSpan.FromMinutes(options.FreshMinutes)) &&
+                    IsNewerRead(device, last))
                 {
                     if (MatchesCommand(device, last))
                         await store.FinishCommandAsync(last.Id, "verified", ct);
@@ -275,7 +338,6 @@ public sealed class DaikinService
                         await store.FinishCommandAsync(last.Id, "uncertain", ct);
                 }
             }
-            await store.SaveSnapshotAsync(owner, device, ct);
         }
         await store.RecordStatusAsync("connected", null, ct);
     }
@@ -286,8 +348,29 @@ public sealed class DaikinService
         return telemetry.StoreDaikinAsync(property, room, discovery, batch, ct);
     }
 
+    private static bool RecentlyRead(DaikinDevice device, DateTimeOffset now) =>
+        device.Available == true && !device.CachedResponse &&
+        device.ProviderReceivedAt is { } received && received <= now && now - received <= ManualReadAge;
+
+    internal static bool CanUseForManualCommand(DaikinDevice device, DateTimeOffset now, TimeSpan sourceLifetime) =>
+        device.Equipment == DaikinEquipment.AirConditioner && RecentlyRead(device, now) &&
+        device.Connectivity == Connectivity.Online && !device.InvalidSourceTime &&
+        (device.SourceAt is not { } source || source <= now && now - source <= sourceLifetime);
+
+    internal static DaikinChange ResolveManualChange(DaikinDevice device, DaikinCommand command)
+    {
+        if (command.Operation is "temperature" or "fan" &&
+            (command.ExpectedMode is null || command.ExpectedMode != device.Mode))
+            throw new DaikinFailure("modeChanged");
+        return DaikinMapping.Validate(device, command) ?? throw new DaikinFailure("unsupportedCommand");
+    }
+
+    private static bool IsNewerRead(DaikinDevice device, DaikinOutcome command) =>
+        device.ProviderReceivedAt > command.UpdatedAt &&
+        (device.SourceAt is not { } source || source > command.UpdatedAt);
+
     internal static bool MatchesCommand(DaikinDevice device, DaikinOutcome command) =>
-        device.SourceAt > command.UpdatedAt && device.Connectivity == Connectivity.Online &&
+        IsNewerRead(device, command) && !device.CachedResponse && !device.InvalidSourceTime && device.Connectivity == Connectivity.Online &&
         (command.Operation is not ("temperature" or "fan") ||
             command.ModeContext is not null && command.ModeContext == device.Mode) &&
         DaikinMapping.Validate(device, new(command.Operation, command.Value))?.AlreadyApplied == true;

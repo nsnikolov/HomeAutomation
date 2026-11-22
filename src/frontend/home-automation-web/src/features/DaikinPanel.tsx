@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
 import { api, ApiError } from '../shared/api'
@@ -27,10 +27,12 @@ const outcomes: Record<string, string> = {
 const commandErrors: Record<string, string> = {
   readOnly: 'Physical writes are disabled.',
   unsupportedCommand: 'This operation or value is unsupported for the current device and mode.',
-  deviceUnavailable: 'This device needs a fresh, online provider observation.',
+  deviceUnavailable: 'ONECTA could not establish current reachability and device state.',
+  modeChanged: 'The reported mode changed. Review the device and apply the setting again.',
   unresolvedCommand: 'The previous command still needs a device readback.',
   reauthorizationRequired: 'Reconnect ONECTA before issuing commands.',
   rateLimited: 'The ONECTA request budget is temporarily limited.',
+  manualBudgetReserved: 'The remaining ONECTA budget is reserved for monitoring and confirmation.',
   forbidden: 'This account cannot control the device.',
 }
 
@@ -112,16 +114,21 @@ export function DaikinDeviceCard({ device, property, writes, rooms }: {
   device: DaikinDevice; property: Property; writes: boolean; rooms?: Room[]
 }) {
   const cache = useQueryClient()
+  const submitting = useRef(false)
   const command = useMutation({
-    mutationFn: ({ operation, value }: { operation: string; value: string }) => api.commandDaikin(property.id, device.id, operation, value),
-    onSettled: () => cache.invalidateQueries({ queryKey: ['property', property.id, 'daikin'] }),
+    mutationFn: ({ operation, value, expectedMode }: { operation: string; value: string; expectedMode?: string | null }) =>
+      api.commandDaikin(property.id, device.id, operation, value, expectedMode),
+    onSettled: async () => {
+      try { await cache.invalidateQueries({ queryKey: ['property', property.id, 'daikin'] }) }
+      finally { submitting.current = false }
+    },
   })
   const effective = command.data && (!device.command || Date.parse(command.data.updatedAt) > Date.parse(device.command.updatedAt))
     && !(device.command?.id === command.data.id && device.command.status === 'verified') ? command.data : device.command
   const heatPump = device.equipment === 'heatPump'
   const supportedAc = device.equipment === 'airConditioner'
-  const blocked = !writes || !supportedAc || device.quality !== 'fresh' || device.connectivity !== 'online' || !device.sourceAt ||
-    command.isPending || effective?.status === 'pending' || effective?.status === 'uncertain'
+  const awaitingReadback = effective?.status === 'pending' || effective?.status === 'uncertain'
+  const blocked = !writes || !supportedAc || command.isPending || awaitingReadback
   const reading = (value: number | null, units: string) => value === null ? 'Unavailable' : `${value} ${units}`
   const state = (value: boolean | null | undefined) => value == null ? 'Unavailable' : value ? 'Active' : 'Clear'
   const modeName = (value: string | null | undefined) => value ? humanize(value) : 'Unavailable'
@@ -143,21 +150,31 @@ export function DaikinDeviceCard({ device, property, writes, rooms }: {
       ...(device.fanMode ? [['Fan', [humanize(device.fanMode), device.fan].filter(value => value !== null).join(' · ')]] : []),
     ]),
   ]
-  function submit(operation: string, value: string) { command.mutate({ operation, value }) }
+  function submit(operation: string, value: string) {
+    if (blocked || submitting.current) return
+    submitting.current = true
+    const expectedMode = operation === 'temperature' || operation === 'fan' ? device.mode : undefined
+    command.mutate({ operation, value, expectedMode })
+  }
   return <Card className="device-card">
     <h2>{device.name}</h2>
     {device.model && <p>{device.model}</p>}
     <p>{humanize(device.connectivity)} · {humanize(device.quality)}</p>
     <p>{device.sourceAt ? 'Source observation' : 'Cloud snapshot received'} {formatMoment(device.observedAt, property.timeZone)}</p>
+    {device.sourceAt && device.providerReceivedAt &&
+      <p>Last successful read {formatMoment(device.providerReceivedAt, property.timeZone)}</p>}
     {device.fault && <p>Fault {device.fault}</p>}
     <dl className="device-readings">{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
     {heatPump ? <><p>Read-only heat-pump monitoring</p><WaterHistory device={device} property={property} /></>
       : supportedAc ? <>
         {!writes && <p>Read-only monitoring · physical writes disabled or unauthorized</p>}
-        {writes && blocked && <p>Commands are unavailable until the device has fresh online data and any pending result is resolved.</p>}
-        <Choice label="Power" choices={device.controls.power} selected={device.power} disabled={blocked} change={value => submit('power', value)} />
-        <Choice label="Mode" choices={device.controls.modes} selected={device.mode} disabled={blocked} change={value => submit('mode', value)} />
-        <TemperatureControl range={device.controls.temperature} current={device.target} disabled={blocked}
+        {writes && <p>Manual writes enabled · ONECTA reachability checked before dispatch</p>}
+        {awaitingReadback && <p>Further commands are paused while this device awaits readback.</p>}
+        <Choice label="Power" choices={device.controls.power} selected={device.quality === 'fresh' ? device.power : null}
+          disabled={blocked} change={value => submit('power', value)} />
+        <Choice label="Mode" choices={device.controls.modes} selected={device.quality === 'fresh' ? device.mode : null}
+          disabled={blocked} change={value => submit('mode', value)} />
+        <TemperatureControl key={`${device.mode}:${device.target}`} range={device.controls.temperature} current={device.target} disabled={blocked}
           change={value => submit('temperature', value)} />
         <NumberControl label="Fixed fan speed command" range={device.controls.fan} disabled={blocked} change={value => submit('fan', value)} />
       </> : <p>Read-only monitoring</p>}
@@ -181,17 +198,26 @@ function Choice({ label, choices, selected, disabled, change }: {
 function TemperatureControl({ range, current, disabled, change }: {
   range: DaikinRange | null; current: number | null; disabled: boolean; change: (value: string) => void
 }) {
+  const [requested, setRequested] = useState<number | null>(null)
   if (!range) return null
-  const lower = current === null ? null : Number((current - range.step).toFixed(8))
-  const higher = current === null ? null : Number((current + range.step).toFixed(8))
+  const target = requested ?? current
+  const lower = target === null ? null : Number((target - range.step).toFixed(8))
+  const higher = target === null ? null : Number((target + range.step).toFixed(8))
   const allowed = (value: number | null) => value !== null && range.step > 0 && value >= range.min && value <= range.max &&
     Math.abs((value - range.min) / range.step - Math.round((value - range.min) / range.step)) < 1e-7
   return <div className="filters">
     <span>Target controls · {range.min}–{range.max} °C · {range.step} °C step</span>
     <Button aria-label="Lower target temperature" variant="outline" disabled={disabled || !allowed(lower)}
-      onClick={() => change(String(lower))}>−</Button>
+      onClick={() => setRequested(lower)}>−</Button>
     <Button aria-label="Raise target temperature" variant="outline" disabled={disabled || !allowed(higher)}
-      onClick={() => change(String(higher))}>+</Button>
+      onClick={() => setRequested(higher)}>+</Button>
+    {requested !== null && requested !== current && <span>Requested target {requested} °C</span>}
+    <Button variant="outline" disabled={disabled || requested === current || !allowed(requested)}
+      onClick={() => {
+        if (requested === null) return
+        change(String(requested))
+        setRequested(null)
+      }}>Apply target</Button>
   </div>
 }
 

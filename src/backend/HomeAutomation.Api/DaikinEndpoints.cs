@@ -115,7 +115,7 @@ internal static class DaikinEndpoints
                 {
                     "forbidden" => 403,
                     "notFound" => 404,
-                    "rateLimited" or "pollBudgetReserved" => 429,
+                    "rateLimited" or "pollBudgetReserved" or "manualBudgetReserved" => 429,
                     "unavailable" => 503,
                     _ => 409
                 });

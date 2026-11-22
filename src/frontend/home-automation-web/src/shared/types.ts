@@ -54,7 +54,7 @@ export type DaikinRange = { min: number; max: number; step: number }
 export type DaikinOutcome = { id: string; operation: string; value: string; status: string; updatedAt: string }
 export type DaikinDevice = {
   id: string; name: string; model: string; roomId: number | null; connectivity: Device['connectivity']
-  observedAt: string; sourceAt: string | null; quality: Quality
+  observedAt: string; sourceAt: string | null; quality: Quality; providerReceivedAt?: string | null
   power: string | null; mode: string | null; indoor: number | null; outdoor: number | null; target: number | null
   humidity: number | null; fan: number | null; fanMode: string | null; fault: string | null
   controls: { power: string[]; modes: string[]; temperature: DaikinRange | null; fan: DaikinRange | null }

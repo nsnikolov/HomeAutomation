@@ -56,8 +56,8 @@ export const api = {
   updateDaikin: (id: number, action: 'complete' | 'disconnect' | 'refresh') => daikinAction<void>(id, action),
   assignDaikin: (id: number, device: string, roomId: number | null) =>
     daikinAction<void>(id, `devices/${device}/assign`, { roomId }),
-  commandDaikin: (id: number, device: string, operation: string, value: string) =>
-    daikinAction<DaikinOutcome>(id, `devices/${device}/commands`, { operation, value }),
+  commandDaikin: (id: number, device: string, operation: string, value: string, expectedMode?: string | null) =>
+    daikinAction<DaikinOutcome>(id, `devices/${device}/commands`, { operation, value, expectedMode }),
   daikinWaterHistory: (id: number, device: string, signal?: AbortSignal) =>
     request<DaikinWaterHistory>(`/daikin/${id}/devices/${device}/water-history`, { signal }),
   device: (id: number, device: number, signal?: AbortSignal) =>

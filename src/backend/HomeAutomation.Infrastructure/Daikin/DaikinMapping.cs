@@ -19,19 +19,20 @@ internal sealed record DaikinDevice(string Gateway, string Point, string Name, s
     DateTimeOffset ObservedAt, DateTimeOffset? SourceAt, string? Power, string? Mode, decimal? Indoor, decimal? Outdoor,
     decimal? Target, decimal? Humidity, decimal? Fan, string? FanMode, DaikinControls Controls, string? Fault,
     DaikinEquipment Equipment = DaikinEquipment.Unknown, DaikinWater? Water = null, bool? Available = null,
-    DateTimeOffset? GatewayTimestamp = null)
+    DateTimeOffset? GatewayTimestamp = null, DateTimeOffset? ProviderReceivedAt = null, bool InvalidSourceTime = false,
+    bool CachedResponse = false)
 {
     public string ExternalId => Gateway + ":" + Point;
 }
 
-public sealed record DaikinCommand(string Operation, string Value);
+public sealed record DaikinCommand(string Operation, string Value, string? ExpectedMode = null);
 internal sealed record DaikinChange(string Characteristic, string? Path, object Value, bool AlreadyApplied);
 
 internal static class DaikinMapping
 {
     public static DaikinControls ReadOnlyControls { get; } = new([], [], null, null);
 
-    public static IReadOnlyList<DaikinDevice> Discover(JsonElement body, DateTimeOffset received)
+    public static IReadOnlyList<DaikinDevice> Discover(JsonElement body, DateTimeOffset received, bool cachedResponse = false)
     {
         if (body.ValueKind != JsonValueKind.Array) throw new DaikinFailure("invalidResponse");
         var devices = new Dictionary<string, DaikinDevice>(StringComparer.Ordinal);
@@ -42,7 +43,9 @@ internal static class DaikinMapping
             if (gateway.Node("managementPoints").ValueKind != JsonValueKind.Array)
                 throw new DaikinFailure("invalidResponse");
             var timestamp = gateway.Node("lastUpdateReceived");
-            var source = Timestamp(timestamp.ValueKind == JsonValueKind.Object ? timestamp.Value() : timestamp, received);
+            var sourceValue = timestamp.ValueKind == JsonValueKind.Object ? timestamp.Value() : timestamp;
+            var source = Timestamp(sourceValue, received);
+            var invalidSource = source is null && sourceValue.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null);
             var reachability = gateway.Node("isCloudConnectionUp").Value().ValueKind switch
             {
                 JsonValueKind.True => Connectivity.Online,
@@ -98,7 +101,8 @@ internal static class DaikinMapping
                         ? new DaikinControls(Values(point.Node("onOffMode"), "on", "off"), Values(point.Node("operationMode"), "heating", "cooling"),
                             mode is "heating" or "cooling" && IsCelsius(setpoint) ? Range(setpoint) : null,
                             fanMode == "fixed" ? Range(speed) : null)
-                        : ReadOnlyControls, fault, equipment, water, Available: true, GatewayTimestamp: gatewayTimestamp);
+                        : ReadOnlyControls, fault, equipment, water, Available: true, GatewayTimestamp: gatewayTimestamp,
+                    ProviderReceivedAt: received, InvalidSourceTime: invalidSource, CachedResponse: cachedResponse);
                 if (!devices.TryAdd(device.ExternalId, device)) throw new DaikinFailure("duplicateIdentity");
             }
         }
