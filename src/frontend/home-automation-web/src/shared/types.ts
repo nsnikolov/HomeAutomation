@@ -59,6 +59,19 @@ export type EwelinkState = {
   devices: EwelinkDevice[]; unassigned: EwelinkDevice[]
 }
 
+export type TuyaReading = {
+  code: string; metric: Metric; unit: string | null; number: number | null; flag: boolean | null
+  reportedAt: string | null; quality: Quality
+}
+export type TuyaDevice = {
+  id: string; name: string; model: string; roomId: number | null; connectivity: Device['connectivity']
+  receivedAt: string; quality: Quality; specificationsAvailable: boolean; readings: TuyaReading[]
+}
+export type TuyaState = {
+  status: string; manage: boolean; lastSuccess: string | null; nextSync: string | null; providerCode: number | null
+  devices: TuyaDevice[]; unassigned: TuyaDevice[]
+}
+
 export type DaikinRange = { min: number; max: number; step: number }
 export type DaikinOutcome = { id: string; operation: string; value: string; status: string; updatedAt: string }
 export type DaikinDevice = {

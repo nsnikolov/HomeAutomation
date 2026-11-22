@@ -10,6 +10,7 @@ import { Dashboard } from './features/Dashboard'
 import { GrowattPanel } from './features/GrowattPanel'
 import { DaikinPanel } from './features/DaikinPanel'
 import { EwelinkPanel } from './features/EwelinkPanel'
+import { TuyaPanel } from './features/TuyaPanel'
 import { Devices, DevicePage } from './features/Devices'
 import { Energy } from './features/Energy'
 
@@ -83,6 +84,7 @@ const links = [
   { path: '/growatt', label: 'Live Growatt', icon: Zap },
   { path: '/daikin', label: 'Daikin ONECTA', icon: Snowflake },
   { path: '/ewelink', label: 'eWeLink Cloud', icon: CircuitBoard },
+  { path: '/tuya', label: 'Smart Life / Tuya', icon: CircuitBoard },
   { path: '/devices', label: 'Devices', icon: CircuitBoard },
   { path: '/energy', label: 'Energy', icon: ChartNoAxesCombined },
   { path: '/automations', label: 'Automations', icon: Zap },
@@ -94,7 +96,8 @@ function PropertyView({ property, properties, email }: { property: Property; pro
   const growattView = useMatch('/properties/:propertyId/growatt') !== null
   const daikinView = useMatch('/properties/:propertyId/daikin') !== null
   const ewelinkView = useMatch('/properties/:propertyId/ewelink') !== null
-  const simulatorView = !growattView && !daikinView && !ewelinkView
+  const tuyaView = useMatch('/properties/:propertyId/tuya') !== null
+  const simulatorView = !growattView && !daikinView && !ewelinkView && !tuyaView
   const live = useLiveUpdates(property.id)
   const snapshot = useQuery({
     queryKey: ['property', property.id, 'state'],
@@ -127,7 +130,8 @@ function PropertyView({ property, properties, email }: { property: Property; pro
           <ChevronDown size={14} aria-hidden />
         </div>
         <div className="topbar-status">
-          <span className="sample-label">{growattView ? 'Growatt Cloud' : daikinView ? 'Daikin ONECTA' : ewelinkView ? 'eWeLink Cloud' : 'Simulated data'}</span>
+          <span className="sample-label">{growattView ? 'Growatt Cloud' : daikinView ? 'Daikin ONECTA'
+            : ewelinkView ? 'eWeLink Cloud' : tuyaView ? 'Tuya Cloud' : 'Simulated data'}</span>
           <button className="live-toggle" type="button" aria-expanded={offlineNotice} onClick={() => setOfflineNotice(!offlineNotice)}>
             <Badge className={live ? 'tone-good' : 'tone-neutral'}><i />{live ? 'Live updates' : 'Auto refresh'}</Badge>
           </button>
@@ -143,6 +147,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
           <Route path="growatt" element={<GrowattPanel property={property} />} />
           <Route path="daikin" element={<DaikinPanel property={property} />} />
           <Route path="ewelink" element={<EwelinkPanel property={property} />} />
+          <Route path="tuya" element={<TuyaPanel property={property} />} />
           <Route path="devices" element={<Devices property={property} devices={snapshot.data?.devices} />} />
           <Route path="devices/:deviceId" element={<DevicePage property={property} />} />
           <Route path="energy" element={<Energy property={property} state={snapshot.data} pollSeconds={health.data?.pollSeconds ?? 10} />} />

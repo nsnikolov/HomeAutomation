@@ -64,7 +64,7 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId)
               AND (CASE WHEN @Provider = 'simulator' THEN NOT EXISTS (
                   SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
-                  WHERE b.device_id = d.id AND c.provider_code IN ('growatt','daikin','ewelink'))
+                  WHERE b.device_id = d.id AND c.provider_code IN ('growatt','daikin','ewelink','tuya'))
               ELSE EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
                            WHERE b.device_id = d.id AND c.provider_code = @Provider) END)
             ORDER BY d.id;
@@ -88,7 +88,7 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId)
               AND (CASE WHEN @Provider = 'simulator' THEN NOT EXISTS (
                   SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
-                  WHERE b.device_id = d.id AND c.provider_code IN ('growatt','daikin','ewelink'))
+                  WHERE b.device_id = d.id AND c.provider_code IN ('growatt','daikin','ewelink','tuya'))
               ELSE EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
                            WHERE b.device_id = d.id AND c.provider_code = @Provider) END)
             ORDER BY a.occurred_at_utc DESC, a.id DESC LIMIT 12;

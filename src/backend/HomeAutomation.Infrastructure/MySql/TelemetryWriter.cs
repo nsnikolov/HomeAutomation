@@ -95,10 +95,10 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
                 INSERT INTO devices (property_id, room_id, inventory_key, name, kind, manufacturer, model)
                 VALUES (@PropertyId, @RoomId, @InventoryKey, @Name, @Kind, @Manufacturer, @Model)
                 ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id),
-                    room_id = IF(@Provider IN ('daikin','ewelink'), @RoomId, room_id),
-                    kind = IF(@Provider IN ('daikin','ewelink'), @Kind, kind),
-                    name = IF(@Provider IN ('daikin','ewelink'), @Name, name),
-                    model = IF(@Provider IN ('daikin','ewelink'), @Model, model),
+                    room_id = IF(@Provider IN ('daikin','ewelink','tuya'), @RoomId, room_id),
+                    kind = IF(@Provider IN ('daikin','ewelink','tuya'), @Kind, kind),
+                    name = IF(@Provider IN ('daikin','ewelink','tuya'), @Name, name),
+                    model = IF(@Provider IN ('daikin','ewelink','tuya'), @Model, model),
                     manufacturer = IF(@Provider = 'ewelink', @Manufacturer, manufacturer)
                 """,
                 new

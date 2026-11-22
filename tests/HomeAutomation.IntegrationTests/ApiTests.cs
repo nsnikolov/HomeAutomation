@@ -7,6 +7,7 @@ using HomeAutomation.Application;
 using HomeAutomation.Api;
 using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.MySql;
+using HomeAutomation.Infrastructure.Tuya;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -60,6 +61,19 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     {
         using var client = AuthenticatedClient();
         Assert.Equal(expected, (await client.GetAsync("/api/v1/properties/1/telemetry?" + query)).StatusCode);
+    }
+
+    [Fact]
+    public async Task TuyaIsPropertyScopedAndHasNoDeviceCommandRoute()
+    {
+        using var guest = host.CreateClient();
+        using var viewer = AuthenticatedClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/tuya/1")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/v1/tuya/99")).StatusCode);
+        Assert.Contains("notConfigured", await viewer.GetStringAsync("/api/v1/tuya/1"));
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsync("/api/v1/tuya/1/refresh", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await viewer.PostAsJsonAsync(
+            "/api/v1/tuya/1/devices/00000000000000000000000000000001/commands", new { operation = "power" })).StatusCode);
     }
 
     [Fact]
@@ -289,6 +303,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             {
                 services.RemoveAll<IMonitoringReader>();
                 services.AddSingleton<IMonitoringReader, FixtureReader>();
+                services.RemoveAll<TuyaOptions>();
+                services.AddSingleton(new TuyaOptions());
                 services.AddAuthentication(options =>
                 {
                     options.DefaultAuthenticateScheme = "fixture";

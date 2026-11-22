@@ -9,6 +9,7 @@ using HomeAutomation.Infrastructure.Simulator;
 using HomeAutomation.Infrastructure.Growatt;
 using HomeAutomation.Infrastructure.Daikin;
 using HomeAutomation.Infrastructure.Ewelink;
+using HomeAutomation.Infrastructure.Tuya;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -104,6 +105,12 @@ builder.Services.AddSingleton(services =>
 });
 builder.Services.AddSingleton<EwelinkConsent>();
 EwelinkService.Register(builder.Services);
+builder.Services.AddSingleton(services =>
+{
+    try { return services.GetRequiredService<IConfiguration>().GetSection("Tuya").Get<TuyaOptions>() ?? new TuyaOptions(); }
+    catch (InvalidOperationException) { return new TuyaOptions(); }
+});
+TuyaService.Register(builder.Services);
 builder.Services.AddScoped<IdentityStore>();
 builder.Services.AddIdentityCore<LocalUser>(options =>
 {
@@ -222,6 +229,7 @@ app.MapSession();
 app.MapMonitoring();
 app.MapDaikin();
 app.MapEwelink();
+app.MapTuya();
 app.MapHub<MonitoringHub>("/hubs/monitoring", options => options.CloseOnAuthenticationExpiration = true).RequireAuthorization();
 app.Map("/api/{**path}", () => Results.NotFound());
 app.MapFallbackToFile("index.html");

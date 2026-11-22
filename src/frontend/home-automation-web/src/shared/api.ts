@@ -1,4 +1,4 @@
-import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room } from './types'
+import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, TuyaState } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code?: string) {
@@ -13,7 +13,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     credentials: 'same-origin',
   })
   if (!response.ok) {
-    const error: { status?: unknown } | null = path.startsWith('/daikin/') || path.startsWith('/ewelink/')
+    const error: { status?: unknown } | null = path.startsWith('/daikin/') || path.startsWith('/ewelink/') || path.startsWith('/tuya/')
       ? await response.json().catch(() => null) : null
     throw new ApiError(response.status, typeof error?.status === 'string' ? error.status : undefined)
   }
@@ -29,7 +29,7 @@ async function sessionAction(path: '/login' | '/logout', body?: { email: string;
   })
 }
 
-async function providerAction<T>(provider: 'daikin' | 'ewelink', id: number, action: string, body?: object) {
+async function providerAction<T>(provider: 'daikin' | 'ewelink' | 'tuya', id: number, action: string, body?: object) {
   const { token } = await request<{ token: string }>('/session/csrf')
   return request<T>(`/${provider}/${id}/${action}`, {
     method: 'POST', headers: { 'X-CSRF-TOKEN': token, ...(body && { 'Content-Type': 'application/json' }) },
@@ -64,6 +64,10 @@ export const api = {
   updateEwelink: (id: number, action: 'disconnect' | 'refresh') => providerAction<void>('ewelink', id, action),
   assignEwelink: (id: number, device: string, roomId: number | null) =>
     providerAction<void>('ewelink', id, `devices/${device}/assign`, { roomId }),
+  tuya: (id: number, signal?: AbortSignal) => request<TuyaState>(`/tuya/${id}`, { signal }),
+  refreshTuya: (id: number) => providerAction<void>('tuya', id, 'refresh'),
+  assignTuya: (id: number, device: string, roomId: number | null) =>
+    providerAction<void>('tuya', id, `devices/${device}/assign`, { roomId }),
   daikinWaterHistory: (id: number, device: string, signal?: AbortSignal) =>
     request<DaikinWaterHistory>(`/daikin/${id}/devices/${device}/water-history`, { signal }),
   device: (id: number, device: number, signal?: AbortSignal) =>

@@ -18,3 +18,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 14. 2026-11-22 · [Milestone 3E — Enable Daikin ONECTA Manual AC Control](0014-enable-daikin-manual-ac-control.md)
 15. 2026-11-22 · [Daikin ONECTA — Debounced Command Confirmation](0015-daikin-debounced-command-confirmation.md)
 16. 2026-11-22 · [Milestone 4A — eWeLink Cloud Discovery & Read-only Monitoring](0016-ewelink-read-only-monitoring.md)
+17. 2026-11-22 · [Milestone 5A — Smart Life / Tuya Cloud Integration](0017-tuya-cloud-read-only-monitoring.md)
