@@ -49,6 +49,22 @@ it('shows hydronic temperatures and monitoring only even when AC writes are enab
   expect(screen.queryByRole('button', { name: 'Off' })).not.toBeInTheDocument()
 })
 
+it('permits independent controls while an accepted power command awaits confirmation', () => {
+  const power = { id: 'power', operation: 'power', value: 'off', status: 'awaitingConfirmation', updatedAt: device.observedAt }
+  view({ ...device, command: power, openCommands: [power] }, true)
+  expect(screen.getByRole('button', { name: 'Off' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Raise target temperature' })).toBeEnabled()
+  expect(screen.getByText(/Awaiting confirmation.*Power off/)).toBeInTheDocument()
+})
+
+it('blocks all writes if an earlier command on the device remains uncertain', () => {
+  const old = { id: 'old', operation: 'power', value: 'off', status: 'uncertain', updatedAt: device.observedAt }
+  const last = { id: 'last', operation: 'mode', value: 'heating', status: 'confirmed', updatedAt: device.observedAt }
+  view({ ...device, command: last, openCommands: [old] }, true)
+  expect(screen.getByRole('button', { name: 'Cooling' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Raise target temperature' })).toBeDisabled()
+})
+
 it('coalesces target edits until Apply and submits only once while awaiting readback', async () => {
   const command = vi.spyOn(api, 'commandDaikin').mockResolvedValue({
     id: 'fixture-command', operation: 'temperature', value: '17', status: 'uncertain', updatedAt: device.observedAt,

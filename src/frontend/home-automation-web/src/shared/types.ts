@@ -59,6 +59,7 @@ export type DaikinDevice = {
   humidity: number | null; fan: number | null; fanMode: string | null; fault: string | null
   controls: { power: string[]; modes: string[]; temperature: DaikinRange | null; fan: DaikinRange | null }
   command: DaikinOutcome | null
+  openCommands?: DaikinOutcome[]
   equipment: 'unknown' | 'airConditioner' | 'heatPump'
   water: {
     leaving: number | null; target: number | null; targetRange: DaikinRange | null

@@ -20,6 +20,7 @@ const statusText: Record<string, string> = {
 }
 
 const outcomes: Record<string, string> = {
+  dispatched: 'Command dispatched', awaitingConfirmation: 'Awaiting confirmation', confirmed: 'Device state confirmed',
   pending: 'Command pending', failed: 'Command failed', uncertain: 'Outcome uncertain. Awaiting device readback.',
   verified: 'Device state verified', alreadyApplied: 'Device already reports the requested state',
 }
@@ -45,7 +46,11 @@ export function DaikinPanel({ property }: { property: Property }) {
   const cache = useQueryClient()
   const [params, setParams] = useSearchParams()
   const key = ['property', property.id, 'daikin']
-  const query = useQuery({ queryKey: key, queryFn: ({ signal }) => api.daikin(property.id, signal), refetchInterval: 30_000 })
+  const query = useQuery({
+    queryKey: key, queryFn: ({ signal }) => api.daikin(property.id, signal),
+    refetchInterval: current => current.state.data?.devices.some(device =>
+      device.openCommands?.some(command => command.status === 'awaitingConfirmation')) ? 5_000 : 30_000,
+  })
   const state = query.data
   const rooms = useQuery({
     queryKey: ['property', property.id, 'rooms'], queryFn: ({ signal }) => api.rooms(property.id, signal),
@@ -124,11 +129,19 @@ export function DaikinDeviceCard({ device, property, writes, rooms }: {
     },
   })
   const effective = command.data && (!device.command || Date.parse(command.data.updatedAt) > Date.parse(device.command.updatedAt))
-    && !(device.command?.id === command.data.id && device.command.status === 'verified') ? command.data : device.command
+    && !(device.command?.id === command.data.id && ['verified', 'confirmed'].includes(device.command.status)) ? command.data : device.command
   const heatPump = device.equipment === 'heatPump'
   const supportedAc = device.equipment === 'airConditioner'
-  const awaitingReadback = effective?.status === 'pending' || effective?.status === 'uncertain'
-  const blocked = !writes || !supportedAc || command.isPending || awaitingReadback
+  const visible = new Map(device.openCommands?.map(open => [open.id, open]))
+  if (effective) visible.set(effective.id, effective)
+  const unresolved = ['dispatched', 'pending', 'uncertain']
+  const deviceBlocked = [...visible.values()].some(open => unresolved.includes(open.status))
+  function blocked(operation: string) {
+    return !writes || !supportedAc || command.isPending || deviceBlocked || [...visible.values()].some(open =>
+      open.status === 'awaitingConfirmation' && (open.operation === operation ||
+        (operation === 'mode' && ['temperature', 'fan'].includes(open.operation)) ||
+        (open.operation === 'mode' && ['temperature', 'fan'].includes(operation))))
+  }
   const reading = (value: number | null, units: string) => value === null ? 'Unavailable' : `${value} ${units}`
   const state = (value: boolean | null | undefined) => value == null ? 'Unavailable' : value ? 'Active' : 'Clear'
   const modeName = (value: string | null | undefined) => value ? humanize(value) : 'Unavailable'
@@ -151,7 +164,7 @@ export function DaikinDeviceCard({ device, property, writes, rooms }: {
     ]),
   ]
   function submit(operation: string, value: string) {
-    if (blocked || submitting.current) return
+    if (blocked(operation) || submitting.current) return
     submitting.current = true
     const expectedMode = operation === 'temperature' || operation === 'fan' ? device.mode : undefined
     command.mutate({ operation, value, expectedMode })
@@ -169,20 +182,21 @@ export function DaikinDeviceCard({ device, property, writes, rooms }: {
       : supportedAc ? <>
         {!writes && <p>Read-only monitoring · physical writes disabled or unauthorized</p>}
         {writes && <p>Manual writes enabled · ONECTA reachability checked before dispatch</p>}
-        {awaitingReadback && <p>Further commands are paused while this device awaits readback.</p>}
+        {deviceBlocked && <p>Further commands are paused while this device awaits readback.</p>}
         <Choice label="Power" choices={device.controls.power} selected={device.quality === 'fresh' ? device.power : null}
-          disabled={blocked} change={value => submit('power', value)} />
+          disabled={blocked('power')} change={value => submit('power', value)} />
         <Choice label="Mode" choices={device.controls.modes} selected={device.quality === 'fresh' ? device.mode : null}
-          disabled={blocked} change={value => submit('mode', value)} />
-        <TemperatureControl key={`${device.mode}:${device.target}`} range={device.controls.temperature} current={device.target} disabled={blocked}
+          disabled={blocked('mode')} change={value => submit('mode', value)} />
+        <TemperatureControl key={`${device.mode}:${device.target}`} range={device.controls.temperature} current={device.target} disabled={blocked('temperature')}
           change={value => submit('temperature', value)} />
-        <NumberControl label="Fixed fan speed command" range={device.controls.fan} disabled={blocked} change={value => submit('fan', value)} />
+        <NumberControl label="Fixed fan speed command" range={device.controls.fan} disabled={blocked('fan')} change={value => submit('fan', value)} />
       </> : <p>Read-only monitoring</p>}
     {command.isPending && <p role="status">Command pending</p>}
     {command.isError && <p role="alert">{command.error instanceof ApiError && command.error.code &&
       Object.hasOwn(commandErrors, command.error.code) ? commandErrors[command.error.code]
       : 'Command could not be confirmed. Check the device and command status.'}</p>}
-    {effective && <p role="status">{outcomes[effective.status] ?? humanize(effective.status)} · {humanize(effective.operation)} {effective.value}</p>}
+    {[...visible.values()].map(outcome => <p key={outcome.id} role="status">{outcomes[outcome.status] ?? humanize(outcome.status)}
+      {' · '}{humanize(outcome.operation)} {outcome.value}</p>)}
     {rooms && <AssignRoom property={property.id} device={device} rooms={rooms} />}
   </Card>
 }

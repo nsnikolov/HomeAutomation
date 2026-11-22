@@ -106,7 +106,12 @@ An authenticated live response identified the Altherma energy dataset as heating
 - The backend accepts a successful, authenticated account-wide discovery response received within the last **two minutes**. It requests HTTP revalidation and rejects responses with a positive cache age for command purposes. The same device must be present and explicitly online. If the saved snapshot lacks an eligible receipt or the receipt is too old, the backend refreshes once and revalidates the target's current state and capabilities. An explicit invalid or stale device timestamp still blocks dispatch.
 - `lastUpdateReceived`, when valid, remains the device observation time and retains the normal freshness requirement. `timestamp` is gateway metadata. The backend receipt field records when the successful provider response arrived and supports interactive commands when the device timestamp is absent. A database update never advances that receipt. This policy does not apply to automation or non-interactive dispatch.
 - Power and heating/cooling use the advertised writable values. Temperature uses the active mode's writable range, step and verified Celsius unit. Fan control uses its advertised fixed-mode range. Temperature and fan requests carry the mode reviewed by the operator. A mode change before dispatch causes the request to be rejected.
-- A successful PATCH stays pending until a later successful provider read reports the requested setting. That read must arrive after dispatch completed and carry a newer device timestamp when the provider supplies one. Temperature and fan also require the same mode. Missing, offline, stale, invalid or mismatched reports cannot confirm. A different setting on a subsequent eligible read moves a pending command to uncertain. Ambiguous PATCHes are never replayed. Pending and uncertain commands block further commands on that device.
+- A command is audited as **Dispatched** before transport and moves to **Awaiting confirmation** only after ONECTA accepts it. A later eligible read can mark it **Confirmed** when it reports the requested value. The read must arrive after dispatch completed and carry a newer device timestamp when supplied. Temperature and fan also require the same mode. A missing or mismatched result remains open for normal polling. Definite rejection is **Failed**. A timeout or other ambiguous PATCH is **Uncertain** and blocks all commands on that device until matching readback. The application never replays a PATCH.
+- With an accepted command awaiting confirmation, another device can be controlled. The same AC can receive a different independent control. An unresolved capability blocks another request for itself, and mode changes conflict with temperature and fan settings while either is unresolved. PATCHes and reads share the existing gate. Legacy pending and interrupted dispatched records remain device-wide blocks until reconciled.
+
+### Debounced readback
+
+Each accepted PATCH resets one account-wide timer to 30 seconds after that acceptance. At expiry, one discovery GET checks all devices and reconciles each open audit independently. If regular polling or another discovery already confirmed the scheduled commands, it cancels the extra GET. A partial read confirms only matching values. The normal 15-minute poll handles unresolved results, quota exhaustion, failed reads, or a backend restart during the in-memory window. The confirmation worker makes one scheduled attempt per window and uses the existing background quota rather than spending the interactive reserve.
 
 ### Request cost
 
@@ -114,11 +119,11 @@ The official public FAQ documents a rolling limit of 200 calls per day for priva
 
 | Manual action | PATCH calls | GET calls |
 | --- | --- | --- |
-| Power on/off, apply temperature, change mode, or apply fixed fan speed | One for a changed value. Zero if the accepted snapshot already matches | Zero before dispatch with a recent eligible snapshot, otherwise one normal preflight. One later account-wide readback can be shared with background polling |
-| Multiple changes to one device | One per changed characteristic. Wait for each result before submitting the next | Share a recent snapshot when eligible. Each successive change needs a later readback |
-| Changes on several devices | One per changed characteristic and device | One eligible discovery can serve all preflights. One later discovery can confirm all preceding PATCHes |
+| Power on/off, apply temperature, change mode, or apply fixed fan speed | One for a changed value. Zero if the accepted snapshot already matches | Zero before dispatch with a recent eligible snapshot, otherwise one normal preflight. Up to one debounced GET per burst |
+| Multiple independent changes to one device | One per changed characteristic after the previous PATCH is accepted | Share a recent snapshot when eligible. The burst shares one readback |
+| Changes on several devices | One per changed characteristic and device | One eligible discovery can serve all preflights. The burst shares one readback |
 
-Temperature +/- edits are local until **Apply target** submits the final selection. Power OFF is sent immediately once validated. The app counts reserved requests in MySQL and logs attempted GET, PATCH and token requests for each manual submission with an audit ID when available. A token refresh adds one request. Read authorization failure can add one refresh and one safe GET replay. Confirmation normally reuses a scheduled poll, so it adds no manual GET. The operator can use **Refresh discovery** once if faster readback is needed. The 15-minute worker interval is about 96 reads per day. At defaults, the background path stops at 160 calls and the command path at 158, leaving two background slots for readback or token refresh. Other explicit account operations consume the same rolling budget.
+Temperature +/- edits are local until **Apply target** submits the final selection. Power OFF is sent immediately once validated. The app counts reserved requests in MySQL and logs attempted GET, PATCH and token requests for each manual submission with an audit ID when available. A token refresh adds one request. Regular polling and preflight can replay a read once after an authorization failure. Confirmation leaves any failed GET to normal polling. The 15-minute worker interval is about 96 reads per day. At defaults, the background path stops at 160 calls and the command path at 158, leaving two background slots for readback or token refresh. Other explicit account operations consume the same rolling budget.
 
 ### Supervised AC verification
 
@@ -135,7 +140,7 @@ Temperature +/- edits are local until **Apply target** submits the final selecti
    }
    ```
 
-4. Submit the approved action once. Check the unit in person and wait for the next scheduled ONECTA report, or select **Refresh discovery** once after the device has had time to respond. Check the command audit and request log. An uncertain result requires investigation before another action. Stop the test backend, remove the process override and restart with writes disabled. Verify the UI reports writes disabled.
+4. Submit the approved action once. Check the unit in person and wait for the debounced ONECTA readback. Check the command audit and request log. An uncertain result requires investigation before another action. Stop the test backend, remove the process override and restore the previous write configuration.
 
 ### General behavior
 

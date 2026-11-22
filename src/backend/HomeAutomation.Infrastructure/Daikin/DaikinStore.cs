@@ -15,6 +15,21 @@ internal sealed record DaikinRow(string Id, string ExternalId, long? PropertyId,
 
 public sealed record DaikinOutcome(string Id, string Operation, string Value, string Status, DateTimeOffset UpdatedAt,
     string? ModeContext = null);
+
+internal static class DaikinCommandStatus
+{
+    public const string Dispatched = "dispatched";
+    public const string Awaiting = "awaitingConfirmation";
+    public const string Confirmed = "confirmed";
+    public const string Uncertain = "uncertain";
+    public static readonly string[] Open = [Dispatched, Awaiting, Uncertain, "pending"];
+
+    public static bool Blocks(DaikinOutcome open, string operation) => open.Status != Awaiting ||
+        operation == open.Operation ||
+        operation == "mode" && open.Operation is "temperature" or "fan" ||
+        open.Operation == "mode" && operation is "temperature" or "fan";
+}
+
 internal sealed class DaikinStore(Database database, TimeProvider clock, DaikinOptions options)
 {
     public async Task<DaikinAccount?> AccountAsync(CancellationToken ct)
@@ -114,10 +129,10 @@ internal sealed class DaikinStore(Database database, TimeProvider clock, DaikinO
         var id = Guid.NewGuid().ToString("N");
         await db.ExecuteAsync(Query("""
             INSERT INTO daikin_commands(id,device_key,property_id,actor_id,operation,desired,status,requested_utc,updated_utc)
-            VALUES (@id,@device,@property,@owner,@operation,@desired,'pending',@now,@now)
+            VALUES (@id,@device,@property,@owner,@operation,@desired,@status,@now,@now)
             """, ct, new { id, device, property, owner,
                 operation = modeContext is null ? command.Operation : $"{command.Operation}:{modeContext}", desired = command.Value,
-                now = clock.GetUtcNow().UtcDateTime }));
+                status = DaikinCommandStatus.Dispatched, now = clock.GetUtcNow().UtcDateTime }));
         return id;
     }
 
@@ -128,16 +143,31 @@ internal sealed class DaikinStore(Database database, TimeProvider clock, DaikinO
             ct, new { id, status, now = clock.GetUtcNow().UtcDateTime }));
     }
 
-    public async Task<DaikinOutcome?> LatestCommandAsync(string device, CancellationToken ct)
+    public async Task<bool> HasAwaitingAsync(string owner, string[] ids, CancellationToken ct)
     {
         await using var db = await database.OpenAsync(ct);
-        var entry = await db.QuerySingleOrDefaultAsync<CommandRow>(Query("""
+        return await db.ExecuteScalarAsync<int>(Query("""
+            SELECT EXISTS(SELECT 1 FROM daikin_commands WHERE actor_id=@owner AND id IN @ids AND status=@status)
+            """, ct, new { owner, ids, status = DaikinCommandStatus.Awaiting })) == 1;
+    }
+
+    public async Task<IReadOnlyList<DaikinOutcome>> CommandsAsync(string device, CancellationToken ct, bool includeLatest = false)
+    {
+        await using var db = await database.OpenAsync(ct);
+        var rows = await db.QueryAsync<CommandRow>(Query("""
             SELECT id AS Id, operation AS Operation, desired AS Value, status AS Status, updated_utc AS UpdatedAt
-            FROM daikin_commands WHERE device_key=@device ORDER BY requested_utc DESC LIMIT 1
-            """, ct, new { device }));
-        if (entry is null) return null;
-        var operation = entry.Operation.Split(':', 2);
-        return new(entry.Id, operation[0], entry.Value, entry.Status, Utc(entry.UpdatedAt), operation.Length > 1 ? operation[1] : null);
+            FROM daikin_commands WHERE device_key=@device AND (status IN @open OR
+                (@includeLatest AND id=(SELECT id FROM daikin_commands WHERE device_key=@device
+                    ORDER BY requested_utc DESC,id DESC LIMIT 1)))
+            ORDER BY requested_utc DESC,id DESC
+            """, ct, new { device, includeLatest, open = DaikinCommandStatus.Open }));
+        return rows.Select(entry =>
+        {
+            var operation = entry.Operation.Split(':', 2);
+            return new DaikinOutcome(entry.Id, operation[0], entry.Value,
+                entry.Status == "verified" ? DaikinCommandStatus.Confirmed : entry.Status,
+                Utc(entry.UpdatedAt), operation.Length > 1 ? operation[1] : null);
+        }).ToArray();
     }
 
     public async Task<DaikinWaterHistory> WaterHistoryAsync(long property, string device, CancellationToken ct)
