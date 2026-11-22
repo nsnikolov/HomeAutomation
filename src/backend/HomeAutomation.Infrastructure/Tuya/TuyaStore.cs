@@ -29,7 +29,7 @@ internal sealed class TuyaStore(Database database, TuyaOptions options)
             INSERT INTO tuya_sync(project_scope,status,provider_code,last_success_utc,next_sync_utc)
             VALUES(@scope,@status,@code,@success,@next) AS incoming
             ON DUPLICATE KEY UPDATE status=incoming.status,provider_code=incoming.provider_code,
-                last_success_utc=COALESCE(incoming.last_success_utc,last_success_utc),next_sync_utc=incoming.next_sync_utc
+                last_success_utc=COALESCE(incoming.last_success_utc,tuya_sync.last_success_utc),next_sync_utc=incoming.next_sync_utc
             """, ct, new { scope = options.Scope, status, code, success = success?.UtcDateTime, next = next.UtcDateTime }));
     }
 
