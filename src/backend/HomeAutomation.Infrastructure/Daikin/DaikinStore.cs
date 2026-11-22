@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Dapper;
+using HomeAutomation.Application;
+using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.MySql;
 using static HomeAutomation.Infrastructure.MySql.Database;
 
@@ -11,7 +13,8 @@ internal sealed record DaikinRow(string Id, string ExternalId, long? PropertyId,
     public DaikinDevice? Device => Snapshot is null ? null : JsonSerializer.Deserialize<DaikinDevice>(Snapshot);
 }
 
-public sealed record DaikinOutcome(string Id, string Operation, string Value, string Status, DateTimeOffset UpdatedAt);
+public sealed record DaikinOutcome(string Id, string Operation, string Value, string Status, DateTimeOffset UpdatedAt,
+    string? ModeContext = null);
 internal sealed class DaikinStore(Database database, TimeProvider clock, DaikinOptions options)
 {
     public async Task<DaikinAccount?> AccountAsync(CancellationToken ct)
@@ -52,7 +55,7 @@ internal sealed class DaikinStore(Database database, TimeProvider clock, DaikinO
                 success = status == "connected" ? clock.GetUtcNow().UtcDateTime : (DateTime?)null }));
     }
 
-    public async Task ReserveAsync(bool background, CancellationToken ct)
+    public async Task ReserveAsync(bool background, CancellationToken ct, int retain = 0)
     {
         var now = clock.GetUtcNow();
         await using var db = await database.OpenAsync(ct);
@@ -62,7 +65,7 @@ internal sealed class DaikinStore(Database database, TimeProvider clock, DaikinO
             SELECT requested_utc FROM daikin_requests WHERE requested_utc > @since ORDER BY requested_utc,id
             """, ct, new { since = now.UtcDateTime.AddDays(-1) }, tx));
         var times = recent.AsList();
-        if (BudgetRetryAt(times, options.DailyLimit, options.ManualReserve, background) is { } retry)
+        if (BudgetRetryAt(times, options.DailyLimit - retain, options.ManualReserve, background) is { } retry)
             throw new DaikinFailure(background ? "pollBudgetReserved" : "rateLimited", retry);
         await db.ExecuteAsync(Query("""
             INSERT INTO daikin_requests(requested_utc) VALUES (@now);
@@ -104,14 +107,16 @@ internal sealed class DaikinStore(Database database, TimeProvider clock, DaikinO
             """, ct, new { owner, device, property, room })) == 1;
     }
 
-    public async Task<string> StartCommandAsync(string owner, string device, long property, DaikinCommand command, CancellationToken ct)
+    public async Task<string> StartCommandAsync(string owner, string device, long property, DaikinCommand command,
+        string? modeContext, CancellationToken ct)
     {
         await using var db = await database.OpenAsync(ct);
         var id = Guid.NewGuid().ToString("N");
         await db.ExecuteAsync(Query("""
             INSERT INTO daikin_commands(id,device_key,property_id,actor_id,operation,desired,status,requested_utc,updated_utc)
             VALUES (@id,@device,@property,@owner,@operation,@desired,'pending',@now,@now)
-            """, ct, new { id, device, property, owner, operation = command.Operation, desired = command.Value,
+            """, ct, new { id, device, property, owner,
+                operation = modeContext is null ? command.Operation : $"{command.Operation}:{modeContext}", desired = command.Value,
                 now = clock.GetUtcNow().UtcDateTime }));
         return id;
     }
@@ -130,8 +135,34 @@ internal sealed class DaikinStore(Database database, TimeProvider clock, DaikinO
             SELECT id AS Id, operation AS Operation, desired AS Value, status AS Status, updated_utc AS UpdatedAt
             FROM daikin_commands WHERE device_key=@device ORDER BY requested_utc DESC LIMIT 1
             """, ct, new { device }));
-        return entry is null ? null : new(entry.Id, entry.Operation, entry.Value, entry.Status, Utc(entry.UpdatedAt));
+        if (entry is null) return null;
+        var operation = entry.Operation.Split(':', 2);
+        return new(entry.Id, operation[0], entry.Value, entry.Status, Utc(entry.UpdatedAt), operation.Length > 1 ? operation[1] : null);
     }
+
+    public async Task<DaikinWaterHistory> WaterHistoryAsync(long property, string device, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow().UtcDateTime;
+        await using var db = await database.OpenAsync(ct);
+        var rows = await db.QueryAsync<WaterHistoryRow>(Query("""
+            SELECT s.metric AS Metric, h.observed_at_utc AS ObservedAt, h.numeric_value AS Number
+            FROM daikin_devices d
+            JOIN provider_bindings b ON b.property_id=d.property_id AND b.external_id=d.external_id
+            JOIN integration_connections c ON c.id=b.connection_id AND c.provider_code='daikin'
+            JOIN provider_endpoint_bindings e ON e.binding_id=b.id AND e.external_endpoint_key='climate'
+            JOIN telemetry_series s ON s.endpoint_id=e.endpoint_id AND s.property_id=d.property_id AND s.source_key='daikin'
+            JOIN telemetry_samples h ON h.series_id=s.id
+            WHERE d.public_id=@device AND d.property_id=@property
+              AND s.metric IN ('LeavingWaterTemperature','TargetLeavingWaterTemperature')
+              AND h.observed_at_utc >= @from AND h.observed_at_utc <= @now
+            ORDER BY h.observed_at_utc DESC LIMIT 2000
+            """, ct, new { device, property, from = now.AddDays(-1), now }));
+        return new(options.PollMinutes * 60, rows.Reverse().GroupBy(row => Enum.Parse<Metric>(row.Metric))
+            .Select(group => new DaikinHistorySeries(group.Key, group
+                .Select(row => new HistoryPoint(Utc(row.ObservedAt), row.Number, null, null)).ToArray())).ToArray());
+    }
+
+    private sealed record WaterHistoryRow(string Metric, DateTime ObservedAt, double? Number);
 
     private sealed record CommandRow(string Id, string Operation, string Value, string Status, DateTime UpdatedAt);
 }

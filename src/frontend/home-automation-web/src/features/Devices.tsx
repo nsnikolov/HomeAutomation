@@ -16,10 +16,13 @@ export const metricLabels: Record<Metric, string> = {
   pvVoltage: 'PV voltage', warningStatus: 'Reported warning',
   acOutputVoltage: 'AC output voltage', inverterLoadPercent: 'Inverter load', acChargingPower: 'AC charging power',
   outdoorTemperature: 'Outdoor temperature', fanSpeed: 'Fan speed',
+  leavingWaterTemperature: 'Leaving water', targetLeavingWaterTemperature: 'Water target',
+  heatingControlMode: 'Heating control', waterSetpointMode: 'Water setpoint mode',
+  heatingWarning: 'Heating warning', heatingEmergency: 'Heating emergency',
 }
 
 export function DeviceIcon({ kind, size = 18 }: { kind: string; size?: number }) {
-  const Icon = ({ inverter: Sun, battery: Battery, airConditioner: Snowflake, smartSwitch: Cable, sensor: Thermometer })[kind] ?? CircuitBoard
+  const Icon = ({ inverter: Sun, battery: Battery, airConditioner: Snowflake, heatPump: Thermometer, smartSwitch: Cable, sensor: Thermometer })[kind] ?? CircuitBoard
   return <Icon size={size} aria-hidden />
 }
 

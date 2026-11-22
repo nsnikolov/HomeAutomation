@@ -5,7 +5,9 @@ public enum Metric
     PvPower, HouseholdPower, GridAvailable, BatterySoc, BatteryPower,
     Voltage, Current, ActivePower, Energy, Temperature, Humidity,
     SwitchOn, TargetTemperature, OperatingMode, GridVoltage, GridFrequency, GridImportPower, PvVoltage, WarningStatus,
-    AcOutputVoltage, InverterLoadPercent, AcChargingPower, OutdoorTemperature, FanSpeed
+    AcOutputVoltage, InverterLoadPercent, AcChargingPower, OutdoorTemperature, FanSpeed,
+    LeavingWaterTemperature, TargetLeavingWaterTemperature, HeatingControlMode, WaterSetpointMode,
+    HeatingWarning, HeatingEmergency
 }
 
 public static class Telemetry
@@ -20,7 +22,8 @@ public static class Telemetry
         Metric.Current => "A",
         Metric.Energy => "kWh",
         Metric.BatterySoc or Metric.Humidity or Metric.InverterLoadPercent => "%",
-        Metric.Temperature or Metric.TargetTemperature or Metric.OutdoorTemperature => "°C",
+        Metric.Temperature or Metric.TargetTemperature or Metric.OutdoorTemperature or
+            Metric.LeavingWaterTemperature or Metric.TargetLeavingWaterTemperature => "°C",
         Metric.FanSpeed => "step",
         _ => null
     };
@@ -67,7 +70,7 @@ public sealed record Sample
 
     public static Sample Boolean(Metric metric, DateTimeOffset time, bool value)
     {
-        if (metric is not (Metric.GridAvailable or Metric.SwitchOn))
+        if (metric is not (Metric.GridAvailable or Metric.SwitchOn or Metric.HeatingWarning or Metric.HeatingEmergency))
             throw new ArgumentException("This metric is not boolean.", nameof(metric));
 
         return new Sample(metric, time, null, value, null);
@@ -75,7 +78,8 @@ public sealed record Sample
 
     public static Sample Status(Metric metric, DateTimeOffset time, string value)
     {
-        if (metric is not (Metric.OperatingMode or Metric.WarningStatus) || string.IsNullOrWhiteSpace(value) || value.Length > 32)
+        if (metric is not (Metric.OperatingMode or Metric.WarningStatus or Metric.HeatingControlMode or Metric.WaterSetpointMode)
+            || string.IsNullOrWhiteSpace(value) || value.Length > 32)
             throw new ArgumentException("Invalid status value.", nameof(value));
 
         return new Sample(metric, time, null, null, value);

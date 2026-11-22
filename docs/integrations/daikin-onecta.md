@@ -94,6 +94,33 @@ The backend logs `ONECTA callback accepted. Waiting for local confirmation.` whe
 
 ## Monitoring, quotas and manual requests
 
+### Milestone 3D
+
+The Heatpump card shows current and target leaving-water temperature, outdoor temperature, reported heating mode and power, control and setpoint modes, warnings, emergency status, and freshness. The card includes the last synchronization time and a 24-hour water-temperature chart after at least two samples are available. Readings are persisted by the existing MySQL telemetry writer under the existing gateway and management-point binding. No schema migration is needed. The [capability inventory](daikin-altherma-capabilities.md#milestone-3d-verification) records which fields were observed.
+
+Supported air-to-air ACs can expose power, room target temperature, heating/cooling, and fixed fan speed when ONECTA advertises the necessary values or range. Temperature adjustments use the advertised minimum, maximum, and step and require a verified Celsius unit. The application shows the last reported value while waiting for readback. A command with an uncertain result is never retried automatically and blocks subsequent requests for that unit. Readback must carry a newer device observation time and match the dispatched mode for temperature and fan commands. Altherma and unidentified equipment are blocked in both the command handler and the HTTP write client.
+
+The normal 15-minute interval is about 96 discovery reads per day before token refreshes and operator requests. The existing rolling budget reserves 40 slots from background work, and a dispatched command leaves at least one slot for readback. An authenticated live response identified the Altherma energy dataset as heating electricity in kWh. The bucket timing and accumulation rules remain unverified, so those arrays are excluded from telemetry and totals. [Daikin developer FAQ](https://www.daikin.eu/en_us/product-group/control-systems/daikin-developer-portal.html)
+
+### Supervised AC verification
+
+1. Obtain explicit approval for the specific air conditioner and intended action. Confirm the operator can physically observe the unit and restore its original setting. The live AC response observed during Milestone 3D lacked `lastUpdateReceived`. Obtain provider-confirmed device observation timestamps and verify the freshness check with read-only polling before proceeding.
+2. Confirm that the selected AC is assigned to the operator's property, online, fresh, and advertises the selected writable control. Resolve any pending or uncertain command and check the remaining rolling quota. Leave Altherma in monitoring mode throughout.
+3. From PowerShell, use a process-scoped opt-in for one backend. Stop the existing backend first to avoid duplicate polling. Keep the normal local HTTPS frontend, sign in as the existing operator, and use its Daikin device card.
+
+   ```powershell
+   $env:Daikin__EnableWrites = 'true'
+   try {
+     dotnet run --project src/backend/HomeAutomation.Api --no-launch-profile -- --urls http://localhost:5080 --environment Development
+   } finally {
+     Remove-Item Env:Daikin__EnableWrites -ErrorAction SilentlyContinue
+   }
+   ```
+
+4. Submit the approved action once. Check the unit in person and wait for a newer ONECTA observation and a verified audit outcome. Investigate uncertainty before any further command. Stop the test backend and restart normally with writes disabled. Verify the UI reports writes disabled.
+
+### General behavior
+
 - Gateway discovery batches all management points. The adapter selects climate points and maps model/name, reachability, power, operating mode, room and outdoor temperature, current mode's target, humidity and available fan settings. Missing values remain unavailable. Periodized energy datasets need authenticated units, interval semantics and hardware verification before use. A unit's minimum heating setpoint comes from its active mode and advertised range; 10 °C support is unknown.
 - Provider observation time, when supplied, is stored with telemetry and the database records receipt separately. On snapshots without a provider timestamp, receipt time is displayed explicitly. Those snapshots cannot authorize a physical write. Unknown or stale reachability never implies grid loss.
 - The worker defaults to 15-minute reads and 35-minute freshness. A rolling MySQL budget counts discovery, refresh and command calls, with 40 of 200 slots reserved from background use. Each refresh retries a safe read at most once after an authorization failure. Throttling honors Retry-After when provided. Share a single app worker and avoid other integrations consuming the same quota. The Daikin worker is independent of Growatt and the simulator.

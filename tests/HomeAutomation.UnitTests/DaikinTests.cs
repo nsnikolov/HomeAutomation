@@ -10,15 +10,16 @@ public sealed class DaikinTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-11-21T12:00:00Z");
     private const string Fixture = """
-        [{"_id":"fixture","deviceModel":"Fixture","lastUpdateReceived":"2026-11-21T11:55:00Z",
+        [{"_id":"fixture","type":"dx4","deviceModel":"dx4","lastUpdateReceived":"2026-11-21T11:55:00Z",
+          "timestamp":"2026-11-21T11:57:00Z",
           "isCloudConnectionUp":{"value":false},"managementPoints":[
           {"embeddedId":"zone","managementPointType":"climateControl","name":{"value":"Upstairs"},
            "onOffMode":{"settable":true,"values":["on","off"],"value":"on"},
            "operationMode":{"settable":true,"values":["heating","cooling","dry"],"value":"heating"},
            "sensoryData":{"value":{"roomTemperature":{"value":18},"outdoorTemperature":{"value":5}}},
            "temperatureControl":{"value":{"operationModes":{"heating":{"setpoints":{"roomTemperature":
-             {"settable":true,"minValue":16,"maxValue":24,"stepValue":0.5,"value":18}}}}}}
-          }]}]
+             {"settable":true,"unit":"C","minValue":16,"maxValue":24,"stepValue":0.5,"value":18}}}}}}
+          },{"embeddedId":"indoor","managementPointType":"indoorUnit"}]}]
         """;
 
     [Fact]
@@ -28,6 +29,9 @@ public sealed class DaikinTests
         var device = Assert.Single(DaikinMapping.Discover(json.RootElement, Now));
         Assert.Equal("fixture:zone", device.ExternalId);
         Assert.Equal(Connectivity.Offline, device.Connectivity);
+        Assert.Equal(DaikinEquipment.AirConditioner, device.Equipment);
+        Assert.Null(device.Water);
+        Assert.Equal(Now.AddMinutes(-3), device.GatewayTimestamp);
         Assert.Equal(Now.AddMinutes(-5), device.SourceAt);
         Assert.Equal(ReadingQuality.Stale, Telemetry.Quality(device.ObservedAt, Now.AddHours(1), TimeSpan.FromMinutes(35)));
         Assert.Equal(18, device.Indoor);
@@ -42,6 +46,91 @@ public sealed class DaikinTests
 
         using var duplicate = JsonDocument.Parse($"[{Fixture[1..^1]},{Fixture[1..^1]}]");
         Assert.Equal("duplicateIdentity", Assert.Throws<DaikinFailure>(() => DaikinMapping.Discover(duplicate.RootElement, Now)).Status);
+    }
+
+    [Fact]
+    public void GatewayTimestampAloneDoesNotSupplyDeviceSourceTime()
+    {
+        using var json = JsonDocument.Parse(Fixture.Replace(
+            "\"lastUpdateReceived\":\"2026-11-21T11:55:00Z\",", ""));
+        var device = Assert.Single(DaikinMapping.Discover(json.RootElement, Now));
+        Assert.Equal(Now.AddMinutes(-3), device.GatewayTimestamp);
+        Assert.Null(device.SourceAt);
+        Assert.Equal(Now, device.ObservedAt);
+    }
+
+    [Theory]
+    [InlineData("C", true)]
+    [InlineData("°C", true)]
+    [InlineData("unknown", false)]
+    public void HydronicTelemetryIsReadOnlyAndPreservesUnitsMetadataAndHistorySamples(string unit, bool usable)
+    {
+        var input = Fixture.Replace("roomTemperature", "leavingWaterTemperature")
+            .Replace("\"unit\":\"C\"", $"\"unit\":\"{unit}\"")
+            .Replace("\"leavingWaterTemperature\":{\"value\":18}",
+                $"\"leavingWaterTemperature\":{{\"value\":41,\"unit\":\"{unit}\"}}")
+            .Replace("\"onOffMode\":", """
+                "controlMode":{"value":"leavingWaterTemperature"},
+                "setpointMode":{"value":"fixed"},
+                "isInWarningState":{"value":false},
+                "isInEmergencyState":{"value":true},
+                "onOffMode":
+                """);
+        using var json = JsonDocument.Parse(input);
+        var pump = Assert.Single(DaikinMapping.Discover(json.RootElement, Now));
+        Assert.Equal(DaikinEquipment.HeatPump, pump.Equipment);
+        Assert.Empty(pump.Controls.Power);
+        Assert.Null(DaikinMapping.Validate(pump, new("power", "off")));
+        Assert.True(pump.Water!.TargetAdvertisedWritable);
+        var mapped = DaikinService.TelemetryFor(pump);
+        Assert.Equal(DeviceKind.HeatPump, mapped.Device.Kind);
+        Assert.Equal(pump.ExternalId, mapped.Device.ExternalId);
+        var samples = Assert.Single(Assert.Single(mapped.Batch.Devices).Endpoints).Samples;
+        Assert.DoesNotContain(samples, sample => sample.Metric == Metric.TargetTemperature);
+        Assert.Equal("leavingWaterTemperature", Assert.Single(samples, sample => sample.Metric == Metric.HeatingControlMode).Code);
+        Assert.Equal("fixed", Assert.Single(samples, sample => sample.Metric == Metric.WaterSetpointMode).Code);
+        Assert.False(Assert.Single(samples, sample => sample.Metric == Metric.HeatingWarning).Flag);
+        Assert.True(Assert.Single(samples, sample => sample.Metric == Metric.HeatingEmergency).Flag);
+        if (usable)
+        {
+            var leaving = Assert.Single(samples, sample => sample.Metric == Metric.LeavingWaterTemperature);
+            Assert.Equal(41, leaving.Number);
+            Assert.Equal("°C", Telemetry.Unit(leaving.Metric));
+            Assert.Equal(pump.SourceAt, leaving.ObservedAt);
+            Assert.Equal(18, Assert.Single(samples, sample => sample.Metric == Metric.TargetLeavingWaterTemperature).Number);
+        }
+        else
+        {
+            Assert.Null(pump.Water.Leaving);
+            Assert.DoesNotContain(samples, sample => sample.Metric == Metric.TargetLeavingWaterTemperature);
+        }
+    }
+
+    [Fact]
+    public void MatchingProviderStateMustBeNewerAndBelongToTheDispatchedMode()
+    {
+        using var json = JsonDocument.Parse(Fixture);
+        var ac = Assert.Single(DaikinMapping.Discover(json.RootElement, Now)) with { Connectivity = Connectivity.Online };
+        var command = new DaikinOutcome("fixture", "temperature", "18", "uncertain", Now.AddMinutes(-10), "heating");
+        Assert.True(DaikinService.MatchesCommand(ac, command));
+        Assert.False(DaikinService.MatchesCommand(ac with { SourceAt = null }, command));
+        Assert.False(DaikinService.MatchesCommand(ac with { SourceAt = command.UpdatedAt }, command));
+        Assert.False(DaikinService.MatchesCommand(ac, command with { ModeContext = "cooling" }));
+        Assert.False(DaikinService.MatchesCommand(ac with { Target = 19 }, command));
+    }
+
+    [Fact]
+    public async Task WriteTransportRejectsReadOnlyOrHydronicDevicesBeforeCallingProvider()
+    {
+        using var json = JsonDocument.Parse(Fixture);
+        var ac = Assert.Single(DaikinMapping.Discover(json.RootElement, Now));
+        var operation = DaikinMapping.Validate(ac, new("power", "off"))!;
+        using var disabled = Client((_, _) => throw new InvalidOperationException("Unexpected provider call."));
+        Assert.Equal("readOnly", (await Assert.ThrowsAsync<DaikinFailure>(() =>
+            disabled.PatchAsync("fixture", ac, operation, default))).Status);
+        using var enabled = Client((_, _) => throw new InvalidOperationException("Unexpected provider call."), writes: true);
+        Assert.Equal("readOnly", (await Assert.ThrowsAsync<DaikinFailure>(() =>
+            enabled.PatchAsync("fixture", ac with { Equipment = DaikinEquipment.HeatPump }, operation, default))).Status);
     }
 
     [Fact]
@@ -119,14 +208,20 @@ public sealed class DaikinTests
     public async Task ThrottleCarriesRetryAfterAndAmbiguousPatchIsSentOnlyOnce()
     {
         var requests = 0;
-        using var client = Client((request, _) =>
+        using var client = Client(async (request, ct) =>
         {
             requests++;
-            if (request.Method == HttpMethod.Patch) return Task.FromResult(Response(HttpStatusCode.GatewayTimeout, ""));
+            if (request.Method == HttpMethod.Patch)
+            {
+                Assert.EndsWith("/characteristics/onOffMode", request.RequestUri!.AbsolutePath);
+                using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+                Assert.Equal("off", body.RootElement.GetProperty("value").GetString());
+                return Response(HttpStatusCode.GatewayTimeout, "");
+            }
             var throttle = Response(HttpStatusCode.TooManyRequests, "");
             throttle.Headers.RetryAfter = new(TimeSpan.FromMinutes(10));
-            return Task.FromResult(throttle);
-        });
+            return throttle;
+        }, writes: true);
         var error = await Assert.ThrowsAsync<DaikinFailure>(() => client.DiscoverAsync("fixture", default));
         Assert.Equal("rateLimited", error.Status);
         Assert.Equal(Now.AddMinutes(10), error.RetryAt);
@@ -144,8 +239,12 @@ public sealed class DaikinTests
         RedirectUri = "http://localhost:5173/api/v1/daikin/callback",
         OperatorEmail = "operator@example.test", TokenKey = Convert.ToBase64String(new byte[32])
     };
-    private static DaikinClient Client(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> call) =>
-        new(new HttpClient(new Handler(call)), Options(), new FixedClock());
+    private static DaikinClient Client(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> call, bool writes = false)
+    {
+        var options = Options();
+        options.EnableWrites = writes;
+        return new(new HttpClient(new Handler(call)), options, new FixedClock());
+    }
     private static HttpResponseMessage Response(HttpStatusCode status, string body) =>
         new(status) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler

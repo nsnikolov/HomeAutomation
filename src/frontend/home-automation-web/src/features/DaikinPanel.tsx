@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
-import { api } from '../shared/api'
+import { api, ApiError } from '../shared/api'
 import { Button, Card, Input } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
 import type { DaikinDevice, DaikinRange, Property, Room } from '../shared/types'
+import { HistoryChart } from './Energy'
 
 const statusText: Record<string, string> = {
   notConfigured: 'ONECTA developer credentials are required.',
@@ -22,6 +23,21 @@ const outcomes: Record<string, string> = {
   pending: 'Command pending', failed: 'Command failed', uncertain: 'Outcome uncertain. Awaiting device readback.',
   verified: 'Device state verified', alreadyApplied: 'Device already reports the requested state',
 }
+
+const commandErrors: Record<string, string> = {
+  readOnly: 'Physical writes are disabled.',
+  unsupportedCommand: 'This operation or value is unsupported for the current device and mode.',
+  deviceUnavailable: 'This device needs a fresh, online provider observation.',
+  unresolvedCommand: 'The previous command still needs a device readback.',
+  reauthorizationRequired: 'Reconnect ONECTA before issuing commands.',
+  rateLimited: 'The ONECTA request budget is temporarily limited.',
+  forbidden: 'This account cannot control the device.',
+}
+
+const waterCurves = [
+  { metric: 'leavingWaterTemperature', label: 'Leaving water', color: '#11846d' },
+  { metric: 'targetLeavingWaterTemperature', label: 'Water target', color: '#5373c7' },
+] as const
 
 export function DaikinPanel({ property }: { property: Property }) {
   const cache = useQueryClient()
@@ -100,17 +116,32 @@ export function DaikinDeviceCard({ device, property, writes, rooms }: {
     mutationFn: ({ operation, value }: { operation: string; value: string }) => api.commandDaikin(property.id, device.id, operation, value),
     onSettled: () => cache.invalidateQueries({ queryKey: ['property', property.id, 'daikin'] }),
   })
-  const effective = device.command
-  const blocked = !writes || device.quality !== 'fresh' || device.connectivity !== 'online' || !device.sourceAt ||
+  const effective = command.data && (!device.command || Date.parse(command.data.updatedAt) > Date.parse(device.command.updatedAt))
+    && !(device.command?.id === command.data.id && device.command.status === 'verified') ? command.data : device.command
+  const heatPump = device.equipment === 'heatPump'
+  const supportedAc = device.equipment === 'airConditioner'
+  const blocked = !writes || !supportedAc || device.quality !== 'fresh' || device.connectivity !== 'online' || !device.sourceAt ||
     command.isPending || effective?.status === 'pending' || effective?.status === 'uncertain'
   const reading = (value: number | null, units: string) => value === null ? 'Unavailable' : `${value} ${units}`
+  const state = (value: boolean | null | undefined) => value == null ? 'Unavailable' : value ? 'Active' : 'Clear'
+  const modeName = (value: string | null | undefined) => value ? humanize(value) : 'Unavailable'
+  const water = device.water
   const fields = [
     ['Power', device.power ? humanize(device.power) : 'Unavailable'],
     ['Operating mode', device.mode ? humanize(device.mode) : 'Unavailable'],
-    ['Indoor temperature', reading(device.indoor, '°C')], ['Target temperature', reading(device.target, '°C')],
-    ...(device.outdoor === null ? [] : [['Outdoor temperature', reading(device.outdoor, '°C')]]),
-    ...(device.humidity === null ? [] : [['Humidity', reading(device.humidity, '%')]]),
-    ...(device.fanMode ? [['Fan', [humanize(device.fanMode), device.fan].filter(value => value !== null).join(' · ')]] : []),
+    ...(heatPump ? [
+      ['Leaving water', reading(water?.leaving ?? null, '°C')],
+      ['Water target', reading(water?.target ?? null, '°C')],
+      ['Outdoor temperature', reading(device.outdoor, '°C')],
+      ['Heating control', modeName(water?.controlMode)],
+      ['Setpoint mode', modeName(water?.setpointMode)],
+      ['Warning', state(water?.warning)], ['Emergency', state(water?.emergency)],
+    ] : [
+      ['Indoor temperature', reading(device.indoor, '°C')], ['Target temperature', reading(device.target, '°C')],
+      ...(device.outdoor === null ? [] : [['Outdoor temperature', reading(device.outdoor, '°C')]]),
+      ...(device.humidity === null ? [] : [['Humidity', reading(device.humidity, '%')]]),
+      ...(device.fanMode ? [['Fan', [humanize(device.fanMode), device.fan].filter(value => value !== null).join(' · ')]] : []),
+    ]),
   ]
   function submit(operation: string, value: string) { command.mutate({ operation, value }) }
   return <Card className="device-card">
@@ -120,24 +151,66 @@ export function DaikinDeviceCard({ device, property, writes, rooms }: {
     <p>{device.sourceAt ? 'Source observation' : 'Cloud snapshot received'} {formatMoment(device.observedAt, property.timeZone)}</p>
     {device.fault && <p>Fault {device.fault}</p>}
     <dl className="device-readings">{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-    {!writes && <p>Read-only monitoring</p>}
-    <Choice label="Power" choices={device.controls.power} disabled={blocked} change={value => submit('power', value)} />
-    <Choice label="Mode" choices={device.controls.modes} disabled={blocked} change={value => submit('mode', value)} />
-    <NumberControl label="Target temperature command" range={device.controls.temperature} disabled={blocked} change={value => submit('temperature', value)} />
-    <NumberControl label="Fixed fan speed command" range={device.controls.fan} disabled={blocked} change={value => submit('fan', value)} />
+    {heatPump ? <><p>Read-only heat-pump monitoring</p><WaterHistory device={device} property={property} /></>
+      : supportedAc ? <>
+        {!writes && <p>Read-only monitoring · physical writes disabled or unauthorized</p>}
+        {writes && blocked && <p>Commands are unavailable until the device has fresh online data and any pending result is resolved.</p>}
+        <Choice label="Power" choices={device.controls.power} selected={device.power} disabled={blocked} change={value => submit('power', value)} />
+        <Choice label="Mode" choices={device.controls.modes} selected={device.mode} disabled={blocked} change={value => submit('mode', value)} />
+        <TemperatureControl range={device.controls.temperature} current={device.target} disabled={blocked}
+          change={value => submit('temperature', value)} />
+        <NumberControl label="Fixed fan speed command" range={device.controls.fan} disabled={blocked} change={value => submit('fan', value)} />
+      </> : <p>Read-only monitoring</p>}
     {command.isPending && <p role="status">Command pending</p>}
-    {command.isError && <p role="alert">Command could not be confirmed. Check the device and command status.</p>}
+    {command.isError && <p role="alert">{command.error instanceof ApiError && command.error.code &&
+      Object.hasOwn(commandErrors, command.error.code) ? commandErrors[command.error.code]
+      : 'Command could not be confirmed. Check the device and command status.'}</p>}
     {effective && <p role="status">{outcomes[effective.status] ?? humanize(effective.status)} · {humanize(effective.operation)} {effective.value}</p>}
     {rooms && <AssignRoom property={property.id} device={device} rooms={rooms} />}
   </Card>
 }
 
-function Choice({ label, choices, disabled, change }: {
-  label: string; choices: string[]; disabled: boolean; change: (value: string) => void
+function Choice({ label, choices, selected, disabled, change }: {
+  label: string; choices: string[]; selected: string | null; disabled: boolean; change: (value: string) => void
 }) {
   if (!choices.length) return null
   return <div className="filters"><span>{label} controls</span>{choices.map(value =>
-    <Button key={value} variant="outline" disabled={disabled} onClick={() => change(value)}>{humanize(value)}</Button>)}</div>
+    <Button key={value} variant="outline" disabled={disabled || value === selected} onClick={() => change(value)}>{humanize(value)}</Button>)}</div>
+}
+
+function TemperatureControl({ range, current, disabled, change }: {
+  range: DaikinRange | null; current: number | null; disabled: boolean; change: (value: string) => void
+}) {
+  if (!range) return null
+  const lower = current === null ? null : Number((current - range.step).toFixed(8))
+  const higher = current === null ? null : Number((current + range.step).toFixed(8))
+  const allowed = (value: number | null) => value !== null && range.step > 0 && value >= range.min && value <= range.max &&
+    Math.abs((value - range.min) / range.step - Math.round((value - range.min) / range.step)) < 1e-7
+  return <div className="filters">
+    <span>Target controls · {range.min}–{range.max} °C · {range.step} °C step</span>
+    <Button aria-label="Lower target temperature" variant="outline" disabled={disabled || !allowed(lower)}
+      onClick={() => change(String(lower))}>−</Button>
+    <Button aria-label="Raise target temperature" variant="outline" disabled={disabled || !allowed(higher)}
+      onClick={() => change(String(higher))}>+</Button>
+  </div>
+}
+
+function WaterHistory({ device, property }: { device: DaikinDevice; property: Property }) {
+  const [open, setOpen] = useState(false)
+  const history = useQuery({
+    queryKey: ['property', property.id, 'daikin-water-history', device.id],
+    queryFn: ({ signal }) => api.daikinWaterHistory(property.id, device.id, signal),
+    enabled: open,
+    refetchInterval: 60_000,
+  })
+  return <>
+    <Button variant="outline" aria-expanded={open} onClick={() => setOpen(!open)}>
+      {open ? 'Hide water history' : 'Show water history'}
+    </Button>
+    {open && <HistoryChart property={property} title="Water temperatures" curves={[...waterCurves]} hours={24} unit="°C"
+      pollSeconds={history.data?.pollSeconds ?? 900} minimumPoints={2} series={history.data?.series ?? []}
+      pending={history.isPending} failed={history.isError} />}
+  </>
 }
 
 function NumberControl({ label, range, disabled, change }: {

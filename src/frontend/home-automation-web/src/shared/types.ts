@@ -6,6 +6,8 @@ export type Metric =
   | 'gridVoltage' | 'gridFrequency' | 'gridImportPower' | 'pvVoltage' | 'warningStatus'
   | 'acOutputVoltage' | 'inverterLoadPercent' | 'acChargingPower'
   | 'outdoorTemperature' | 'fanSpeed'
+  | 'leavingWaterTemperature' | 'targetLeavingWaterTemperature' | 'heatingControlMode' | 'waterSetpointMode'
+  | 'heatingWarning' | 'heatingEmergency'
 
 export type Property = { id: number; name: string; timeZone: string }
 export type Room = { id: number; name: string }
@@ -57,7 +59,14 @@ export type DaikinDevice = {
   humidity: number | null; fan: number | null; fanMode: string | null; fault: string | null
   controls: { power: string[]; modes: string[]; temperature: DaikinRange | null; fan: DaikinRange | null }
   command: DaikinOutcome | null
+  equipment: 'unknown' | 'airConditioner' | 'heatPump'
+  water: {
+    leaving: number | null; target: number | null; targetRange: DaikinRange | null
+    controlMode: string | null; setpointMode: string | null; warning: boolean | null; emergency: boolean | null
+    providerUnit: string | null; targetAdvertisedWritable: boolean | null
+  } | null
 }
+export type DaikinWaterHistory = { pollSeconds: number; series: { metric: Metric; points: Point[] }[] }
 export type DaikinState = {
   status: string; lastSuccess: string | null; manage: boolean; writes: boolean
   devices: DaikinDevice[]; unassigned: DaikinDevice[]

@@ -1,7 +1,7 @@
-import type { DaikinOutcome, DaikinState, Device, GrowattState, Health, Metric, Point, Property, PropertyState, Room } from './types'
+import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, GrowattState, Health, Metric, Point, Property, PropertyState, Room } from './types'
 
 export class ApiError extends Error {
-  constructor(public readonly status: number) {
+  constructor(public readonly status: number, public readonly code?: string) {
     super(`Request failed (${status})`)
   }
 }
@@ -12,7 +12,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers: { Accept: 'application/json', ...options.headers },
     credentials: 'same-origin',
   })
-  if (!response.ok) throw new ApiError(response.status)
+  if (!response.ok) {
+    const error: { status?: unknown } | null = path.startsWith('/daikin/') ? await response.json().catch(() => null) : null
+    throw new ApiError(response.status, typeof error?.status === 'string' ? error.status : undefined)
+  }
   return response.status === 204 ? undefined as T : await response.json() as T
 }
 
@@ -55,6 +58,8 @@ export const api = {
     daikinAction<void>(id, `devices/${device}/assign`, { roomId }),
   commandDaikin: (id: number, device: string, operation: string, value: string) =>
     daikinAction<DaikinOutcome>(id, `devices/${device}/commands`, { operation, value }),
+  daikinWaterHistory: (id: number, device: string, signal?: AbortSignal) =>
+    request<DaikinWaterHistory>(`/daikin/${id}/devices/${device}/water-history`, { signal }),
   device: (id: number, device: number, signal?: AbortSignal) =>
     request<Device>(`/properties/${id}/devices/${device}`, { signal }),
   health: (signal?: AbortSignal) => request<Health>('/system/health', { signal }),

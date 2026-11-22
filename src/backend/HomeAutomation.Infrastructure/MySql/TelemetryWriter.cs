@@ -93,6 +93,7 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
                 VALUES (@PropertyId, @RoomId, @InventoryKey, @Name, @Kind, @Manufacturer, @Model)
                 ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id),
                     room_id = IF(@Provider = 'daikin', @RoomId, room_id),
+                    kind = IF(@Provider = 'daikin', @Kind, kind),
                     name = IF(@Provider = 'daikin', @Name, name),
                     model = IF(@Provider = 'daikin', @Model, model)
                 """,

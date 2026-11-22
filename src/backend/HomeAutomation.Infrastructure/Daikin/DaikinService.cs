@@ -9,7 +9,10 @@ namespace HomeAutomation.Infrastructure.Daikin;
 public sealed record DaikinDeviceView(string Id, string Name, string Model, long? RoomId, Connectivity Connectivity,
     DateTimeOffset ObservedAt, DateTimeOffset? SourceAt, ReadingQuality Quality, string? Power, string? Mode,
     decimal? Indoor, decimal? Outdoor, decimal? Target, decimal? Humidity, decimal? Fan, string? FanMode,
-    string? Fault, DaikinControls Controls, DaikinOutcome? Command);
+    string? Fault, DaikinControls Controls, DaikinOutcome? Command, DaikinEquipment Equipment, DaikinWater? Water);
+
+public sealed record DaikinHistorySeries(Metric Metric, IReadOnlyList<HistoryPoint> Points);
+public sealed record DaikinWaterHistory(int PollSeconds, IReadOnlyList<DaikinHistorySeries> Series);
 
 public sealed record DaikinView(string Status, DateTimeOffset? LastSuccess, bool Manage, bool Writes,
     IReadOnlyList<DaikinDeviceView> Devices, IReadOnlyList<DaikinDeviceView> Unassigned);
@@ -77,14 +80,18 @@ public sealed class DaikinService
             var view = new DaikinDeviceView(row.Id, device.Name, device.Model, row.RoomId,
                 quality == ReadingQuality.Fresh ? device.Connectivity : Connectivity.Unknown,
                 device.ObservedAt, device.SourceAt, quality, device.Power, device.Mode, device.Indoor, device.Outdoor,
-                device.Target, device.Humidity, device.Fan, device.FanMode, device.Fault, device.Controls,
-                row.PropertyId is not null ? await store.LatestCommandAsync(row.Id, ct) : null);
+                device.Target, device.Humidity, device.Fan, device.FanMode, device.Fault,
+                device.Equipment == DaikinEquipment.AirConditioner ? device.Controls : DaikinMapping.ReadOnlyControls,
+                row.PropertyId is not null ? await store.LatestCommandAsync(row.Id, ct) : null, device.Equipment, device.Water);
             (row.PropertyId is null ? unassigned : devices).Add(view);
         }
         return new(manage || devices.Count > 0 ? account.Status : "unavailableForProperty",
             manage || devices.Count > 0 ? Utc(account.LastSuccess) : null, manage,
             manage && options.EnableWrites && account.Envelope is not null && account.Status == "connected", devices, unassigned);
     }
+
+    public Task<DaikinWaterHistory> WaterHistoryAsync(long property, string id, CancellationToken ct) =>
+        store.WaterHistoryAsync(property, id, ct);
 
     public async Task ConnectAsync(string user, string code, string? verifier, CancellationToken ct)
     {
@@ -194,6 +201,7 @@ public sealed class DaikinService
     public async Task<DaikinOutcome> CommandAsync(string user, long property, string id, DaikinCommand command, CancellationToken ct)
     {
         if (!options.EnableWrites) throw new DaikinFailure("readOnly");
+        if (!await permissions.CanReadAsync(user, property, ct)) throw new DaikinFailure("notFound");
         await gate.WaitAsync(ct);
         try
         {
@@ -203,14 +211,16 @@ public sealed class DaikinService
             CheckBackoff(account);
             var row = (await store.DevicesAsync(user, ct)).SingleOrDefault(item => item.Id == id && item.PropertyId == property);
             if (row?.Device is not { } device) throw new DaikinFailure("notFound");
+            if (device.Equipment != DaikinEquipment.AirConditioner) throw new DaikinFailure("unsupportedCommand");
             if (device.SourceAt is null || Quality(device) != ReadingQuality.Fresh || device.Connectivity != Connectivity.Online)
                 throw new DaikinFailure("deviceUnavailable");
             var change = DaikinMapping.Validate(device, command) ?? throw new DaikinFailure("unsupportedCommand");
             if ((await store.LatestCommandAsync(id, ct))?.Status is "pending" or "uncertain")
                 throw new DaikinFailure("unresolvedCommand");
             var tokens = change.AlreadyApplied ? null : await TokensAsync(account, false, force: false, ct);
-            if (tokens is not null) await store.ReserveAsync(false, ct);
-            var audit = await store.StartCommandAsync(user, id, property, command, ct);
+            if (tokens is not null) await store.ReserveAsync(false, ct, retain: 1);
+            var modeContext = command.Operation is "temperature" or "fan" ? device.Mode : null;
+            var audit = await store.StartCommandAsync(user, id, property, command, modeContext, ct);
             var status = change.AlreadyApplied ? "alreadyApplied" : "uncertain";
             if (tokens is not null)
             {
@@ -224,7 +234,7 @@ public sealed class DaikinService
                 catch (Exception error) when (error is HttpRequestException or OperationCanceledException) { }
             }
             await store.FinishCommandAsync(audit, status, CancellationToken.None);
-            return new(audit, command.Operation, command.Value, status, clock.GetUtcNow());
+            return new(audit, command.Operation, command.Value, status, clock.GetUtcNow(), modeContext);
         }
         finally { gate.Release(); }
     }
@@ -243,6 +253,10 @@ public sealed class DaikinService
     private async Task PersistAsync(string owner, IReadOnlyList<DaikinDevice> devices, CancellationToken ct)
     {
         var bindings = (await store.DevicesAsync(owner, ct)).ToDictionary(row => row.ExternalId, StringComparer.Ordinal);
+        var reported = devices.Select(device => device.ExternalId).ToHashSet(StringComparer.Ordinal);
+        foreach (var binding in bindings.Values)
+            if (!reported.Contains(binding.ExternalId) && binding.Device is { Available: true } previous)
+                await store.SaveSnapshotAsync(owner, previous with { Available = false }, ct);
         foreach (var device in devices)
         {
             bindings.TryGetValue(device.ExternalId, out var assigned);
@@ -252,10 +266,10 @@ public sealed class DaikinService
             {
                 await StoreTelemetryAsync(propertyId, assigned.RoomId, device, ct);
                 var last = await store.LatestCommandAsync(assigned.Id, ct);
-                if (last?.Status is "pending" or "uncertain" && device.ObservedAt > last.UpdatedAt &&
+                if (last?.Status is "pending" or "uncertain" && device.SourceAt > last.UpdatedAt &&
                     device.Connectivity == Connectivity.Online && Quality(device) == ReadingQuality.Fresh)
                 {
-                    if (DaikinMapping.Validate(device, new(last.Operation, last.Value))?.AlreadyApplied == true)
+                    if (MatchesCommand(device, last))
                         await store.FinishCommandAsync(last.Id, "verified", ct);
                     else if (last.Status == "pending")
                         await store.FinishCommandAsync(last.Id, "uncertain", ct);
@@ -268,6 +282,18 @@ public sealed class DaikinService
 
     private Task StoreTelemetryAsync(long property, long? room, DaikinDevice device, CancellationToken ct)
     {
+        var (discovery, batch) = TelemetryFor(device);
+        return telemetry.StoreDaikinAsync(property, room, discovery, batch, ct);
+    }
+
+    internal static bool MatchesCommand(DaikinDevice device, DaikinOutcome command) =>
+        device.SourceAt > command.UpdatedAt && device.Connectivity == Connectivity.Online &&
+        (command.Operation is not ("temperature" or "fan") ||
+            command.ModeContext is not null && command.ModeContext == device.Mode) &&
+        DaikinMapping.Validate(device, new(command.Operation, command.Value))?.AlreadyApplied == true;
+
+    internal static (DiscoveredDevice Device, ObservationBatch Batch) TelemetryFor(DaikinDevice device)
+    {
         var at = device.ObservedAt;
         var readings = new List<Sample>();
         var capabilities = new HashSet<Capability>();
@@ -276,6 +302,15 @@ public sealed class DaikinService
         Add(device.Target, Metric.TargetTemperature, Capability.HeatingSetpoint);
         Add(device.Humidity, Metric.Humidity, Capability.HumidityMeasurement);
         Add(device.Fan, Metric.FanSpeed, Capability.FanSpeed);
+        if (device.Water is { } water)
+        {
+            Add(water.Leaving, Metric.LeavingWaterTemperature, Capability.WaterTemperature);
+            Add(water.Target, Metric.TargetLeavingWaterTemperature, Capability.WaterTemperatureSetpoint);
+            AddStatus(water.ControlMode, Metric.HeatingControlMode, Capability.HeatingControlMode);
+            AddStatus(water.SetpointMode, Metric.WaterSetpointMode, Capability.WaterSetpointMode);
+            AddFlag(water.Warning, Metric.HeatingWarning, Capability.WarningStatus);
+            AddFlag(water.Emergency, Metric.HeatingEmergency, Capability.EmergencyStatus);
+        }
         if (device.Power is "on" or "off")
         {
             capabilities.Add(Capability.Switch);
@@ -287,10 +322,11 @@ public sealed class DaikinService
             readings.Add(Sample.Status(Metric.OperatingMode, at, mode));
         }
         if (device.Fault is not null) capabilities.Add(Capability.FaultStatus);
-        var discovery = new DiscoveredDevice(device.ExternalId, device.Name, DeviceKind.AirConditioner, "", "Daikin",
+        var discovery = new DiscoveredDevice(device.ExternalId, device.Name,
+            device.Equipment == DaikinEquipment.HeatPump ? DeviceKind.HeatPump : DeviceKind.AirConditioner, "", "Daikin",
             device.Model, [new("climate", "Climate", capabilities)]);
         var batch = new ObservationBatch(at, [new(device.ExternalId, device.Connectivity, device.Fault, [new("climate", readings)], at)], []);
-        return telemetry.StoreDaikinAsync(property, room, discovery, batch, ct);
+        return (discovery, batch);
 
         void Add(decimal? value, Metric metric, Capability capability)
         {
@@ -298,10 +334,24 @@ public sealed class DaikinService
             capabilities.Add(capability);
             readings.Add(Sample.Numeric(metric, at, (double)value.Value));
         }
+
+        void AddStatus(string? value, Metric metric, Capability capability)
+        {
+            if (value is null) return;
+            capabilities.Add(capability);
+            readings.Add(Sample.Status(metric, at, value));
+        }
+
+        void AddFlag(bool? value, Metric metric, Capability capability)
+        {
+            if (value is null) return;
+            capabilities.Add(capability);
+            readings.Add(Sample.Boolean(metric, at, value.Value));
+        }
     }
 
-    private ReadingQuality Quality(DaikinDevice device) => Telemetry.Quality(device.ObservedAt, clock.GetUtcNow(),
-        TimeSpan.FromMinutes(options.FreshMinutes));
+    private ReadingQuality Quality(DaikinDevice device) => device.Available == false ? ReadingQuality.Stale :
+        Telemetry.Quality(device.ObservedAt, clock.GetUtcNow(), TimeSpan.FromMinutes(options.FreshMinutes));
 
     private void CheckBackoff(DaikinAccount account)
     {

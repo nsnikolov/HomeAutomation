@@ -72,6 +72,8 @@ internal sealed class DaikinClient(HttpClient http, DaikinOptions options, TimeP
 
     public async Task PatchAsync(string token, DaikinDevice device, DaikinChange change, CancellationToken ct)
     {
+        if (!options.EnableWrites || device.Equipment != DaikinEquipment.AirConditioner)
+            throw new DaikinFailure("readOnly");
         var url = $"{Devices}/{Uri.EscapeDataString(device.Gateway)}/management-points/{Uri.EscapeDataString(device.Point)}/characteristics/{change.Characteristic}";
         using var request = Api(HttpMethod.Patch, url, token);
         request.Content = change.Path is null ? JsonContent.Create(new { value = change.Value }) :

@@ -13,3 +13,5 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 9. 2026-11-21 · [Home Automation — Local HTTPS for Daikin OAuth](0009-local-https-daikin-oauth.md)
 10. 2026-11-22 · [Home Automation — Daikin ONECTA OAuth Callback Investigation and Fix](0010-daikin-oauth-callback.md)
 11. 2026-11-22 · [Continue the existing Daikin ONECTA OAuth callback task](0011-verify-daikin-oauth-callback.md)
+12. 2026-11-22 · [Daikin Altherma — Inspect Complete ONECTA API Capabilities](0012-inspect-daikin-altherma-capabilities.md)
+13. 2026-11-22 · [Milestone 3D — Daikin Altherma Telemetry and Manual AC Control](0013-altherma-telemetry-manual-ac-control.md)

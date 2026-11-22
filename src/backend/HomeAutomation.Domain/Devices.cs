@@ -1,12 +1,13 @@
 namespace HomeAutomation.Domain;
 
-public enum DeviceKind { Inverter, Battery, AirConditioner, SmartSwitch, Sensor }
+public enum DeviceKind { Inverter, Battery, AirConditioner, SmartSwitch, Sensor, HeatPump }
 public enum Capability
 {
     SolarProduction, HouseholdConsumption, GridAvailability, BatteryLevel, BatteryPower,
     VoltageMeasurement, CurrentMeasurement, PowerMeasurement, EnergyMeasurement,
     Switch, TemperatureMeasurement, HumidityMeasurement, HeatingSetpoint, OperatingMode, FaultStatus,
-    FrequencyMeasurement, WarningStatus, FanSpeed
+    FrequencyMeasurement, WarningStatus, FanSpeed, WaterTemperature, WaterTemperatureSetpoint,
+    HeatingControlMode, WaterSetpointMode, EmergencyStatus
 }
 public enum Access { ReadOnly, Unsupported }
 public enum Connectivity { Online, Offline, Unknown }

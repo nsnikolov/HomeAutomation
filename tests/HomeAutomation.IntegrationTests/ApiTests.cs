@@ -70,6 +70,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/daikin/1")).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await guest.GetAsync("/api/v1/daikin/callback?state=forged&code=fixture")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/v1/daikin/99")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync(
+            "/api/v1/daikin/99/devices/00000000000000000000000000000001/water-history")).StatusCode);
         Assert.Contains("notConfigured", await viewer.GetStringAsync("/api/v1/daikin/1"));
         Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsJsonAsync(
             "/api/v1/daikin/1/devices/00000000000000000000000000000001/commands", new { operation = "power", value = "off" })).StatusCode);

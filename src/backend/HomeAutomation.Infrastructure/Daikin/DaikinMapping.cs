@@ -10,9 +10,16 @@ public sealed record DaikinRange(decimal Min, decimal Max, decimal Step)
 }
 
 public sealed record DaikinControls(string[] Power, string[] Modes, DaikinRange? Temperature, DaikinRange? Fan);
+public enum DaikinEquipment { Unknown, AirConditioner, HeatPump }
+public sealed record DaikinWater(decimal? Leaving, decimal? Target, DaikinRange? TargetRange,
+    string? ControlMode, string? SetpointMode, bool? Warning, bool? Emergency,
+    string? ProviderUnit = null, bool? TargetAdvertisedWritable = null);
+
 internal sealed record DaikinDevice(string Gateway, string Point, string Name, string Model, Connectivity Connectivity,
     DateTimeOffset ObservedAt, DateTimeOffset? SourceAt, string? Power, string? Mode, decimal? Indoor, decimal? Outdoor,
-    decimal? Target, decimal? Humidity, decimal? Fan, string? FanMode, DaikinControls Controls, string? Fault)
+    decimal? Target, decimal? Humidity, decimal? Fan, string? FanMode, DaikinControls Controls, string? Fault,
+    DaikinEquipment Equipment = DaikinEquipment.Unknown, DaikinWater? Water = null, bool? Available = null,
+    DateTimeOffset? GatewayTimestamp = null)
 {
     public string ExternalId => Gateway + ":" + Point;
 }
@@ -22,6 +29,8 @@ internal sealed record DaikinChange(string Characteristic, string? Path, object 
 
 internal static class DaikinMapping
 {
+    public static DaikinControls ReadOnlyControls { get; } = new([], [], null, null);
+
     public static IReadOnlyList<DaikinDevice> Discover(JsonElement body, DateTimeOffset received)
     {
         if (body.ValueKind != JsonValueKind.Array) throw new DaikinFailure("invalidResponse");
@@ -40,19 +49,43 @@ internal static class DaikinMapping
                 JsonValueKind.False => Connectivity.Offline,
                 _ => Connectivity.Unknown
             };
-            foreach (var point in gateway.Node("managementPoints").EnumerateArray())
+            var managementPoints = gateway.Node("managementPoints");
+            var gatewayType = gateway.Node("type").Text();
+            var hydronicGateway = gatewayType == "heating-wlan" || managementPoints.EnumerateArray().Any(point =>
+                point.Node("managementPointType").Text() == "indoorUnitHydro");
+            var gatewayModel = gateway.Node("deviceModel").Text();
+            var airGateway = gatewayModel is "air-to-air-heat-pump" or "air-conditioner" ||
+                gatewayType is "dx23" or "dx4" && gatewayModel == gatewayType &&
+                managementPoints.EnumerateArray().Any(point => point.Node("managementPointType").Text() == "indoorUnit");
+            var gatewayTimestamp = Timestamp(gateway.Node("timestamp"), received);
+            foreach (var point in managementPoints.EnumerateArray())
             {
                 var pointId = point.Node("embeddedId").Text();
                 if (point.Node("managementPointType").Text() != "climateControl" || !SafeId(pointId)) continue;
 
                 var mode = point.Node("operationMode").Value().Text();
                 var power = point.Node("onOffMode").Value().Text();
-                var setpoint = point.Node("temperatureControl").Value().Node("operationModes").Node(mode)
-                    .Node("setpoints").Node("roomTemperature");
+                var modes = point.Node("temperatureControl").Value().Node("operationModes");
+                var setpoint = modes.Node(mode).Node("setpoints").Node("roomTemperature");
                 var fan = point.Node("fanControl").Value().Node("operationModes").Node(mode).Node("fanSpeed");
                 var fanMode = fan.Node("currentMode").Value().Text();
                 var speed = fan.Node("modes").Node("fixed");
                 var sensors = point.Node("sensoryData").Value();
+                var leaving = sensors.Node("leavingWaterTemperature");
+                var heatingWater = modes.Node("heating").Node("setpoints").Node("leavingWaterTemperature");
+                var equipment = hydronicGateway || leaving.ValueKind == JsonValueKind.Object ||
+                    heatingWater.ValueKind == JsonValueKind.Object ? DaikinEquipment.HeatPump
+                    : airGateway ? DaikinEquipment.AirConditioner
+                    : DaikinEquipment.Unknown;
+                var water = equipment == DaikinEquipment.HeatPump
+                    ? new DaikinWater(Celsius(leaving), Celsius(heatingWater),
+                        IsCelsius(heatingWater) ? Range(heatingWater, requireSettable: false) : null,
+                        Label(point.Node("controlMode").Value().Text(), 32), Label(point.Node("setpointMode").Value().Text(), 32),
+                        Flag(point.Node("isInWarningState").Value()), Flag(point.Node("isInEmergencyState").Value()),
+                        IsCelsius(leaving) ? leaving.Node("unit").Text() :
+                        IsCelsius(heatingWater) ? heatingWater.Node("unit").Text() : null,
+                        Flag(heatingWater.Node("settable")))
+                    : null;
                 var fault = point.Node("isInErrorState").Value().ValueKind == JsonValueKind.True
                     ? Label(point.Node("errorCode").Value().Text(), 64) ?? "DEVICE_FAULT" : null;
                 var device = new DaikinDevice(id!, pointId!, Label(point.Node("name").Value().Text(), 128) ?? "Daikin climate device",
@@ -61,8 +94,11 @@ internal static class DaikinMapping
                     sensors.Node("roomTemperature").Value().Number(), sensors.Node("outdoorTemperature").Value().Number(),
                     setpoint.Value().Number(), Percent(sensors.Node("roomHumidity").Value().Number()),
                     fanMode == "fixed" && speed.Value().Number() is >= 0 and var fanStep ? fanStep : null, Label(fanMode, 32),
-                    new DaikinControls(Values(point.Node("onOffMode"), "on", "off"), Values(point.Node("operationMode"), "heating", "cooling"),
-                        mode is "heating" or "cooling" ? Range(setpoint) : null, fanMode == "fixed" ? Range(speed) : null), fault);
+                    equipment == DaikinEquipment.AirConditioner
+                        ? new DaikinControls(Values(point.Node("onOffMode"), "on", "off"), Values(point.Node("operationMode"), "heating", "cooling"),
+                            mode is "heating" or "cooling" && IsCelsius(setpoint) ? Range(setpoint) : null,
+                            fanMode == "fixed" ? Range(speed) : null)
+                        : ReadOnlyControls, fault, equipment, water, Available: true, GatewayTimestamp: gatewayTimestamp);
                 if (!devices.TryAdd(device.ExternalId, device)) throw new DaikinFailure("duplicateIdentity");
             }
         }
@@ -71,7 +107,7 @@ internal static class DaikinMapping
 
     public static DaikinChange? Validate(DaikinDevice device, DaikinCommand command)
     {
-        if (command.Value is null or { Length: > 32 }) return null;
+        if (device.Equipment != DaikinEquipment.AirConditioner || command.Value is null or { Length: > 32 }) return null;
         return command.Operation switch
         {
             "power" when device.Controls.Power.Contains(command.Value) =>
@@ -87,11 +123,22 @@ internal static class DaikinMapping
         };
     }
 
+    private static bool IsCelsius(JsonElement characteristic) => characteristic.Node("unit").Text() is "C" or "°C";
+
+    private static decimal? Celsius(JsonElement characteristic) => IsCelsius(characteristic) ? characteristic.Value().Number() : null;
+
+    private static bool? Flag(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        _ => null
+    };
+
     private static decimal? Numeric(string value, DaikinRange? range) =>
         range is not null && decimal.TryParse(value, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
             CultureInfo.InvariantCulture, out var result) && range.Allows(result) ? result : null;
 
-    private static DaikinRange? Range(JsonElement node) => node.Settable() &&
+    private static DaikinRange? Range(JsonElement node, bool requireSettable = true) => (!requireSettable || node.Settable()) &&
         node.Node("minValue").Number() is >= -100 and <= 200 and var min &&
         node.Node("maxValue").Number() is >= -100 and <= 200 and var max &&
         node.Node("stepValue").Number() is > 0 and <= 100 and var step && min <= max ? new(min, max, step) : null;

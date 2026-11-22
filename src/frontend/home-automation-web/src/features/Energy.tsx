@@ -40,10 +40,21 @@ export function TrendCard({ property, title, curves = production, hours = 1, pol
     queryFn: ({ signal }: { signal: AbortSignal }) => api.history(property.id, curve.metric, hours, curve.endpoint, signal),
     refetchInterval: 15000,
   })) })
-  const points = mergeHistory(queries.map((query, index) => ({
-    metric: curves[index].metric, points: query.data ?? [],
-  })), pollSeconds)
-  const ready = points.some(point => curves.some(curve => typeof point[curve.metric] === 'number'))
+  return <HistoryChart property={property} title={title} curves={curves} hours={hours} pollSeconds={pollSeconds}
+    unit={unit} action={action} pending={queries.some(query => query.isPending)} failed={queries.some(query => query.isError)}
+    series={queries.map((query, index) => ({
+      metric: curves[index].metric, points: query.data ?? [],
+    }))} />
+}
+
+export function HistoryChart({ property, title, curves, hours, pollSeconds, unit, action, pending, failed, series,
+  minimumPoints = 1 }: {
+  property: Property; title: string; curves: Curve[]; hours: number; pollSeconds: number; unit: string
+  action?: React.ReactNode; pending: boolean; failed: boolean; series: Parameters<typeof mergeHistory>[0]
+  minimumPoints?: number
+}) {
+  const points = mergeHistory(series, pollSeconds)
+  const ready = curves.some(curve => points.filter(point => typeof point[curve.metric] === 'number').length >= minimumPoints)
   const showSeconds = points.length > 0 && points.at(-1)!.time - points[0].time < 5 * 60 * 1000
   const formatter = new Intl.DateTimeFormat(undefined, {
     hour: '2-digit', minute: '2-digit', second: showSeconds ? '2-digit' : undefined, timeZone: property.timeZone,
@@ -57,7 +68,7 @@ export function TrendCard({ property, title, curves = production, hours = 1, pol
       {action}
     </div>
     <ul className="chart-legend">{curves.map(curve => <li key={curve.metric}><span style={{ background: curve.color }} />{curve.label}</li>)}</ul>
-    {queries.some(query => query.isError) && <p role="alert" className="muted">Some historical readings are unavailable.</p>}
+    {failed && <p role="alert" className="muted">Some historical readings are unavailable.</p>}
     {ready ? <div className="chart" role="img" aria-label={`${title}, ${range}`}>
       <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <ComposedChart data={points} margin={{ left: -12, right: 12, top: 10, bottom: 0 }}>
@@ -72,7 +83,7 @@ export function TrendCard({ property, title, curves = production, hours = 1, pol
               strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />)}
         </ComposedChart>
       </ResponsiveContainer>
-    </div> : <div className="chart-empty" role="status">{queries.some(query => query.isPending) ? 'Loading readings…' : 'Waiting for recorded readings.'}</div>}
+    </div> : <div className="chart-empty" role="status">{pending ? 'Loading readings…' : 'Waiting for recorded readings.'}</div>}
     {ready && <div className="chart-summary"><span>Latest recorded</span>{curves.map(curve => {
       const value = points.findLast(point => typeof point[curve.metric] === 'number')?.[curve.metric]
       return <span key={curve.metric}><strong>{value == null ? '—' : `${value.toLocaleString()} ${unit}`}</strong> {curve.label}</span>
