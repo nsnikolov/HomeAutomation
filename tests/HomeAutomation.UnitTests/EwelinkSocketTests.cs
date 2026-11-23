@@ -46,6 +46,54 @@ public sealed class EwelinkSocketTests
     }
 
     [Fact]
+    public void RecentElectricalReportsUseTheirOwnWatermarkAcrossHttpReconciliation()
+    {
+        var meter = new EwelinkDevice("fixture-device", "Fixture meter", "PSF-X67", "", false, Connectivity.Online, Now,
+            true, false, Now, new Dictionary<Metric, EwelinkMeasurement> { [Metric.ActivePower] = new(241.44, Now) }, Uiid: 32);
+        using var packet = JsonDocument.Parse("""{"power":"500.00","switch":"on"}""");
+        var measuredAt = Now.AddMilliseconds(-100);
+        var (live, samples) = EwelinkMapping.MergeEvent(meter, packet.RootElement, measuredAt);
+        Assert.Equal(Metric.ActivePower, Assert.Single(samples).Metric);
+        Assert.Equal(measuredAt, samples[0].ObservedAt);
+        Assert.Null(live.SocketRelay); // Electrical timestamp arbitration cannot bypass the relay check.
+        Assert.False(live.Relay);
+        Assert.Equal(500, live.Measurements![Metric.ActivePower].Value);
+
+        var immediatePoll = EwelinkMapping.Merge(meter with { SeenAt = Now.AddSeconds(10) }, live);
+        Assert.Equal(500, immediatePoll.Measurements![Metric.ActivePower].Value);
+        Assert.True(immediatePoll.Measurements[Metric.ActivePower].FromSocket);
+        var laterPoll = EwelinkMapping.Merge(meter with { SeenAt = Now.AddMinutes(3) }, immediatePoll);
+        Assert.Equal(241.44, laterPoll.Measurements![Metric.ActivePower].Value);
+        Assert.Equal(measuredAt, laterPoll.Measurements[Metric.ActivePower].SocketTime);
+        var trace = new EwelinkSocketTrace();
+        Assert.Empty(EwelinkMapping.MergeEvent(laterPoll, packet.RootElement, measuredAt, trace).Samples);
+        Assert.Empty(EwelinkMapping.MergeEvent(laterPoll, packet.RootElement, measuredAt.AddMilliseconds(-1), trace).Samples);
+        Assert.Equal("reject.electricalDuplicate=1, reject.electricalOutOfOrder=1", trace.Drain());
+    }
+
+    [Fact]
+    public void ElectricalTraceRecordsOnlyKnownKindsAndReasonCodes()
+    {
+        var trace = new EwelinkSocketTrace();
+        using var packet = JsonDocument.Parse("""
+            {"action":"update","userAgent":"device","apikey":"dummy-secret","deviceid":"fixture-id",
+             "d_seq":123,"ts":0,"params":{"power":"500.0","current":3.2,"unrecognized":"unused"}}
+            """);
+        trace.Shape(packet.RootElement, packet.RootElement.GetProperty("params"));
+        Assert.Null(EwelinkSocketProtocol.DeviceEventTime(packet.RootElement, Now, trace));
+        var summary = trace.Drain();
+        Assert.Contains("electricalFrames=1", summary, StringComparison.Ordinal);
+        Assert.Contains("field.power.String=1", summary, StringComparison.Ordinal);
+        Assert.Contains("field.current.Number=1", summary, StringComparison.Ordinal);
+        Assert.Contains("reject.timestampNotEpochMilliseconds=1", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("dummy-secret", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("fixture-id", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("500.0", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("unrecognized", summary, StringComparison.Ordinal);
+        Assert.Empty(trace.Drain());
+    }
+
+    [Fact]
     public void ReconnectsOnlyWithTheCurrentGrantAfterRotationOrDisconnect()
     {
         var lease = new EwelinkSocketIdentity("fixture-owner", [1, 2], Tokens);
@@ -180,8 +228,10 @@ public sealed class EwelinkSocketTests
         var clock = new SessionClock();
         var seen = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var authorized = false;
+        var trace = new EwelinkSocketTrace();
         var session = EwelinkSocketSession.RunAsync(socket, Tokens, "fixture-app", clock, () => authorized = true,
-            (id, _, _, _) => { seen.SetResult(id); return Task.CompletedTask; }, _ => Task.FromResult(true), stop.Token);
+            (id, _, _, _) => { seen.SetResult(id); return Task.CompletedTask; }, _ => Task.FromResult(true), stop.Token,
+            trace: trace);
         using var handshake = JsonDocument.Parse(await socket.Sent.Reader.ReadAsync(stop.Token));
         Assert.Equal("userOnline", handshake.RootElement.GetProperty("action").GetString());
         Assert.Equal("fixture-app", handshake.RootElement.GetProperty("appid").GetString());
@@ -201,6 +251,12 @@ public sealed class EwelinkSocketTests
         Assert.Equal("ping", await socket.Sent.Reader.ReadAsync(stop.Token));
         await stop.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session);
+        var summary = trace.Drain();
+        Assert.Contains("electricalFrames=4", summary, StringComparison.Ordinal);
+        Assert.Contains("queuedElectricalFrames=1", summary, StringComparison.Ordinal);
+        Assert.Contains("reject.accountKey=1", summary, StringComparison.Ordinal);
+        Assert.Contains("reject.sender=1", summary, StringComparison.Ordinal);
+        Assert.Contains("reject.timestampStale=1", summary, StringComparison.Ordinal);
     }
 
     [Fact]

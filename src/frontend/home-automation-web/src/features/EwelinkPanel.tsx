@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
 import { api, ApiError } from '../shared/api'
@@ -51,6 +51,22 @@ export function EwelinkPanel({ property }: { property: Property }) {
   const key = ['property', property.id, 'ewelink']
   const query = useQuery({ queryKey: key, queryFn: ({ signal }) => api.ewelink(property.id, signal), refetchInterval: 30_000 })
   const view = query.data
+  const trace = params.get('ewelinkDiagnostics') === '1'
+  useEffect(() => {
+    if (!trace || !view) return
+    let electricalRows = 0
+    let liveRows = 0
+    let waitingDevices = 0
+    for (const device of view.devices) {
+      if (device.electricalReporting?.status === 'awaitingReport') waitingDevices++
+      for (const reading of device.measurements ?? []) {
+        if (reading.metric !== 'activePower' && reading.metric !== 'voltage' && reading.metric !== 'current') continue
+        electricalRows++
+        if (reading.quality === 'fresh' && device.socketMetrics?.includes(reading.metric)) liveRows++
+      }
+    }
+    console.info('eWeLink React trace', { cards: view.devices.length, electricalRows, liveRows, waitingDevices })
+  }, [trace, view])
   useEwelinkElectricalViewer(property.id, view?.canViewLiveElectrical === true)
   const rooms = useQuery({
     queryKey: ['property', property.id, 'rooms'], queryFn: ({ signal }) => api.rooms(property.id, signal), enabled: !!view?.manage,

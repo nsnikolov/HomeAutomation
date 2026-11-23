@@ -18,6 +18,7 @@ public sealed class EwelinkOptions
     public int PollMinutes { get; set; } = 5;
     public bool InventoryDiagnostics { get; set; }
     public bool EnableWebSocket { get; set; }
+    public bool WebSocketDiagnostics { get; set; }
     public bool EnableLiveElectricalReporting { get; set; }
     public bool LiveElectricalConfigured => EnableWebSocket && EnableLiveElectricalReporting;
     public bool EnableWrites { get; set; }

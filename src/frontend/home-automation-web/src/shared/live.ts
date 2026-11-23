@@ -12,6 +12,12 @@ export function useLiveUpdates(propertyId: number) {
     let ewelinkRefresh: ReturnType<typeof setTimeout> | undefined
     let ewelinkFetching = false
     let ewelinkDirty = false
+    let ewelinkTraceTimer: ReturnType<typeof setTimeout> | undefined
+    let ewelinkNotices = 0
+    let ewelinkElectricalNotices = 0
+    let ewelinkWrongProperty = 0
+    let ewelinkRefreshes = 0
+    let ewelinkRefreshErrors = 0
     let attempts = 0
     const connection = new HubConnectionBuilder()
       .withUrl('/hubs/monitoring', { transport: HttpTransportType.WebSockets | HttpTransportType.LongPolling })
@@ -52,6 +58,18 @@ export function useLiveUpdates(propertyId: number) {
     connection.on('stateChanged', (event: { propertyId: number }) => {
       if (event.propertyId === propertyId) invalidate()
     })
+    const traceEwelink = () => {
+      if (disposed || new URLSearchParams(window.location.search).get('ewelinkDiagnostics') !== '1') return false
+      ewelinkTraceTimer ??= setTimeout(() => {
+        ewelinkTraceTimer = undefined
+        console.info('eWeLink SignalR trace', {
+          notices: ewelinkNotices, electricalNotices: ewelinkElectricalNotices, wrongProperty: ewelinkWrongProperty,
+          refreshes: ewelinkRefreshes, refreshErrors: ewelinkRefreshErrors,
+        })
+        ewelinkNotices = ewelinkElectricalNotices = ewelinkWrongProperty = ewelinkRefreshes = ewelinkRefreshErrors = 0
+      }, 10_000)
+      return true
+    }
     const scheduleEwelinkRefresh = () => {
       if (disposed || ewelinkFetching || !ewelinkDirty || ewelinkRefresh !== undefined) return
       ewelinkRefresh = setTimeout(() => {
@@ -59,14 +77,27 @@ export function useLiveUpdates(propertyId: number) {
         if (disposed) return
         ewelinkDirty = false
         ewelinkFetching = true
-        void client.invalidateQueries({ queryKey: ['property', propertyId, 'ewelink'], exact: true })
+        const queryKey = ['property', propertyId, 'ewelink']
+        void client.invalidateQueries({ queryKey, exact: true })
           .finally(() => {
+            if (traceEwelink()) {
+              const state = client.getQueryState(queryKey)
+              if (state?.status === 'error') ewelinkRefreshErrors++
+              else if (state?.status === 'success' && !state.isInvalidated) ewelinkRefreshes++
+            }
             ewelinkFetching = false
             scheduleEwelinkRefresh()
           })
       }, 250)
     }
-    connection.on('ewelinkChanged', (event: { propertyId: number }) => {
+    connection.on('ewelinkChanged', (event: { propertyId: number; electricalTelemetry?: boolean }) => {
+      if (traceEwelink()) {
+        if (event.propertyId === propertyId) {
+          ewelinkNotices++
+          if (event.electricalTelemetry) ewelinkElectricalNotices++
+        }
+        else ewelinkWrongProperty++
+      }
       if (event.propertyId !== propertyId) return
       ewelinkDirty = true
       scheduleEwelinkRefresh()
@@ -80,6 +111,7 @@ export function useLiveUpdates(propertyId: number) {
       disposed = true
       clearTimeout(retry)
       clearTimeout(ewelinkRefresh)
+      clearTimeout(ewelinkTraceTimer)
       connection.off('stateChanged')
       connection.off('ewelinkChanged')
       void connection.stop().catch(() => undefined)

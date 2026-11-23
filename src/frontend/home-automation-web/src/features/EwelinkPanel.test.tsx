@@ -53,12 +53,19 @@ it('distinguishes live measurements from last-known values and retains their tim
         { metric: 'voltage', unit: 'V', observedAt: time, number: 230, flag: null, code: null, quality: 'stale' },
       ] }],
   })
+  const trace = vi.spyOn(console, 'info').mockImplementation(() => {})
   try {
-    view()
+    view('/?ewelinkDiagnostics=1')
     expect((await screen.findByText('Active power')).nextElementSibling).toHaveTextContent(/54.2.*Live/)
     expect(screen.getByText('Voltage').nextElementSibling).toHaveTextContent(/230.*Last known/)
     expect(screen.getByText('Active power').nextElementSibling?.querySelector('time')).toHaveAttribute('dateTime', time)
-  } finally { status.mockRestore() }
+    expect(trace).toHaveBeenCalledExactlyOnceWith('eWeLink React trace', {
+      cards: 1, electricalRows: 2, liveRows: 1, waitingDevices: 0,
+    })
+  } finally {
+    status.mockRestore()
+    trace.mockRestore()
+  }
 })
 
 it('explains per-device opt-in and reveals commands only after the preference is saved', async () => {

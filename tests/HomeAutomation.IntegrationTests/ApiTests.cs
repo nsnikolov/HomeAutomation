@@ -74,10 +74,11 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
 
         var notifier = host.Services.GetRequiredService<IEwelinkLiveNotifier>();
         await notifier.ChangedAsync(99, ct);
-        await notifier.ChangedAsync(1, ct);
+        await notifier.ChangedAsync(1, ct, electricalTelemetry: true);
         using var notice = JsonDocument.Parse(await ReceiveAsync());
         Assert.Equal("ewelinkChanged", notice.RootElement.GetProperty("target").GetString());
         Assert.Equal(1, notice.RootElement.GetProperty("arguments")[0].GetProperty("propertyId").GetInt64());
+        Assert.True(notice.RootElement.GetProperty("arguments")[0].GetProperty("electricalTelemetry").GetBoolean());
 
         ValueTask SendAsync(string record) => socket.SendAsync(Encoding.UTF8.GetBytes(record + "\u001e").AsMemory(),
             WebSocketMessageType.Text, true, ct);

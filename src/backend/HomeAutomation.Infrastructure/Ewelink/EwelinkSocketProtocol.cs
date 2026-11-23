@@ -51,20 +51,38 @@ internal static class EwelinkSocketProtocol
         return TimeSpan.FromSeconds(interval is { } seconds ? seconds + 7 : 90);
     }
 
-    public static DateTimeOffset? DeviceEventTime(JsonElement message, DateTimeOffset received)
+    public static DateTimeOffset? DeviceEventTime(JsonElement message, DateTimeOffset received, EwelinkSocketTrace? trace = null)
     {
-        if (EwelinkMapping.Text(message, "action", 16) != "update" ||
-            EwelinkMapping.Text(message, "userAgent", 16) != "device")
+        if (EwelinkMapping.Text(message, "action", 16) != "update")
+        {
+            trace?.Count("reject.action");
             return null;
+        }
+        if (EwelinkMapping.Text(message, "userAgent", 16) != "device")
+        {
+            trace?.Count("reject.sender");
+            return null;
+        }
         var sequence = EwelinkMapping.Node(message, "d_seq");
         long milliseconds;
         if (sequence.ValueKind != JsonValueKind.Undefined
                 ? sequence.ValueKind != JsonValueKind.Number || !sequence.TryGetInt64(out milliseconds)
                 : !long.TryParse(EwelinkMapping.Text(message, "sequence", 16), NumberStyles.None,
                     CultureInfo.InvariantCulture, out milliseconds))
+        {
+            trace?.Count("reject.timestampMissingOrInvalid");
             return null;
-        if (milliseconds < (received - Freshness).ToUnixTimeMilliseconds() || milliseconds > received.ToUnixTimeMilliseconds())
+        }
+        if (milliseconds < (received - Freshness).ToUnixTimeMilliseconds())
+        {
+            trace?.Count(milliseconds < 1_000_000_000_000 ? "reject.timestampNotEpochMilliseconds" : "reject.timestampStale");
             return null;
+        }
+        if (milliseconds > received.ToUnixTimeMilliseconds())
+        {
+            trace?.Count("reject.timestampFuture");
+            return null;
+        }
         return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);
     }
 
