@@ -44,16 +44,15 @@ public sealed class EwelinkService
 {
     private readonly EwelinkOptions options;
     private readonly EwelinkClient client;
-    private readonly EwelinkStore store;
+    private readonly IEwelinkStore store;
     private readonly EwelinkGate gate;
     private readonly EwelinkVault vault;
     private readonly IMonitoringReader permissions;
-    private readonly Migrations migrations;
     private readonly TelemetryWriter writer;
     private readonly TimeProvider clock;
 
-    internal EwelinkService(EwelinkOptions options, EwelinkClient client, EwelinkStore store, EwelinkGate gate,
-        EwelinkVault vault, IMonitoringReader permissions, Migrations migrations, TelemetryWriter writer, TimeProvider clock)
+    internal EwelinkService(EwelinkOptions options, EwelinkClient client, IEwelinkStore store, EwelinkGate gate,
+        EwelinkVault vault, IMonitoringReader permissions, TelemetryWriter writer, TimeProvider clock)
     {
         this.options = options;
         this.client = client;
@@ -61,7 +60,6 @@ public sealed class EwelinkService
         this.gate = gate;
         this.vault = vault;
         this.permissions = permissions;
-        this.migrations = migrations;
         this.writer = writer;
         this.clock = clock;
     }
@@ -71,7 +69,7 @@ public sealed class EwelinkService
         services.AddSingleton<EwelinkGate>();
         services.AddSingleton<EwelinkPace>();
         services.AddSingleton<EwelinkVault>();
-        services.AddScoped<EwelinkStore>();
+        services.AddScoped<IEwelinkStore, EwelinkStore>();
         services.AddHttpClient<EwelinkClient>(http =>
         {
             http.Timeout = TimeSpan.FromSeconds(10);
@@ -79,15 +77,15 @@ public sealed class EwelinkService
         }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false })
             .RemoveAllLoggers();
         services.AddScoped(provider => new EwelinkService(provider.GetRequiredService<EwelinkOptions>(),
-            provider.GetRequiredService<EwelinkClient>(), provider.GetRequiredService<EwelinkStore>(), provider.GetRequiredService<EwelinkGate>(),
-            provider.GetRequiredService<EwelinkVault>(), provider.GetRequiredService<IMonitoringReader>(), provider.GetRequiredService<Migrations>(),
+            provider.GetRequiredService<EwelinkClient>(), provider.GetRequiredService<IEwelinkStore>(), provider.GetRequiredService<EwelinkGate>(),
+            provider.GetRequiredService<EwelinkVault>(), provider.GetRequiredService<IMonitoringReader>(),
             provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<TimeProvider>()));
         services.AddHostedService<EwelinkWorker>();
     }
 
     public bool IsSupportedRegion(string? region) => EwelinkClient.Host(region) is not null;
     public string AuthorizationUrl(string state) => client.Authorize(state);
-    public Task<bool> SchemaReadyAsync(CancellationToken ct) => migrations.VerifyAsync(ct, includeEwelink: true);
+    public Task<bool> SchemaReadyAsync(CancellationToken ct) => store.SchemaReadyAsync(ct);
 
     public async Task<EwelinkView> ViewAsync(string user, long property, bool manage, CancellationToken ct)
     {
@@ -127,6 +125,7 @@ public sealed class EwelinkService
             if (saved is not null && saved.Owner != owner) throw new EwelinkFailure("forbidden");
             if (saved?.Status is "rateLimited" or "quotaExceeded" or "accessOrQuotaLimited" &&
                 Utc(saved.NextSync) > clock.GetUtcNow()) throw new EwelinkFailure(saved.Status);
+            ct.ThrowIfCancellationRequested();
             var tokens = await client.ExchangeAsync(code, region, CancellationToken.None);
             await store.SaveTokensAsync(owner, vault.Seal(owner, options.AppId!, tokens), CancellationToken.None);
             if (saved?.NextSync is null || Utc(saved.NextSync) <= clock.GetUtcNow())

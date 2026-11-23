@@ -27,6 +27,8 @@ public sealed class EwelinkFailure(string status, DateTimeOffset? retryAt = null
 {
     public string Status { get; } = status;
     public DateTimeOffset? RetryAt { get; } = retryAt;
+    public int? HttpStatus { get; init; }
+    public int? ProviderCode { get; init; }
 }
 
 internal sealed record EwelinkTokens(string Region, string Access, string Refresh, DateTimeOffset AccessExpires, DateTimeOffset RefreshExpires);
@@ -150,17 +152,29 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
         using var response = await http.SendAsync(request, ct);
         var retry = response.Headers.RetryAfter;
         var retryAt = retry?.Date ?? (retry?.Delta is { } delta ? clock.GetUtcNow() + delta : null);
-        if (!response.IsSuccessStatusCode) throw Failure((int)response.StatusCode, retryAt, response.StatusCode == HttpStatusCode.Forbidden);
+        var httpStatus = (int)response.StatusCode;
+        int? providerCode = null;
         try
         {
             using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-            var error = EwelinkMapping.Integer(json.RootElement, "error") ?? throw new EwelinkFailure("invalidResponse");
-            if (error != 0) throw Failure(error, retryAt);
-            var data = EwelinkMapping.Node(json.RootElement, "data");
-            if (data.ValueKind != JsonValueKind.Object) throw new EwelinkFailure("invalidResponse");
-            return data.Clone();
+            providerCode = EwelinkMapping.Integer(json.RootElement, "error");
+            if (response.IsSuccessStatusCode && providerCode == 0 &&
+                EwelinkMapping.Node(json.RootElement, "data") is { ValueKind: JsonValueKind.Object } data)
+                return data.Clone();
         }
-        catch (JsonException) { throw new EwelinkFailure("invalidResponse"); }
+        catch (JsonException)
+        {
+            // A non-JSON gateway response still has an HTTP status.
+        }
+
+        var failure = !response.IsSuccessStatusCode
+            ? Failure(httpStatus, retryAt, response.StatusCode == HttpStatusCode.Forbidden)
+            : providerCode is { } error && error != 0 ? Failure(error, retryAt) : new EwelinkFailure("invalidResponse");
+        throw new EwelinkFailure(failure.Status, failure.RetryAt)
+        {
+            HttpStatus = httpStatus,
+            ProviderCode = providerCode
+        };
     }
 
     private EwelinkFailure Failure(int code, DateTimeOffset? retryAt, bool httpForbidden = false) => code switch

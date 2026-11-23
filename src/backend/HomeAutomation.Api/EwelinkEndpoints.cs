@@ -2,7 +2,9 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using HomeAutomation.Application;
 using HomeAutomation.Infrastructure.Ewelink;
+using HomeAutomation.Infrastructure.MySql;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.WebUtilities;
 
 namespace HomeAutomation.Api;
@@ -18,32 +20,19 @@ internal sealed class EwelinkConsent(TimeProvider clock)
             return pending = new(user, property, Random(), Random(), clock.GetUtcNow().AddMinutes(10));
     }
 
-    public long? Accept(string? state, string? cookie, string code, string region)
+    public Pending? Take(string? state, string? cookie)
     {
         lock (sync)
         {
-            if (pending is not { Grant: null } flow || flow.Expires <= clock.GetUtcNow() ||
+            if (pending is not { } flow || flow.Expires <= clock.GetUtcNow() ||
                 flow.State != state || flow.Cookie != cookie) return null;
-            pending = flow with { Grant = new(code, region) };
-            return flow.Property;
-        }
-    }
-
-    public Grant? Take(string user, long property, string? cookie)
-    {
-        lock (sync)
-        {
-            if (pending is not { Grant: not null } flow || flow.Expires <= clock.GetUtcNow() ||
-                flow.User != user || flow.Property != property || flow.Cookie != cookie) return null;
             pending = null;
-            return flow.Grant;
+            return flow;
         }
     }
 
     private static string Random() => WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
-    internal sealed record Pending(string User, long Property, string State, string Cookie, DateTimeOffset Expires,
-        Grant? Grant = null);
-    internal sealed record Grant(string Code, string Region);
+    internal sealed record Pending(string User, long Property, string State, string Cookie, DateTimeOffset Expires);
 }
 
 internal static class EwelinkEndpoints
@@ -53,16 +42,41 @@ internal static class EwelinkEndpoints
 
     public static void MapEwelink(this WebApplication app)
     {
-        app.MapGet(Route + "/callback", (HttpContext http, EwelinkConsent consent, EwelinkService service,
-            EwelinkOptions options, string? code, string? region, string? state) =>
+        app.MapGet(Route + "/callback", async (HttpContext http, EwelinkConsent consent, EwelinkService service,
+            EwelinkOptions options, UserManager<LocalUser> users, IMonitoringReader access, ILogger<EwelinkConsent> logger,
+            string? code, string? region, string? state, CancellationToken ct) =>
         {
             http.Response.Headers["Referrer-Policy"] = "no-referrer";
             if (!MatchesOrigin(http.Request, options)) return Results.StatusCode(403);
-            if (string.IsNullOrWhiteSpace(code) || code.Length > 4096 || !service.IsSupportedRegion(region) ||
-                consent.Accept(state, http.Request.Cookies[Cookie], code, region!) is not { } property)
+            if (consent.Take(state, http.Request.Cookies[Cookie]) is not { } pending)
                 return Results.BadRequest("eWeLink authorization did not complete. Restart the connection from Home Automation.");
 
-            return Results.Redirect($"/properties/{property}/ewelink?connect=finish");
+            http.Response.Cookies.Delete(Cookie, CookieSettings());
+            var destination = $"/properties/{pending.Property}/ewelink";
+            var owner = await users.FindByIdAsync(pending.User);
+            if (owner is null || !options.IsOperator(owner.UserName) ||
+                !await access.CanReadAsync(pending.User, pending.Property, ct)) return Results.StatusCode(403);
+            if (string.IsNullOrWhiteSpace(code) || code.Length > 4096 || !service.IsSupportedRegion(region) ||
+                !await service.SchemaReadyAsync(ct)) return Results.Redirect(destination + "?connect=failed");
+            try
+            {
+                await service.ConnectAsync(pending.User, code, region!, ct);
+                return Results.Redirect(destination + "?connect=success");
+            }
+            catch (EwelinkFailure error)
+            {
+                logger.LogWarning("eWeLink connection failed with {Status}, upstream HTTP {HttpStatus}, CoolKit error {ProviderCode}.",
+                    error.Status, error.HttpStatus, error.ProviderCode);
+            }
+            catch (HttpRequestException error)
+            {
+                logger.LogWarning("eWeLink connection transport failed with HTTP {HttpStatus}.", (int?)error.StatusCode);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                logger.LogWarning("eWeLink connection timed out.");
+            }
+            return Results.Redirect(destination + "?connect=failed");
         }).AllowAnonymous().RequireRateLimiting("session");
 
         var propertyRoutes = app.MapGroup(Route + "/{property:long}").RequireAuthorization();
@@ -106,18 +120,6 @@ internal static class EwelinkEndpoints
             var flow = consent.Begin(User(http), property);
             http.Response.Cookies.Append(Cookie, flow.Cookie, CookieSettings());
             return Results.Ok(new { authorizationUrl = service.AuthorizationUrl(flow.State) });
-        }).RequireRateLimiting("session");
-        propertyRoutes.MapPost("/complete", async (HttpContext http, long property, EwelinkConsent consent,
-            EwelinkService service, EwelinkOptions options, CancellationToken ct) =>
-        {
-            if (!MatchesOrigin(http.Request, options)) return Results.Conflict(new { status = "httpsRequired" });
-            var grant = consent.Take(User(http), property, http.Request.Cookies[Cookie]);
-            if (grant is null) return Results.BadRequest();
-            http.Response.Cookies.Delete(Cookie, CookieSettings());
-            try { await service.ConnectAsync(User(http), grant.Code, grant.Region, ct); }
-            catch (HttpRequestException) { return Results.StatusCode(503); }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Results.StatusCode(503); }
-            return Results.NoContent();
         }).RequireRateLimiting("session");
         propertyRoutes.MapPost("/disconnect", async (HttpContext http, EwelinkService service, CancellationToken ct) =>
         {

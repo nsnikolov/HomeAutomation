@@ -29,7 +29,7 @@ function Login() {
   const ewelinkRoute = useMatch('/properties/:propertyId/ewelink')
   const [parameters] = useSearchParams()
   const finishingConnection = (daikinRoute && parameters.get('onecta') === 'finish') ||
-    (ewelinkRoute && parameters.get('connect') === 'finish')
+    (ewelinkRoute && ['success', 'failed'].includes(parameters.get('connect') ?? ''))
   const login = useMutation({
     mutationFn: (values: { email: string; password: string }) => api.login(values.email, values.password),
     onSuccess: async () => {

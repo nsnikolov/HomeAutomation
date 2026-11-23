@@ -16,8 +16,10 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -100,8 +102,6 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         using var guest = host.CreateClient();
         using var viewer = AuthenticatedClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/ewelink/1")).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await guest.PostAsync("/api/v1/ewelink/1/complete", null)).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsync("/api/v1/ewelink/1/complete", null)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/v1/ewelink/99")).StatusCode);
         Assert.Contains("notConfigured", await viewer.GetStringAsync("/api/v1/ewelink/1"));
         Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsync("/api/v1/ewelink/1/connect", null)).StatusCode);
@@ -115,23 +115,15 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         var clock = new FlowClock();
         var consent = new EwelinkConsent(clock);
         var flow = consent.Begin("operator", 1);
-        Assert.Null(consent.Take("operator", 1, flow.Cookie));
-        Assert.Null(consent.Accept(flow.State, null, "fixture", "eu"));
-        Assert.Null(consent.Accept("unrelated", flow.Cookie, "fixture", "eu"));
-        Assert.Equal(1, consent.Accept(flow.State, flow.Cookie, "fixture", "eu"));
-        Assert.Null(consent.Accept(flow.State, flow.Cookie, "replacement", "us"));
-        Assert.Null(consent.Take("another-user", 1, flow.Cookie));
-        Assert.Null(consent.Take("operator", 2, flow.Cookie));
-        Assert.Null(consent.Take("operator", 1, "another-browser"));
-        Assert.Equal(new EwelinkConsent.Grant("fixture", "eu"), consent.Take("operator", 1, flow.Cookie));
-        Assert.Null(consent.Take("operator", 1, flow.Cookie));
-        flow = consent.Begin("operator", 1);
-        Assert.NotNull(consent.Accept(flow.State, flow.Cookie, "fixture", "eu"));
-        clock.Advance();
-        Assert.Null(consent.Take("operator", 1, flow.Cookie));
+        Assert.Null(consent.Take(flow.State, null));
+        Assert.Null(consent.Take(null, flow.Cookie));
+        Assert.Null(consent.Take("unrelated", flow.Cookie));
+        Assert.Null(consent.Take(flow.State, "another-browser"));
+        Assert.Equal(flow, consent.Take(flow.State, flow.Cookie));
+        Assert.Null(consent.Take(flow.State, flow.Cookie));
         flow = consent.Begin("operator", 1);
         clock.Advance();
-        Assert.Null(consent.Accept(flow.State, flow.Cookie, "fixture", "eu"));
+        Assert.Null(consent.Take(flow.State, flow.Cookie));
     }
 
     [Fact]
@@ -212,6 +204,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     [Fact]
     public async Task ForwardedHttpsLoginAndEwelinkCallbackRespectCrossSiteCookieBoundaries()
     {
+        var store = new EwelinkStoreFixture();
+        var provider = new EwelinkProviderFixture();
         using var loginHost = host.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
             services.AddAuthentication(options =>
@@ -227,6 +221,11 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
                 AppId = "fixture", AppSecret = "fixture", OperatorEmail = PasswordFixture.Email,
                 RedirectUri = "https://ha-dev.britishlab.org:5443/api/v1/ewelink/callback"
             });
+            services.RemoveAll<IEwelinkStore>();
+            services.AddSingleton<IEwelinkStore>(store);
+            services.Remove(services.Single(item => item.ServiceType == typeof(IHostedService) &&
+                item.ImplementationType == typeof(EwelinkWorker)));
+            services.AddHttpClient<EwelinkClient>().ConfigurePrimaryHttpMessageHandler(() => provider);
         }));
 
         var csrf = await Request("/api/v1/session/csrf");
@@ -256,43 +255,84 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         using var properties = await JsonDocument.ParseAsync(result.Response.Body);
         Assert.Equal(1, properties.RootElement[0].GetProperty("id").GetInt32());
 
-        var consent = loginHost.Services.GetRequiredService<EwelinkConsent>();
-        var flow = consent.Begin("viewer", 1);
-        var callback = await ReturnFromProvider(flow.Cookie, "192.0.2.20");
+        var sessionCookie = session.Split(';')[0];
+        var connectCsrf = await Request("/api/v1/session/csrf", context => context.Request.Headers.Cookie = sessionCookie);
+        using var connectPayload = await JsonDocument.ParseAsync(connectCsrf.Response.Body);
+        var connectToken = connectPayload.RootElement.GetProperty("token").GetString()!;
+        var connectCookies = sessionCookie + "; " + Assert.Single(connectCsrf.Response.Headers.SetCookie)!.Split(';')[0];
+        Assert.Equal(StatusCodes.Status400BadRequest, (await Start(1, false)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status404NotFound, (await Start(99, true)).Response.StatusCode);
+
+        var (state, correlation) = await Begin();
+        var callback = await ReturnFromProvider(state, correlation, "192.0.2.20");
         Assert.Equal(StatusCodes.Status403Forbidden, callback.Response.StatusCode);
-        callback = await ReturnFromProvider(null, "127.0.0.1");
+        callback = await ReturnFromProvider(state, null);
         Assert.Equal(StatusCodes.Status400BadRequest, callback.Response.StatusCode);
-        callback = await ReturnFromProvider(flow.Cookie, "127.0.0.1");
+        Assert.Equal(0, provider.Exchanges);
+
+        callback = await ReturnFromProvider(state, correlation);
         Assert.Equal(StatusCodes.Status302Found, callback.Response.StatusCode);
-        Assert.Equal("/properties/1/ewelink?connect=finish", callback.Response.Headers.Location);
+        Assert.Equal("/properties/1/ewelink?connect=success", callback.Response.Headers.Location);
         Assert.Equal("no-referrer", callback.Response.Headers["Referrer-Policy"]);
         Assert.Equal("no-store", callback.Response.Headers.CacheControl);
-        callback = await ReturnFromProvider(flow.Cookie, "127.0.0.1");
+        callback = await ReturnFromProvider(state, correlation);
         Assert.Equal(StatusCodes.Status400BadRequest, callback.Response.StatusCode);
+        Assert.Equal(1, provider.Exchanges);
+        Assert.Equal("viewer", store.Owner);
+        var envelope = Assert.IsType<byte[]>(store.Envelope);
+        var vault = loginHost.Services.GetRequiredService<EwelinkVault>();
+        Assert.Equal("fixture-access", vault.Open("viewer", "fixture", envelope).Access);
 
-        Assert.Equal(StatusCodes.Status401Unauthorized, (await Complete(1, false)).Response.StatusCode);
-        Assert.Equal(StatusCodes.Status404NotFound, (await Complete(99, true)).Response.StatusCode);
-        Assert.Equal(StatusCodes.Status400BadRequest, (await Complete(1, true)).Response.StatusCode);
-        Assert.NotNull(consent.Take("viewer", 1, flow.Cookie));
+        var consent = loginHost.Services.GetRequiredService<EwelinkConsent>();
+        var invalid = consent.Begin("missing-user", 1);
+        callback = await ReturnFromProvider(invalid.State, "homeautomation.ewelink=" + invalid.Cookie);
+        Assert.Equal(StatusCodes.Status403Forbidden, callback.Response.StatusCode);
+        var revoked = consent.Begin("viewer", 99);
+        callback = await ReturnFromProvider(revoked.State, "homeautomation.ewelink=" + revoked.Cookie);
+        Assert.Equal(StatusCodes.Status403Forbidden, callback.Response.StatusCode);
+        Assert.Equal(1, provider.Exchanges);
 
-        Task<HttpContext> ReturnFromProvider(string? correlation, string upstream) =>
+        (state, correlation) = await Begin();
+        provider.Reject = true;
+        callback = await ReturnFromProvider(state, correlation);
+        Assert.Equal(StatusCodes.Status302Found, callback.Response.StatusCode);
+        Assert.Equal("/properties/1/ewelink?connect=failed", callback.Response.Headers.Location);
+        Assert.Equal(StatusCodes.Status400BadRequest, (await ReturnFromProvider(state, correlation)).Response.StatusCode);
+        Assert.Equal(2, provider.Exchanges);
+        Assert.Equal(1, store.TokenWrites);
+        Assert.Same(envelope, store.Envelope);
+
+        Task<HttpContext> ReturnFromProvider(string stateValue, string? correlationCookie, string upstream = "127.0.0.1") =>
             Request("/api/v1/ewelink/callback", context =>
             {
                 context.Connection.RemoteIpAddress = IPAddress.Parse(upstream);
-                context.Request.QueryString = new QueryString($"?state={flow.State}&code=fixture&region=eu");
+                context.Request.QueryString = new QueryString($"?state={stateValue}&code=fixture&region=eu&property=99&user=another");
                 context.Request.Headers["Sec-Fetch-Site"] = "cross-site";
                 context.Request.Headers["Sec-Fetch-Mode"] = "navigate";
                 // A top-level cross-site GET includes the Lax correlation cookie and omits the Strict session.
-                if (correlation is not null) context.Request.Headers.Cookie = "homeautomation.ewelink=" + correlation;
+                if (correlationCookie is not null) context.Request.Headers.Cookie = correlationCookie;
             });
 
-        Task<HttpContext> Complete(long property, bool signedIn) =>
-            Request($"/api/v1/ewelink/{property}/complete", context =>
+        Task<HttpContext> Start(long property, bool includeCsrf) =>
+            Request($"/api/v1/ewelink/{property}/connect", context =>
             {
                 context.Request.Method = "POST";
-                var correlation = "homeautomation.ewelink=" + flow.Cookie;
-                context.Request.Headers.Cookie = signedIn ? session.Split(';')[0] + "; " + correlation : correlation;
+                context.Request.Headers.Cookie = connectCookies;
+                if (includeCsrf) context.Request.Headers["X-CSRF-TOKEN"] = connectToken;
             });
+
+        async Task<(string State, string Cookie)> Begin()
+        {
+            var start = await Start(1, true);
+            Assert.Equal(StatusCodes.Status200OK, start.Response.StatusCode);
+            var cookie = Assert.Single(start.Response.Headers.SetCookie)!;
+            Assert.Contains("samesite=lax", cookie, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("secure", cookie, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
+            using var result = await JsonDocument.ParseAsync(start.Response.Body);
+            var url = new Uri(result.RootElement.GetProperty("authorizationUrl").GetString()!);
+            return (QueryHelpers.ParseQuery(url.Query)["state"].ToString(), cookie.Split(';')[0]);
+        }
 
         void SetForm(HttpContext context)
         {
@@ -318,6 +358,66 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     private sealed class RequestHasBody : IHttpRequestBodyDetectionFeature
     {
         public bool CanHaveBody => true;
+    }
+
+    private sealed class EwelinkStoreFixture : IEwelinkStore
+    {
+        public string? Owner { get; private set; }
+        public byte[]? Envelope { get; private set; }
+        public int TokenWrites { get; private set; }
+        public Task<bool> SchemaReadyAsync(CancellationToken ct) => Task.FromResult(true);
+        public Task<EwelinkAccount?> AccountAsync(CancellationToken ct) => Task.FromResult(
+            Owner is null ? null : new EwelinkAccount(Owner, Envelope, "connected", null, null));
+        public Task SaveTokensAsync(string owner, byte[]? envelope, CancellationToken ct)
+        {
+            Owner = owner;
+            Envelope = envelope;
+            TokenWrites++;
+            return Task.CompletedTask;
+        }
+        public Task ReportAsync(string owner, string status, DateTimeOffset? success, DateTimeOffset next, CancellationToken ct) =>
+            Task.CompletedTask;
+        public Task<IReadOnlyList<EwelinkRow>> DevicesAsync(string owner, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<EwelinkRow>>([]);
+        public Task SaveAsync(string owner, EwelinkDevice device, CancellationToken ct) => throw new NotSupportedException();
+        public Task AssignAsync(EwelinkRow row, string owner, long property, long? room, CancellationToken ct) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class EwelinkProviderFixture : HttpMessageHandler
+    {
+        public int Exchanges { get; private set; }
+        public bool Reject { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Assert.Equal("eu-apia.coolkit.cc", request.RequestUri!.Host);
+            if (request.RequestUri.AbsolutePath == "/v2/user/oauth/token")
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                Exchanges++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = Reject ? new StringContent("""{"error":405,"msg":"fixture rejection","data":{}}""") :
+                        JsonContent.Create(new
+                        {
+                            error = 0,
+                            data = new
+                            {
+                                accessToken = "fixture-access", refreshToken = "fixture-refresh",
+                                atExpiredTime = DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeMilliseconds(),
+                                rtExpiredTime = DateTimeOffset.UtcNow.AddDays(2).ToUnixTimeMilliseconds()
+                            }
+                        })
+                });
+            }
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("/v2/family", request.RequestUri.AbsolutePath);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"error":0,"data":{"familyList":[]}}""")
+            });
+        }
     }
 
     private sealed class PasswordFixture : IUserPasswordStore<LocalUser>

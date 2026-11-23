@@ -11,8 +11,21 @@ internal sealed record EwelinkRow(string Id, string ExternalId, long? PropertyId
     public EwelinkDevice Device => JsonSerializer.Deserialize<EwelinkDevice>(Snapshot)!;
 }
 
-internal sealed class EwelinkStore(Database database)
+internal interface IEwelinkStore
 {
+    Task<bool> SchemaReadyAsync(CancellationToken ct);
+    Task<EwelinkAccount?> AccountAsync(CancellationToken ct);
+    Task SaveTokensAsync(string owner, byte[]? envelope, CancellationToken ct);
+    Task ReportAsync(string owner, string status, DateTimeOffset? success, DateTimeOffset next, CancellationToken ct);
+    Task<IReadOnlyList<EwelinkRow>> DevicesAsync(string owner, CancellationToken ct);
+    Task SaveAsync(string owner, EwelinkDevice device, CancellationToken ct);
+    Task AssignAsync(EwelinkRow row, string owner, long property, long? room, CancellationToken ct);
+}
+
+internal sealed class EwelinkStore(Database database, Migrations migrations) : IEwelinkStore
+{
+    public Task<bool> SchemaReadyAsync(CancellationToken ct) => migrations.VerifyAsync(ct, includeEwelink: true);
+
     public async Task<EwelinkAccount?> AccountAsync(CancellationToken ct)
     {
         await using var db = await database.OpenAsync(ct);

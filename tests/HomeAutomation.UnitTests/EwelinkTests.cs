@@ -31,6 +31,7 @@ public sealed class EwelinkTests
             Assert.Equal("fixture-app", Assert.Single(request.Headers.GetValues("X-CK-Appid")));
             Assert.Matches("^[a-z0-9]{8}$", Assert.Single(request.Headers.GetValues("X-CK-Nonce")));
             var bytes = await request.Content!.ReadAsByteArrayAsync(ct);
+            Assert.Equal("application/json", request.Content.Headers.ContentType?.MediaType);
             Assert.Equal("Sign", request.Headers.Authorization!.Scheme);
             Assert.Equal(Sign(bytes), request.Headers.Authorization.Parameter);
             using var json = JsonDocument.Parse(bytes);
@@ -67,6 +68,25 @@ public sealed class EwelinkTests
         Assert.Equal(Now.AddDays(30), refreshed.AccessExpires);
         await Assert.ThrowsAsync<EwelinkFailure>(() => client.ExchangeAsync("fixture-code", "untrusted", default));
         Assert.Equal(2, calls);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK, """{"error":405,"msg":"fixture explanation","data":{}}""", 405, "rejected")]
+    [InlineData(HttpStatusCode.BadRequest, """{"error":400,"msg":"fixture explanation","data":{}}""", 400, "rejected")]
+    [InlineData(HttpStatusCode.Forbidden, "<html>fixture gateway</html>", null, "accessOrQuotaLimited")]
+    public async Task ExchangeRetainsOnlySafeRejectionDetails(HttpStatusCode status, string body, int? providerCode, string reason)
+    {
+        var calls = 0;
+        using var http = new HttpClient(new Handler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+        }));
+        var error = await Assert.ThrowsAsync<EwelinkFailure>(() => Client(http).ExchangeAsync("fixture-code", "eu", default));
+        Assert.Equal((int)status, error.HttpStatus);
+        Assert.Equal(providerCode, error.ProviderCode);
+        Assert.Equal(reason, error.Message);
+        Assert.Equal(1, calls);
     }
 
     [Fact]

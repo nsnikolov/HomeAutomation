@@ -28,7 +28,7 @@ const statuses: Record<string, string> = {
 export function EwelinkPanel({ property }: { property: Property }) {
   const preferences = useDevicePreferences(property.id, 'ewelink')
   const cache = useQueryClient()
-  const [params, setParams] = useSearchParams()
+  const [params] = useSearchParams()
   const key = ['property', property.id, 'ewelink']
   const query = useQuery({ queryKey: key, queryFn: ({ signal }) => api.ewelink(property.id, signal), refetchInterval: 30_000 })
   const view = query.data
@@ -36,16 +36,9 @@ export function EwelinkPanel({ property }: { property: Property }) {
     queryKey: ['property', property.id, 'rooms'], queryFn: ({ signal }) => api.rooms(property.id, signal), enabled: !!view?.manage,
   })
   const action = useMutation({
-    mutationFn: async (operation: 'connect' | 'complete' | 'disconnect' | 'refresh') => {
+    mutationFn: async (operation: 'connect' | 'disconnect' | 'refresh') => {
       if (operation === 'connect') window.location.assign((await api.connectEwelink(property.id)).authorizationUrl)
       else await api.updateEwelink(property.id, operation)
-    },
-    onSuccess: (_, operation) => {
-      if (operation === 'complete') setParams(current => {
-        const next = new URLSearchParams(current)
-        next.delete('connect')
-        return next
-      }, { replace: true })
     },
     onSettled: () => cache.invalidateQueries({ queryKey: key }),
   })
@@ -59,9 +52,8 @@ export function EwelinkPanel({ property }: { property: Property }) {
       {view?.lastSuccess && <p>Last synchronized {formatMoment(view.lastSuccess, property.timeZone)}</p>}
     </div>
     {params.get('connect') === 'failed' && <p role="alert">eWeLink could not complete the connection or initial discovery.</p>}
+    {params.get('connect') === 'success' && <p>eWeLink authorization completed.</p>}
     {view?.manage && <div className="filters">
-      {params.get('connect') === 'finish' &&
-        <Button onClick={() => action.mutate('complete')} disabled={action.isPending}>Finish connecting</Button>}
       {(!connected || view.status === 'reauthorizationRequired') &&
         <Button onClick={() => action.mutate('connect')} disabled={action.isPending}>
           {connected ? 'Reconnect account' : 'Connect account'}
