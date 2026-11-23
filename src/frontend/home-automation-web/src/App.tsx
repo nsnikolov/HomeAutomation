@@ -25,13 +25,16 @@ export function App() {
 function Login() {
   const client = useQueryClient()
   const navigate = useNavigate()
-  const finishRoute = useMatch('/properties/:propertyId/daikin')
+  const daikinRoute = useMatch('/properties/:propertyId/daikin')
+  const ewelinkRoute = useMatch('/properties/:propertyId/ewelink')
   const [parameters] = useSearchParams()
+  const finishingConnection = (daikinRoute && parameters.get('onecta') === 'finish') ||
+    (ewelinkRoute && parameters.get('connect') === 'finish')
   const login = useMutation({
     mutationFn: (values: { email: string; password: string }) => api.login(values.email, values.password),
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ['session'] })
-      if (!finishRoute || parameters.get('onecta') !== 'finish') void navigate('/')
+      if (!finishingConnection) void navigate('/')
     },
   })
   function submit(event: FormEvent<HTMLFormElement>) {

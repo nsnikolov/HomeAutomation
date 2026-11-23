@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { expect, it, vi } from 'vitest'
 import { api } from '../shared/api'
@@ -7,11 +7,31 @@ import { EwelinkPanel } from './EwelinkPanel'
 
 const property = { id: 1, name: 'Fixture', timeZone: 'Europe/Sofia' }
 
-function view() {
+function view(path = '/') {
   return render(<QueryClientProvider client={new QueryClient()}>
-    <MemoryRouter><EwelinkPanel property={property} /></MemoryRouter>
+    <MemoryRouter initialEntries={[path]}><EwelinkPanel property={property} /></MemoryRouter>
   </QueryClientProvider>)
 }
+
+it('finishes an OAuth return with a local action and clears the finish marker', async () => {
+  const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
+    status: 'disconnected', manage: true, lastSuccess: null, nextSync: null, devices: [], unassigned: [],
+  })
+  const rooms = vi.spyOn(api, 'rooms').mockResolvedValue([])
+  const complete = vi.spyOn(api, 'updateEwelink').mockResolvedValue(undefined)
+  try {
+    view('/properties/1/ewelink?connect=finish')
+    const finish = await screen.findByRole('button', { name: 'Finish connecting' })
+    expect(complete).not.toHaveBeenCalled()
+    fireEvent.click(finish)
+    await waitFor(() => expect(complete).toHaveBeenCalledWith(1, 'complete'))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Finish connecting' })).not.toBeInTheDocument())
+  } finally {
+    status.mockRestore()
+    rooms.mockRestore()
+    complete.mockRestore()
+  }
+})
 
 it('shows the approval boundary and hides account actions without configuration', async () => {
   const status = vi.spyOn(api, 'ewelink').mockResolvedValue({

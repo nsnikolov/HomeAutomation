@@ -68,7 +68,7 @@ export const api = {
     providerAction<DaikinOutcome>('daikin', id, `devices/${device}/commands`, { operation, value, expectedMode }),
   ewelink: (id: number, signal?: AbortSignal) => request<EwelinkState>(`/ewelink/${id}`, { signal }),
   connectEwelink: (id: number) => providerAction<{ authorizationUrl: string }>('ewelink', id, 'connect'),
-  updateEwelink: (id: number, action: 'disconnect' | 'refresh') => providerAction<void>('ewelink', id, action),
+  updateEwelink: (id: number, action: 'complete' | 'disconnect' | 'refresh') => providerAction<void>('ewelink', id, action),
   assignEwelink: (id: number, device: string, roomId: number | null) =>
     providerAction<void>('ewelink', id, `devices/${device}/assign`, { roomId }),
   tuya: (id: number, signal?: AbortSignal) => request<TuyaState>(`/tuya/${id}`, { signal }),

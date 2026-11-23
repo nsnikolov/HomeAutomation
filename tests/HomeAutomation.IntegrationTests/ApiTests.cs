@@ -6,6 +6,7 @@ using System.Text.Encodings.Web;
 using HomeAutomation.Application;
 using HomeAutomation.Api;
 using HomeAutomation.Domain;
+using HomeAutomation.Infrastructure.Ewelink;
 using HomeAutomation.Infrastructure.MySql;
 using HomeAutomation.Infrastructure.Tuya;
 using Microsoft.AspNetCore.Authentication;
@@ -99,7 +100,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         using var guest = host.CreateClient();
         using var viewer = AuthenticatedClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/ewelink/1")).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/ewelink/callback")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await guest.PostAsync("/api/v1/ewelink/1/complete", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsync("/api/v1/ewelink/1/complete", null)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/v1/ewelink/99")).StatusCode);
         Assert.Contains("notConfigured", await viewer.GetStringAsync("/api/v1/ewelink/1"));
         Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsync("/api/v1/ewelink/1/connect", null)).StatusCode);
@@ -113,14 +115,23 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         var clock = new FlowClock();
         var consent = new EwelinkConsent(clock);
         var flow = consent.Begin("operator", 1);
-        Assert.Null(consent.Take("another-user", flow.State, flow.Cookie));
-        Assert.Null(consent.Take("operator", flow.State, null));
-        Assert.Null(consent.Take("operator", "unrelated", flow.Cookie));
-        Assert.Equal(1, consent.Take("operator", flow.State, flow.Cookie)?.Property);
-        Assert.Null(consent.Take("operator", flow.State, flow.Cookie));
+        Assert.Null(consent.Take("operator", 1, flow.Cookie));
+        Assert.Null(consent.Accept(flow.State, null, "fixture", "eu"));
+        Assert.Null(consent.Accept("unrelated", flow.Cookie, "fixture", "eu"));
+        Assert.Equal(1, consent.Accept(flow.State, flow.Cookie, "fixture", "eu"));
+        Assert.Null(consent.Accept(flow.State, flow.Cookie, "replacement", "us"));
+        Assert.Null(consent.Take("another-user", 1, flow.Cookie));
+        Assert.Null(consent.Take("operator", 2, flow.Cookie));
+        Assert.Null(consent.Take("operator", 1, "another-browser"));
+        Assert.Equal(new EwelinkConsent.Grant("fixture", "eu"), consent.Take("operator", 1, flow.Cookie));
+        Assert.Null(consent.Take("operator", 1, flow.Cookie));
+        flow = consent.Begin("operator", 1);
+        Assert.NotNull(consent.Accept(flow.State, flow.Cookie, "fixture", "eu"));
+        clock.Advance();
+        Assert.Null(consent.Take("operator", 1, flow.Cookie));
         flow = consent.Begin("operator", 1);
         clock.Advance();
-        Assert.Null(consent.Take("operator", flow.State, flow.Cookie));
+        Assert.Null(consent.Accept(flow.State, flow.Cookie, "fixture", "eu"));
     }
 
     [Fact]
@@ -199,7 +210,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     }
 
     [Fact]
-    public async Task ForwardedHttpsLoginIssuesSecureSessionAndAllowsAuthenticatedReads()
+    public async Task ForwardedHttpsLoginAndEwelinkCallbackRespectCrossSiteCookieBoundaries()
     {
         using var loginHost = host.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
@@ -210,6 +221,12 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             });
             services.RemoveAll<IUserStore<LocalUser>>();
             services.AddSingleton<IUserStore<LocalUser>, PasswordFixture>();
+            services.RemoveAll<EwelinkOptions>();
+            services.AddSingleton(new EwelinkOptions
+            {
+                AppId = "fixture", AppSecret = "fixture", OperatorEmail = PasswordFixture.Email,
+                RedirectUri = "https://ha-dev.britishlab.org:5443/api/v1/ewelink/callback"
+            });
         }));
 
         var csrf = await Request("/api/v1/session/csrf");
@@ -238,6 +255,44 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal(StatusCodes.Status200OK, result.Response.StatusCode);
         using var properties = await JsonDocument.ParseAsync(result.Response.Body);
         Assert.Equal(1, properties.RootElement[0].GetProperty("id").GetInt32());
+
+        var consent = loginHost.Services.GetRequiredService<EwelinkConsent>();
+        var flow = consent.Begin("viewer", 1);
+        var callback = await ReturnFromProvider(flow.Cookie, "192.0.2.20");
+        Assert.Equal(StatusCodes.Status403Forbidden, callback.Response.StatusCode);
+        callback = await ReturnFromProvider(null, "127.0.0.1");
+        Assert.Equal(StatusCodes.Status400BadRequest, callback.Response.StatusCode);
+        callback = await ReturnFromProvider(flow.Cookie, "127.0.0.1");
+        Assert.Equal(StatusCodes.Status302Found, callback.Response.StatusCode);
+        Assert.Equal("/properties/1/ewelink?connect=finish", callback.Response.Headers.Location);
+        Assert.Equal("no-referrer", callback.Response.Headers["Referrer-Policy"]);
+        Assert.Equal("no-store", callback.Response.Headers.CacheControl);
+        callback = await ReturnFromProvider(flow.Cookie, "127.0.0.1");
+        Assert.Equal(StatusCodes.Status400BadRequest, callback.Response.StatusCode);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, (await Complete(1, false)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status404NotFound, (await Complete(99, true)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status400BadRequest, (await Complete(1, true)).Response.StatusCode);
+        Assert.NotNull(consent.Take("viewer", 1, flow.Cookie));
+
+        Task<HttpContext> ReturnFromProvider(string? correlation, string upstream) =>
+            Request("/api/v1/ewelink/callback", context =>
+            {
+                context.Connection.RemoteIpAddress = IPAddress.Parse(upstream);
+                context.Request.QueryString = new QueryString($"?state={flow.State}&code=fixture&region=eu");
+                context.Request.Headers["Sec-Fetch-Site"] = "cross-site";
+                context.Request.Headers["Sec-Fetch-Mode"] = "navigate";
+                // A top-level cross-site GET includes the Lax correlation cookie and omits the Strict session.
+                if (correlation is not null) context.Request.Headers.Cookie = "homeautomation.ewelink=" + correlation;
+            });
+
+        Task<HttpContext> Complete(long property, bool signedIn) =>
+            Request($"/api/v1/ewelink/{property}/complete", context =>
+            {
+                context.Request.Method = "POST";
+                var correlation = "homeautomation.ewelink=" + flow.Cookie;
+                context.Request.Headers.Cookie = signedIn ? session.Split(';')[0] + "; " + correlation : correlation;
+            });
 
         void SetForm(HttpContext context)
         {
@@ -322,6 +377,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
                 services.AddSingleton<IMonitoringReader, FixtureReader>();
                 services.RemoveAll<TuyaOptions>();
                 services.AddSingleton(new TuyaOptions());
+                services.RemoveAll<EwelinkOptions>();
+                services.AddSingleton(new EwelinkOptions());
                 services.AddAuthentication(options =>
                 {
                     options.DefaultAuthenticateScheme = "fixture";
