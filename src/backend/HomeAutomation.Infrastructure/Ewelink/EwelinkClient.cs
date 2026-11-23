@@ -100,6 +100,8 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
         var current = EwelinkMapping.Id(families, "currentFamilyId");
         var homes = homeIds.Append(current).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
         var requests = 1;
+        var duplicates = 0;
+        var coveredHomes = 0;
         var devices = new Dictionary<string, EwelinkDevice>(StringComparer.Ordinal);
         var partial = homes.Length == 0 || homeIds.Any(id => id is null);
         if (options.InventoryDiagnostics)
@@ -107,6 +109,8 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
                 homeIds.Length, homes.Length);
         foreach (var home in homes)
         {
+            if (requests == MaxInventoryRequests) break;
+            coveredHomes++;
             var index = -9999999;
             var indexes = new HashSet<int>();
             while (requests < MaxInventoryRequests)
@@ -124,25 +128,35 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
                     if (EwelinkMapping.Integer(item, "index") is { } position) indexes.Add(position);
                     var device = EwelinkMapping.Map(item, observed);
                     if (device is null && EwelinkMapping.Integer(item, "itemType") is not (3 or 4)) partial = true;
-                    if (device is not null && (!devices.TryGetValue(device.ExternalId, out var prior) || prior.Shared && !device.Shared))
-                        devices[device.ExternalId] = device;
+                    if (device is null) continue;
+                    if (devices.TryAdd(device.ExternalId, device)) continue;
+                    duplicates++;
+                    if (devices[device.ExternalId].Shared && !device.Shared) devices[device.ExternalId] = device;
                 }
                 var hasTotal = total is >= 0 && indexes.Count >= total.Value;
                 if (hasTotal || page.Length < PageSize)
                 {
                     partial |= !hasTotal;
+                    if (!hasTotal && options.InventoryDiagnostics)
+                        logger?.LogInformation("eWeLink inventory stopped on a short page before reaching the reported total.");
                     break;
                 }
                 var next = indexes.Count == 0 ? index : indexes.Max();
                 if (next <= index || requests == MaxInventoryRequests)
                 {
                     partial = true;
+                    if (options.InventoryDiagnostics)
+                        logger?.LogInformation("eWeLink inventory pagination stopped at {Reason}.",
+                            next <= index ? "cursorDidNotAdvance" : "requestBudget");
                     break;
                 }
                 index = next;
             }
-            if (requests == MaxInventoryRequests && home != homes[^1]) partial = true;
         }
+        partial |= coveredHomes < homes.Length;
+        if (options.InventoryDiagnostics)
+            logger?.LogInformation("eWeLink inventory finished with {UniqueDevices} unique devices, {DuplicateRows} duplicate rows, {HomesScanned} of {Homes} homes scanned, and partial {Partial}.",
+                devices.Count, duplicates, coveredHomes, homes.Length, partial);
         return new(devices.Values.ToArray(), partial);
     }
 

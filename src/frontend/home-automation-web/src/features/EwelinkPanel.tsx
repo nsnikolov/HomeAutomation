@@ -97,7 +97,9 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
     mutationFn: () => api.assignEwelink(property.id, device.id, room ? Number(room) : null),
     onSuccess: () => client.invalidateQueries({ queryKey: ['property', property.id, 'ewelink'] }),
   })
-  const relay = device.relay === null ? device.hasRelay ? 'Unavailable' : 'Unsupported or unavailable' : device.relay ? 'On' : 'Off'
+  const relay = device.relay === null ? 'Unavailable' : device.relay ? 'On' : 'Off'
+  const supported = device.supportedMetrics ?? device.measurements?.map(reading => reading.metric) ?? []
+  const rows = measurementRows.filter(([metric]) => supported.includes(metric))
   return <Card className="device-card">
     <div className="device-card-top">
       <h3>{device.name}</h3>
@@ -107,9 +109,9 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
     </div>
     {device.model && <p>{device.model}</p>}
     <p>Cloud snapshot received {formatMoment(device.seenAt, property.timeZone)}</p>
-    <dl className="device-readings">
-      <div><dt>Relay</dt><dd>{relay}{device.relayQuality === 'stale' && ' · Last known'}</dd></div>
-      {measurementRows.map(([metric, label]) => {
+    {(device.hasRelay || rows.length > 0) && <dl className="device-readings">
+      {device.hasRelay && <div><dt>Relay</dt><dd>{relay}{device.relay !== null && device.relayQuality === 'stale' && ' · Last known'}</dd></div>}
+      {rows.map(([metric, label]) => {
         const reading = device.measurements?.find(item => item.metric === metric)
         return <div key={metric}><dt>{label}</dt><dd>
           {reading && reading.quality !== 'missing' && reading.number !== null ? <>
@@ -117,8 +119,7 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
           </> : 'Unavailable'}
         </dd></div>
       })}
-      <div><dt>Energy today</dt><dd>Unavailable</dd></div>
-    </dl>
+    </dl>}
     {rooms && <div className="filters">
       <select className="input select-input" aria-label={`Room for ${device.name}`} value={room}
         onChange={event => setRoom(event.target.value)} disabled={assign.isPending}>

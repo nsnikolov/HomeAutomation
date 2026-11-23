@@ -28,3 +28,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 24. 2026-11-23 · [eWeLink OAuth — Automatic Backend Completion and Token Exchange Diagnostics](0024-ewelink-automatic-oauth-completion.md)
 25. 2026-11-23 · [Hotfix — eWeLink OAuth Token Persistence SQL Error](0025-ewelink-token-persistence-sql-hotfix.md)
 26. 2026-11-23 · [Milestone 4B — eWeLink Discovery and Extended Telemetry](0026-ewelink-discovery-extended-telemetry.md)
+27. 2026-11-23 · [Milestone 4C — eWeLink Capability-Based UI and Live Telemetry Fix](0027-ewelink-capability-ui-live-telemetry.md)

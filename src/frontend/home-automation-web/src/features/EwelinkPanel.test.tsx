@@ -46,6 +46,7 @@ it('shows offline and last-known state without offering physical controls', asyn
     status: 'partial', manage: false, lastSuccess: timestamp, nextSync: null, unassigned: [],
     devices: [{ id: 'fixture', name: 'Test relay', model: 'Fixture', roomId: 1, connectivity: 'offline',
       seenAt: timestamp, quality: 'fresh', hasRelay: true, relay: true, relayAt: timestamp, relayQuality: 'stale',
+      supportedMetrics: ['temperature', 'humidity', 'activePower'],
       measurements: [
         { metric: 'temperature', unit: '°C', number: 12.9, flag: null, code: null, observedAt: timestamp, quality: 'stale' },
         { metric: 'activePower', unit: 'W', number: 200, flag: null, code: null, observedAt: timestamp, quality: 'stale' },
@@ -59,8 +60,26 @@ it('shows offline and last-known state without offering physical controls', asyn
     expect(screen.getByText('On · Last known')).toBeInTheDocument()
     expect(screen.getByText('12.9 °C · Last known')).toBeInTheDocument()
     expect(screen.getByText('200 W · Last known')).toBeInTheDocument()
-    expect(screen.getByText('Energy today').nextElementSibling).toHaveTextContent('Unavailable')
-    expect(screen.getByText('Cumulative energy').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(screen.getByText('Relative humidity').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(screen.queryByText('Energy today')).not.toBeInTheDocument()
+    expect(screen.queryByText('Cumulative energy')).not.toBeInTheDocument()
+    expect(screen.queryByText('Voltage')).not.toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  } finally { status.mockRestore() }
+})
+
+it.each([true, false])('shows only capabilities on a device with relay support set to %s', async hasRelay => {
+  const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
+    status: 'connected', manage: false, lastSuccess: null, nextSync: null, unassigned: [],
+    devices: [{ id: 'fixture', name: 'Basic device', model: '', roomId: 1, connectivity: 'online',
+      seenAt: '2026-11-22T12:00:00Z', quality: 'fresh', hasRelay, relay: hasRelay ? false : null,
+      relayAt: null, relayQuality: hasRelay ? 'fresh' : 'missing', supportedMetrics: [], measurements: [] }],
+  })
+  try {
+    view()
+    expect(await screen.findByRole('heading', { name: 'Basic device' })).toBeInTheDocument()
+    expect(screen.getByText('Online')).toBeInTheDocument()
+    const rows = screen.queryAllByRole('term')
+    expect(rows.map(row => row.textContent)).toEqual(hasRelay ? ['Relay'] : [])
   } finally { status.mockRestore() }
 })

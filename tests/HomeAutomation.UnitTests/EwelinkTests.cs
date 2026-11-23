@@ -169,6 +169,29 @@ public sealed class EwelinkTests
         Assert.False(Assert.Single(inventory.Devices, device => device.ExternalId == "fixture-0").Shared);
     }
 
+    [Theory]
+    [InlineData("fixture-thermostat", 1, false)]
+    [InlineData("invalid identity", 0, true)]
+    public async Task DiscoveryDoesNotExcludeUnknownThermostatProtocols(string identity, int expected, bool partial)
+    {
+        using var http = new HttpClient(new Handler((request, _) => Task.FromResult(
+            request.RequestUri!.AbsolutePath == "/v2/family"
+                ? Response("""{"error":0,"data":{"familyList":[{"id":"fixture"}]}}""")
+                : Response(JsonSerializer.Serialize(new
+                {
+                    error = 0,
+                    data = new
+                    {
+                        total = 1, thingList = new[] { new { index = 0, itemType = 2,
+                            itemData = new { deviceid = identity, extra = new { uiid = 999 }, online = true } } }
+                    }
+                })))));
+        var result = await Client(http).DiscoverAsync(new("eu", "fixture-access", "unused", Now, Now), default);
+        Assert.Equal(expected, result.Devices.Count);
+        Assert.Equal(partial, result.Partial);
+        Assert.All(result.Devices, device => Assert.Empty(device.SupportedMetrics()));
+    }
+
     [Fact]
     public void DocumentedReadingsUseTheirEngineeringUnitsAndDoNotGenerateNumericHistory()
     {
@@ -206,18 +229,38 @@ public sealed class EwelinkTests
     }
 
     [Fact]
+    public void Thr320dModelRecognizesProbeCapabilitiesWithoutInventingReadings()
+    {
+        using var json = JsonDocument.Parse("""
+            {"itemType":1,"itemData":{"deviceid":"fixture","productModel":"THR320D","online":true,
+              "params":{"sensorType":"THS01","currentTemperature":"12.9","currentHumidity":"unavailable"}}}
+            """);
+        var device = EwelinkMapping.Map(json.RootElement, Now)!;
+        Assert.Equal(12.9, device.Measurements![Metric.Temperature].Value);
+        Assert.False(device.Measurements.ContainsKey(Metric.Humidity));
+        Assert.Equal([Metric.Temperature, Metric.Humidity], device.SupportedMetrics());
+        var replacedProbe = EwelinkMapping.Merge(MapMeasurements(181,
+            """{"sensorType":"MS01","currentHumidity":"60"}"""), device);
+        Assert.Empty(replacedProbe.SupportedMetrics());
+        Assert.DoesNotContain(Metric.ActivePower, MapMeasurements(32, """{"switch":"on"}""").SupportedMetrics());
+    }
+
+    [Fact]
     public void DiagnosticOutputUsesAnAllowlistAndOmitsRawFieldsAndValues()
     {
         using var json = JsonDocument.Parse("""
-            [{"itemType":1,"itemData":{"deviceid":"private-id","name":"private-name","online":true,"extra":{"uiid":32},
-              "params":{"power":"895.42","private-field":"private-value","devicekey":"private-key"}}}]
+            [{"itemType":1,"itemData":{"deviceid":"private-id","name":"private-name","productModel":"PSF-X67","online":true,"extra":{"uiid":32},
+              "params":{"power":"895.42","private-field":"private-value","devicekey":"private-key"}}},
+             {"itemType":2,"itemData":{"deviceid":"private-shared","productModel":"private-model"}}]
             """);
         var logger = new CaptureLogger();
-        EwelinkInventoryDiagnostics.LogPage(logger, json.RootElement.EnumerateArray().ToArray(), 2);
+        EwelinkInventoryDiagnostics.LogPage(logger, json.RootElement.EnumerateArray().ToArray(), 3);
         var log = string.Join("\n", logger.Messages);
         Assert.Contains("power=String", log);
         Assert.Contains("PowerMeasurement", log);
-        Assert.Contains("returned 1 of 2", log);
+        Assert.Contains("returned 2 of 3", log);
+        Assert.Contains("model PSF-X67, UIID 32", log);
+        Assert.Contains("model other", log);
         Assert.DoesNotContain("private", log);
         Assert.DoesNotContain("895.42", log);
         Assert.DoesNotContain("devicekey", log);

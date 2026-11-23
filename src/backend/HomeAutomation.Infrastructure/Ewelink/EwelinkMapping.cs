@@ -9,21 +9,26 @@ internal sealed record EwelinkMeasurement(double Value, DateTimeOffset ReceivedA
 
 internal sealed record EwelinkDevice(string ExternalId, string Name, string Model, string Brand, bool Shared,
     Connectivity Connectivity, DateTimeOffset SeenAt, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt,
-    IReadOnlyDictionary<Metric, EwelinkMeasurement>? Measurements = null)
+    IReadOnlyDictionary<Metric, EwelinkMeasurement>? Measurements = null, string? SensorType = null)
 {
+    public IReadOnlyList<Metric> SupportedMetrics()
+    {
+        var metrics = Measurements?.Keys.ToHashSet() ?? [];
+        if (EwelinkMapping.MeasuresTemperature(SensorType)) metrics.Add(Metric.Temperature);
+        if (EwelinkMapping.MeasuresHumidity(SensorType)) metrics.Add(Metric.Humidity);
+        return metrics.Order().ToArray();
+    }
+
     public (DiscoveredDevice Inventory, ObservationBatch Batch) Telemetry(bool includeRelay)
     {
         var capabilities = new HashSet<Capability>();
         if (HasRelay) capabilities.Add(Capability.Switch);
-        foreach (var metric in (Measurements ?? EmptyMeasurements).Keys) capabilities.Add(EwelinkMapping.CapabilityFor(metric));
+        foreach (var metric in SupportedMetrics()) capabilities.Add(EwelinkMapping.CapabilityFor(metric));
         var kind = HasRelay ? DeviceKind.SmartSwitch : capabilities.Count > 0 ? DeviceKind.Sensor : DeviceKind.Unknown;
         var inventory = new DiscoveredDevice(ExternalId, Name, kind, "", Brand, Model, [new("main", "Device", capabilities)]);
         var samples = includeRelay && Relay is { } relay && RelayAt is { } at ? new[] { Sample.Boolean(Metric.SwitchOn, at, relay) } : [];
         return (inventory, new(SeenAt, [new(ExternalId, Connectivity, null, [new("main", samples)], SeenAt)], []));
     }
-
-    private static readonly IReadOnlyDictionary<Metric, EwelinkMeasurement> EmptyMeasurements =
-        new Dictionary<Metric, EwelinkMeasurement>();
 }
 
 internal static class EwelinkMapping
@@ -41,31 +46,51 @@ internal static class EwelinkMapping
             _ => Connectivity.Unknown
         };
         var parameters = Node(data, "params");
+        var model = Model(data);
+        var uiid = Uiid(data);
+        var climate = uiid is 15 or 181 || (uiid is null && model is ("THR320D" or "THR316D"));
+        var sensor = climate ? Text(parameters, "sensorType", 16) switch
+        {
+            null => null,
+            "DHT11" => "DHT11",
+            "DS18B20" => "DS18B20",
+            "AM2301" => "AM2301",
+            "THS01" => "THS01",
+            _ => "unsupported"
+        } : null;
         // The public OAuth contract identifies switch as the single-channel status.
         bool? relay = Node(parameters, "switches").ValueKind != JsonValueKind.Undefined ? null :
             Text(parameters, "switch", 3) switch { "on" => true, "off" => false, _ => null };
         var live = relay.HasValue && online == Connectivity.Online;
-        var measurements = online == Connectivity.Online ? ReadMeasurements(Uiid(data), parameters, received) : null;
+        var measurements = online == Connectivity.Online ? ReadMeasurements(uiid, climate, sensor, parameters, received) : null;
         return new(id, Text(data, "name", 128) ?? "eWeLink device",
-            Text(data, "productModel", 96) ?? Text(Node(data, "extra"), "modelInfo", 96) ?? "",
+            model,
             Text(data, "brandName", 64) ?? "", type == 2, online, received, relay.HasValue,
-            live ? relay : null, live ? received : null, measurements);
+            live ? relay : null, live ? received : null, measurements, sensor);
     }
 
     public static EwelinkDevice Merge(EwelinkDevice next, EwelinkDevice? previous)
     {
-        if (previous?.Measurements is { Count: > 0 } previousMeasurements)
+        var sensor = next.SensorType ?? previous?.SensorType;
+        if (next.Measurements is not null || previous?.Measurements is not null)
         {
             var merged = next.Measurements?.ToDictionary() ?? [];
-            foreach (var (metric, last) in previousMeasurements)
+            if (sensor is not null && !MeasuresTemperature(sensor)) merged.Remove(Metric.Temperature);
+            if (sensor is not null && !MeasuresHumidity(sensor)) merged.Remove(Metric.Humidity);
+            foreach (var (metric, last) in previous?.Measurements ?? Enumerable.Empty<KeyValuePair<Metric, EwelinkMeasurement>>())
             {
+                if (sensor is not null &&
+                    (metric == Metric.Temperature && !MeasuresTemperature(sensor) ||
+                     metric == Metric.Humidity && !MeasuresHumidity(sensor)))
+                    continue;
                 if (!merged.TryGetValue(metric, out var reading))
                     merged.Add(metric, last with { Present = false });
                 else if (reading.Value == last.Value)
                     merged[metric] = reading with { ReceivedAt = last.ReceivedAt };
             }
-            next = next with { Measurements = merged };
+            next = next with { Measurements = merged.Count == 0 ? null : merged };
         }
+        next = next with { SensorType = sensor };
         return next.RelayAt is not null ? next : next with
         {
             HasRelay = next.HasRelay || previous?.HasRelay == true, Relay = previous?.Relay, RelayAt = previous?.RelayAt
@@ -73,6 +98,11 @@ internal static class EwelinkMapping
     }
 
     public static int? Uiid(JsonElement data) => Integer(Node(data, "extra"), "uiid");
+    public static string Model(JsonElement data) =>
+        Text(data, "productModel", 96) ?? Text(Node(data, "extra"), "modelInfo", 96) ?? "";
+
+    public static bool MeasuresTemperature(string? sensor) => sensor is "DHT11" or "DS18B20" or "AM2301" or "THS01";
+    public static bool MeasuresHumidity(string? sensor) => sensor is "DHT11" or "AM2301" or "THS01";
 
     public static Capability CapabilityFor(Metric metric) => metric switch
     {
@@ -84,15 +114,15 @@ internal static class EwelinkMapping
         _ => throw new ArgumentOutOfRangeException(nameof(metric))
     };
 
-    private static IReadOnlyDictionary<Metric, EwelinkMeasurement>? ReadMeasurements(int? uiid, JsonElement parameters, DateTimeOffset received)
+    private static IReadOnlyDictionary<Metric, EwelinkMeasurement>? ReadMeasurements(
+        int? uiid, bool climate, string? sensor, JsonElement parameters, DateTimeOffset received)
     {
         var values = new Dictionary<Metric, EwelinkMeasurement>();
-        if (uiid is 15 or 181)
+        if (climate)
         {
-            var sensor = Text(parameters, "sensorType", 16);
-            if (sensor is "DHT11" or "DS18B20" or "AM2301" or "THS01")
+            if (sensor is null || MeasuresTemperature(sensor))
                 Add(Metric.Temperature, "currentTemperature", -55, 125);
-            if (sensor is "DHT11" or "AM2301" or "THS01")
+            if (MeasuresHumidity(sensor))
                 Add(Metric.Humidity, "currentHumidity", 0, 100);
         }
         else if (uiid is 5 or 32)

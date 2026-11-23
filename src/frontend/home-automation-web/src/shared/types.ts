@@ -54,6 +54,7 @@ export type EwelinkDevice = {
   id: string; name: string; model: string; roomId: number | null; connectivity: Device['connectivity']
   seenAt: string; quality: Quality; hasRelay: boolean; relay: boolean | null; relayAt: string | null; relayQuality: Quality
   measurements?: Reading[]
+  supportedMetrics?: Metric[]
 }
 export type EwelinkState = {
   status: string; manage: boolean; lastSuccess: string | null; nextSync: string | null

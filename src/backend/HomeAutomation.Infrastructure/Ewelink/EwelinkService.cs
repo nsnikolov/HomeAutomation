@@ -13,7 +13,7 @@ namespace HomeAutomation.Infrastructure.Ewelink;
 
 public sealed record EwelinkDeviceView(string Id, string Name, string Model, long? RoomId, Connectivity Connectivity,
     DateTimeOffset SeenAt, ReadingQuality Quality, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt, ReadingQuality RelayQuality,
-    IReadOnlyList<MetricReading> Measurements);
+    IReadOnlyList<MetricReading> Measurements, IReadOnlyList<Metric> SupportedMetrics);
 public sealed record EwelinkView(string Status, bool Manage, DateTimeOffset? LastSuccess, DateTimeOffset? NextSync,
     IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned);
 
@@ -118,7 +118,7 @@ public sealed class EwelinkService
                 ? Telemetry.Quality(item.Value.ReceivedAt, now, freshness) : ReadingQuality.Stale)).ToArray() ?? [];
         return new(row.Id, device.Name, device.Model, row.RoomId,
             quality == ReadingQuality.Fresh ? device.Connectivity : Connectivity.Unknown, device.SeenAt, quality,
-            device.HasRelay, device.Relay, device.RelayAt, relayQuality, measurements);
+            device.HasRelay, device.Relay, device.RelayAt, relayQuality, measurements, device.SupportedMetrics());
     }
 
     public async Task ConnectAsync(string owner, string code, string region, CancellationToken ct)
