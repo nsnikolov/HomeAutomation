@@ -243,13 +243,19 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
                 knownSeries.Add(key, seriesId);
             }
 
-            var values = new { SeriesId = seriesId, Observed = sample.ObservedAt.UtcDateTime, Received = receivedAt, sample.Number, sample.Flag, sample.Code };
-            await connection.ExecuteAsync(Query(
-                """
+            var observedAt = sample.ObservedAt.UtcDateTime;
+            var values = new { SeriesId = seriesId, Observed = observedAt,
+                Received = sample.ServerReceivedTimestamp ? observedAt : receivedAt, sample.Number, sample.Flag, sample.Code };
+            var insertSample = sample.ServerReceivedTimestamp ? """
+                INSERT INTO telemetry_samples (series_id, observed_at_utc, received_at_utc, numeric_value, boolean_value, status_value, timestamp_source)
+                VALUES (@SeriesId, @Observed, @Received, @Number, @Flag, @Code, 'serverReceived')
+                ON DUPLICATE KEY UPDATE series_id = telemetry_samples.series_id
+                """ : """
                 INSERT INTO telemetry_samples (series_id, observed_at_utc, received_at_utc, numeric_value, boolean_value, status_value)
                 VALUES (@SeriesId, @Observed, @Received, @Number, @Flag, @Code)
                 ON DUPLICATE KEY UPDATE series_id = telemetry_samples.series_id
-                """, cancellationToken, values, transaction));
+                """;
+            await connection.ExecuteAsync(Query(insertSample, cancellationToken, values, transaction));
             await connection.ExecuteAsync(Query(
                 """
                 INSERT INTO latest_readings (series_id, observed_at_utc, received_at_utc, numeric_value, boolean_value, status_value)

@@ -182,13 +182,15 @@ const EwelinkCard = memo(function EwelinkCard({ device, property, rooms }: { dev
       {rows.map(([metric, label]) => {
         const reading = device.measurements?.find(item => item.metric === metric)
         const fromSocket = device.socketMetrics?.includes(metric)
+        const serverReceived = device.serverReceivedMetrics?.includes(metric)
         const electricalSnapshot = device.electricalReporting && !fromSocket &&
           (metric === 'activePower' || metric === 'voltage' || metric === 'current')
         return <div key={metric}><dt>{label}</dt><dd>
           {reading && reading.quality !== 'missing' && reading.number !== null ? <>
             {formatReading(reading)}{(reading.quality === 'stale' || electricalSnapshot) && ' · Last known'}
             {reading.observedAt && <ReadingTime at={reading.observedAt} timeZone={property.timeZone}
-              label={reading.quality === 'fresh' ? fromSocket ? 'Live' : 'Cloud snapshot' : undefined} />}
+              label={serverReceived ? (reading.quality === 'fresh' ? 'Live · Server received' : 'Server received')
+                : reading.quality === 'fresh' ? fromSocket ? 'Live' : 'Cloud snapshot' : undefined} />}
           </> : 'Unavailable'}
         </dd></div>
       })}

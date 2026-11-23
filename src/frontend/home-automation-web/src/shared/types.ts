@@ -57,6 +57,7 @@ export type EwelinkDevice = {
   measurements?: Reading[]
   supportedMetrics?: Metric[]
   socketMetrics?: Metric[]
+  serverReceivedMetrics?: Metric[]
   observedRelay?: boolean | null; observedRelayAt?: string | null; observedRelayQuality?: Quality
   electricalReporting?: { status: 'waitingForActivation' | 'awaitingReport' | 'receivingReports' | 'activationRejected' | 'activationUnconfirmed'; providerCode?: number | null } | null
   canWriteRelay?: boolean; requiresRelayConfirmation?: boolean; relayCommand?: EwelinkRelayOutcome | null

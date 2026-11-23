@@ -39,13 +39,15 @@ public static class Telemetry
 
 public sealed record Sample
 {
-    private Sample(Metric metric, DateTimeOffset observedAt, double? number, bool? flag, string? code)
+    private Sample(Metric metric, DateTimeOffset observedAt, double? number, bool? flag, string? code,
+        bool serverReceivedTimestamp = false)
     {
         Metric = metric;
         ObservedAt = observedAt.ToUniversalTime();
         Number = number;
         Flag = flag;
         Code = code;
+        ServerReceivedTimestamp = serverReceivedTimestamp;
     }
 
     public Metric Metric { get; }
@@ -53,8 +55,9 @@ public sealed record Sample
     public double? Number { get; }
     public bool? Flag { get; }
     public string? Code { get; }
+    public bool ServerReceivedTimestamp { get; }
 
-    public static Sample Numeric(Metric metric, DateTimeOffset time, double value)
+    public static Sample Numeric(Metric metric, DateTimeOffset time, double value, bool serverReceivedTimestamp = false)
     {
         if (Telemetry.Unit(metric) is null || !double.IsFinite(value) ||
             (metric is Metric.BatterySoc or Metric.Humidity && (value < 0 || value > 100)) ||
@@ -65,7 +68,7 @@ public sealed record Sample
             throw new ArgumentOutOfRangeException(nameof(value), "Invalid value for the metric.");
         }
 
-        return new Sample(metric, time, value, null, null);
+        return new Sample(metric, time, value, null, null, serverReceivedTimestamp);
     }
 
     public static Sample Boolean(Metric metric, DateTimeOffset time, bool value)

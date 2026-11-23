@@ -16,7 +16,8 @@ public sealed record EwelinkDeviceView(string Id, string Name, string Model, lon
     IReadOnlyList<MetricReading> Measurements, IReadOnlyList<Metric> SupportedMetrics, bool CanWriteRelay = false,
     bool RequiresRelayConfirmation = false, EwelinkRelayOutcome? RelayCommand = null, string? RelayControlStatus = null,
     IReadOnlyList<Metric>? SocketMetrics = null, bool? ObservedRelay = null, DateTimeOffset? ObservedRelayAt = null,
-    ReadingQuality? ObservedRelayQuality = null, EwelinkElectricalStatus? ElectricalReporting = null);
+    ReadingQuality? ObservedRelayQuality = null, EwelinkElectricalStatus? ElectricalReporting = null,
+    IReadOnlyList<Metric>? ServerReceivedMetrics = null);
 public sealed record EwelinkView(string Status, bool Manage, DateTimeOffset? LastSuccess, DateTimeOffset? NextSync,
     IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned, DateTimeOffset? LastAttempt = null,
     bool CanViewLiveElectrical = false);
@@ -157,6 +158,7 @@ public sealed partial class EwelinkService
             quality == ReadingQuality.Fresh ? device.Connectivity : Connectivity.Unknown, device.SeenAt, quality,
             device.HasRelay, device.Relay, device.RelayAt, relayQuality, measurements, device.SupportedMetrics(),
             SocketMetrics: device.Measurements?.Where(item => item.Value.FromSocket).Select(item => item.Key).ToArray(),
+            ServerReceivedMetrics: device.Measurements?.Where(item => item.Value.ServerReceived).Select(item => item.Key).ToArray(),
             ObservedRelay: socketRelayAt is null ? null : device.SocketRelay, ObservedRelayAt: socketRelayAt,
             ObservedRelayQuality: socketRelayAt is { } at && quality == ReadingQuality.Fresh && device.Connectivity == Connectivity.Online
                 ? Telemetry.Quality(at, now, EwelinkSocketProtocol.Freshness) : ReadingQuality.Stale);

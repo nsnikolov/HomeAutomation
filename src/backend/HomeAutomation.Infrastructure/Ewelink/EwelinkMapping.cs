@@ -7,9 +7,10 @@ using HomeAutomation.Domain;
 namespace HomeAutomation.Infrastructure.Ewelink;
 
 internal sealed record EwelinkMeasurement(double Value, DateTimeOffset ReceivedAt, bool Present = true, bool FromSocket = false,
-    DateTimeOffset? LastSocketAt = null)
+    DateTimeOffset? LastSocketAt = null, bool ServerReceived = false, double? LastUntimedSocketValue = null)
 {
     [JsonIgnore] public DateTimeOffset? SocketTime => FromSocket ? ReceivedAt : LastSocketAt;
+    [JsonIgnore] public double? UntimedSocketValue => FromSocket ? (ServerReceived ? Value : null) : LastUntimedSocketValue;
 }
 
 internal sealed record EwelinkDevice(string ExternalId, string Name, string Model, string Brand, bool Shared,
@@ -106,7 +107,7 @@ internal static class EwelinkMapping
                 else if (reading.Value == last.Value)
                     merged[metric] = last with { Present = true };
                 else if (EwelinkElectricalReporting.IsElectrical(metric))
-                    merged[metric] = reading with { LastSocketAt = last.SocketTime };
+                    merged[metric] = reading with { LastSocketAt = last.SocketTime, LastUntimedSocketValue = last.UntimedSocketValue };
             }
             next = next with { Measurements = merged.Count == 0 ? null : merged };
         }
@@ -119,7 +120,8 @@ internal static class EwelinkMapping
     }
 
     public static (EwelinkDevice Snapshot, IReadOnlyList<Sample> Samples) MergeEvent(
-        EwelinkDevice device, JsonElement parameters, DateTimeOffset at, EwelinkSocketTrace? trace = null)
+        EwelinkDevice device, JsonElement parameters, DateTimeOffset at, EwelinkSocketTrace? trace = null,
+        EwelinkSocketTimeSource source = EwelinkSocketTimeSource.ProviderSequence)
     {
         if (device.Connectivity != Connectivity.Online)
         {
@@ -129,14 +131,15 @@ internal static class EwelinkMapping
         var samples = new List<Sample>();
         var climate = device.Uiid == 181 && device.Model == "THR320D";
         var meter = EwelinkElectricalReporting.IsMeter(device);
-        if (!climate && !meter)
+        var electricalOnly = source != EwelinkSocketTimeSource.ProviderSequence;
+        if (!meter && (!climate || electricalOnly))
         {
             trace?.Count("reject.unsupportedDevice");
             return (device, []);
         }
 
         var measurements = device.Measurements?.ToDictionary() ?? [];
-        foreach (var (metric, reading) in ReadMeasurements(device.Uiid, climate, device.SensorType, parameters, at, trace)
+        foreach (var (metric, reading) in ReadMeasurements(device.Uiid, climate, device.SensorType, parameters, at, trace, meter)
                      ?? Enumerable.Empty<KeyValuePair<Metric, EwelinkMeasurement>>())
         {
             var electrical = meter && EwelinkElectricalReporting.IsElectrical(metric);
@@ -147,11 +150,25 @@ internal static class EwelinkMapping
                 if (electrical) trace?.Count(watermark == at ? "reject.electricalDuplicate" : "reject.electricalOutOfOrder");
                 continue;
             }
-            measurements[metric] = reading with { FromSocket = true };
-            samples.Add(Sample.Numeric(metric, at, reading.Value));
+            var serverReceived = source == EwelinkSocketTimeSource.ServerReceived;
+            if (serverReceived && previous is { } last)
+            {
+                if (last is { FromSocket: true, ServerReceived: false } && at - last.ReceivedAt <= EwelinkSocketProtocol.Freshness)
+                {
+                    trace?.Count("reject.freshProviderTimestamp");
+                    continue;
+                }
+                if (last.UntimedSocketValue == reading.Value)
+                {
+                    trace?.Count("reject.serverReceivedDuplicate");
+                    continue;
+                }
+            }
+            measurements[metric] = reading with { FromSocket = true, ServerReceived = serverReceived };
+            samples.Add(Sample.Numeric(metric, at, reading.Value, serverReceivedTimestamp: serverReceived));
             if (electrical) trace?.Count("mappedElectricalSamples");
         }
-        if (at > device.SeenAt && device.HasRelay && ReadRelay(parameters) is { } relay &&
+        if (!electricalOnly && at > device.SeenAt && device.HasRelay && ReadRelay(parameters) is { } relay &&
             (device.RelayAt is null || at > device.RelayAt) && (device.SocketRelayAt is null || at > device.SocketRelayAt))
         {
             device = device with { SocketRelay = relay, SocketRelayAt = at };
@@ -185,7 +202,8 @@ internal static class EwelinkMapping
     };
 
     private static IReadOnlyDictionary<Metric, EwelinkMeasurement>? ReadMeasurements(
-        int? uiid, bool climate, string? sensor, JsonElement parameters, DateTimeOffset received, EwelinkSocketTrace? trace = null)
+        int? uiid, bool climate, string? sensor, JsonElement parameters, DateTimeOffset received, EwelinkSocketTrace? trace = null,
+        bool meterStream = false)
     {
         var values = new Dictionary<Metric, EwelinkMeasurement>();
         if (climate)
@@ -197,9 +215,10 @@ internal static class EwelinkMapping
         }
         else if (uiid is 5 or 32)
         {
-            Add(Metric.ActivePower, "power", 0, double.MaxValue);
-            Add(Metric.Voltage, "voltage", 0, double.MaxValue);
-            Add(Metric.Current, "current", 0, double.MaxValue);
+            // Leave room for excursions beyond the documented UIID 32 overload thresholds.
+            Add(Metric.ActivePower, "power", 0, meterStream ? 6600 : double.MaxValue);
+            Add(Metric.Voltage, "voltage", 0, meterStream ? 600 : double.MaxValue);
+            Add(Metric.Current, "current", 0, meterStream ? 30 : double.MaxValue);
         }
         return values.Count == 0 ? null : values;
 

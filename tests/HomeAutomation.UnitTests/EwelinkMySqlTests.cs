@@ -1,5 +1,6 @@
 using System.Transactions;
 using System.Net;
+using System.Text.Json;
 using Dapper;
 using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.Ewelink;
@@ -82,6 +83,30 @@ public sealed class EwelinkMySqlTests
             JOIN telemetry_series ts ON ts.id=lr.series_id
             WHERE ts.property_id=@property AND ts.source_key='ewelink' AND ts.metric='SwitchOn'
             """, new { property }));
+
+        var account = Assert.IsType<EwelinkAccount>(await store.AccountAsync(ct));
+        var identity = new EwelinkSocketIdentity(owner, account.Envelope!, tokens);
+        using var frame = JsonDocument.Parse("""
+            {"action":"update","userAgent":"device","apikey":"fixture-account","deviceid":"fixture-relay",
+             "params":{"power":"500.00","voltage":"239.83","current":"2.10","switch":"off"}}
+            """);
+        var timing = Assert.IsType<EwelinkSocketTime>(EwelinkSocketProtocol.DeviceEventTime(frame.RootElement, clock.GetUtcNow()));
+        var trace = new EwelinkSocketTrace();
+        var ingested = await service.IngestSocketEventAsync(identity, device.ExternalId, frame.RootElement.GetProperty("params"), timing, ct, trace);
+        Assert.Equal((property, 3), ingested);
+        Assert.Null(await service.IngestSocketEventAsync(identity, device.ExternalId, frame.RootElement.GetProperty("params"), timing, ct, trace));
+        Assert.Equal(3, await telemetry.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM telemetry_samples s
+            JOIN telemetry_series ts ON ts.id=s.series_id
+            WHERE ts.property_id=@property AND ts.source_key='ewelink'
+              AND ts.metric IN ('ActivePower','Voltage','Current') AND s.timestamp_source='serverReceived'
+              AND s.observed_at_utc=@observed AND s.received_at_utc=@observed
+            """, new { property, observed = timing.At.UtcDateTime }));
+        var saved = Assert.Single(await store.DevicesAsync(owner, ct)).Device;
+        Assert.True(saved.Relay);
+        Assert.Null(saved.SocketRelay);
+        Assert.True(saved.Measurements![Metric.ActivePower].ServerReceived);
+        Assert.Contains("persistedElectricalSamples=3", trace.Drain(), StringComparison.Ordinal);
     }
 
     private sealed class RelayHandler : HttpMessageHandler

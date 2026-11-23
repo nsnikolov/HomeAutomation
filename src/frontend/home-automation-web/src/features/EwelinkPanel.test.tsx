@@ -48,7 +48,7 @@ it('distinguishes live measurements from last-known values and retains their tim
     status: 'connected', manage: false, lastSuccess: time, nextSync: null, unassigned: [],
     devices: [{ id: 'relay', name: 'Boiler', model: 'PSF-X67', roomId: 1, connectivity: 'online',
       seenAt: time, quality: 'fresh', hasRelay: true, relay: false, relayAt: time, relayQuality: 'fresh',
-      socketMetrics: ['activePower', 'voltage'], measurements: [
+      socketMetrics: ['activePower', 'voltage'], serverReceivedMetrics: ['activePower'], measurements: [
         { metric: 'activePower', unit: 'W', observedAt: time, number: 54.2, flag: null, code: null, quality: 'fresh' },
         { metric: 'voltage', unit: 'V', observedAt: time, number: 230, flag: null, code: null, quality: 'stale' },
       ] }],
@@ -56,7 +56,7 @@ it('distinguishes live measurements from last-known values and retains their tim
   const trace = vi.spyOn(console, 'info').mockImplementation(() => {})
   try {
     view('/?ewelinkDiagnostics=1')
-    expect((await screen.findByText('Active power')).nextElementSibling).toHaveTextContent(/54.2.*Live/)
+    expect((await screen.findByText('Active power')).nextElementSibling).toHaveTextContent(/54.2.*Live.*Server received/)
     expect(screen.getByText('Voltage').nextElementSibling).toHaveTextContent(/230.*Last known/)
     expect(screen.getByText('Active power').nextElementSibling?.querySelector('time')).toHaveAttribute('dateTime', time)
     expect(trace).toHaveBeenCalledExactlyOnceWith('eWeLink React trace', {

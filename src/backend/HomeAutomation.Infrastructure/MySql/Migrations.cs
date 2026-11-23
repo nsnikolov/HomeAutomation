@@ -62,6 +62,19 @@ public sealed class Migrations(Database database)
         }
     }
 
+    private const string EwelinkReceiveTimeMigration = ".010_ewelink_receive_time_provenance.sql";
+    private volatile bool receiveTimeReady;
+
+    internal async Task<bool> VerifyEwelinkReceiveTimeAsync(CancellationToken ct)
+    {
+        if (receiveTimeReady) return true;
+        var name = Scripts.Single(script => script.EndsWith(EwelinkReceiveTimeMigration, StringComparison.Ordinal));
+        await using var connection = await database.OpenAsync(ct);
+        receiveTimeReady = await connection.ExecuteScalarAsync<bool>(Query(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE name=@name)", ct, new { name }));
+        return receiveTimeReady;
+    }
+
     public async Task<bool> VerifyAsync(CancellationToken cancellationToken, bool includeDaikin = false, bool includeEwelink = false,
         bool includeTuya = false, bool includePreferences = false)
     {
@@ -75,6 +88,7 @@ public sealed class Migrations(Database database)
                 (includeEwelink || !name.EndsWith(".007_ewelink_sync_budget.sql", StringComparison.Ordinal)) &&
                 (includeEwelink || !name.EndsWith(".008_ewelink_relay_commands.sql", StringComparison.Ordinal)) &&
                 (includeEwelink || !name.EndsWith(".009_ewelink_relay_preferences.sql", StringComparison.Ordinal)) &&
+                !name.EndsWith(EwelinkReceiveTimeMigration, StringComparison.Ordinal) &&
                 (includeTuya || !name.EndsWith(".005_tuya_cloud.sql", StringComparison.Ordinal)) &&
                 (includePreferences || !name.EndsWith(".006_device_view_preferences.sql", StringComparison.Ordinal)))
                 .All(installed.Contains);

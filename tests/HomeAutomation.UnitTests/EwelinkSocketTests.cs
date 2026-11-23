@@ -40,10 +40,103 @@ public sealed class EwelinkSocketTests
             action = "update", userAgent = "device", d_seq = Now.AddSeconds(-2).ToUnixTimeMilliseconds(), ts = 0
         }));
         using var untimed = JsonDocument.Parse("""{"action":"update","userAgent":"device","ts":0}""");
-        Assert.Equal(Now.AddSeconds(-2), EwelinkSocketProtocol.DeviceEventTime(documented.RootElement, Now));
+        Assert.Equal(new EwelinkSocketTime(Now.AddSeconds(-2), EwelinkSocketTimeSource.ProviderSequence),
+            EwelinkSocketProtocol.DeviceEventTime(documented.RootElement, Now));
         Assert.Null(EwelinkSocketProtocol.DeviceEventTime(documented.RootElement, Now.AddMinutes(3)));
         Assert.Null(EwelinkSocketProtocol.DeviceEventTime(untimed.RootElement, Now));
     }
+
+    [Fact]
+    public async Task DiagnosedUntimedElectricalFrameIsReceivedWithItsServerTimestamp()
+    {
+        using var socket = new FixtureSocket();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var clock = new SessionClock();
+        var seen = new TaskCompletionSource<EwelinkSocketTime>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var trace = new EwelinkSocketTrace();
+        var session = EwelinkSocketSession.RunAsync(socket, Tokens, "fixture-app", clock, () => { }, (id, values, time, _) =>
+        {
+            Assert.Equal("fixture-device", id);
+            var (_, samples) = EwelinkMapping.MergeEvent(Meter(), values, time.At, source: time.Source);
+            Assert.Equal(3, samples.Count);
+            Assert.All(samples, sample =>
+            {
+                Assert.True(sample.ServerReceivedTimestamp);
+                Assert.Equal(Now, sample.ObservedAt);
+            });
+            seen.SetResult(time);
+            return Task.CompletedTask;
+        }, _ => Task.FromResult(true), stop.Token, trace: trace);
+        using var handshake = JsonDocument.Parse(await socket.Sent.Reader.ReadAsync(stop.Token));
+        socket.Incoming.Writer.TryWrite(JsonSerializer.Serialize(new
+        {
+            error = 0, apikey = AccountKey, sequence = handshake.RootElement.GetProperty("sequence").GetString()
+        }));
+        const string frame = """
+            {"action":"update","userAgent":"device","apikey":"fixture-account","deviceid":"fixture-device",
+             "params":{"power":"500.00","voltage":"239.83","current":"2.10"}}
+            """;
+        socket.Incoming.Writer.TryWrite(frame.Replace("fixture-account", "other-account", StringComparison.Ordinal));
+        socket.Incoming.Writer.TryWrite(frame.Replace("\"userAgent\":\"device\"", "\"userAgent\":\"app\"", StringComparison.Ordinal));
+        socket.Incoming.Writer.TryWrite(frame);
+        Assert.Equal(new EwelinkSocketTime(Now, EwelinkSocketTimeSource.ServerReceived), await seen.Task.WaitAsync(stop.Token));
+        await stop.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session);
+        var summary = trace.Drain();
+        Assert.Contains("reject.accountKey=1", summary, StringComparison.Ordinal);
+        Assert.Contains("reject.sender=1", summary, StringComparison.Ordinal);
+        Assert.Contains("queuedElectricalFrames=1", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UntimedElectricalFramesKeepPerFieldOrderingAndIgnoreRelayAndInvalidValues()
+    {
+        var trace = new EwelinkSocketTrace();
+        using var verified = JsonDocument.Parse("""{"power":"500.00"}""");
+        using var untimed = JsonDocument.Parse("""{"power":"999.00","voltage":"239.83","current":"31.0","switch":"on"}""");
+        var (meter, _) = EwelinkMapping.MergeEvent(Meter(), verified.RootElement, Now);
+        var (first, samples) = ApplyUntimed(meter, Now.AddSeconds(1));
+        var sample = Assert.Single(samples);
+        Assert.Equal(Metric.Voltage, sample.Metric);
+        Assert.True(sample.ServerReceivedTimestamp);
+        Assert.False(first.Relay);
+        Assert.Null(first.SocketRelay);
+        Assert.Equal(500, first.Measurements![Metric.ActivePower].Value);
+        Assert.Equal(239.83, first.Measurements[Metric.Voltage].Value);
+        Assert.Empty(ApplyUntimed(first, Now.AddSeconds(2)).Samples);
+        Assert.Empty(ApplyUntimed(first, Now).Samples);
+        using var olderReport = JsonDocument.Parse("""{"voltage":"200.00"}""");
+        Assert.Empty(EwelinkMapping.MergeEvent(first, olderReport.RootElement, Now).Samples);
+        Assert.Empty(ApplyUntimed(Meter() with { Model = "THR320D", Uiid = 181 }, Now).Samples);
+
+        var afterExpiry = ApplyUntimed(first, Now.AddMinutes(3));
+        Assert.Equal(Metric.ActivePower, Assert.Single(afterExpiry.Samples).Metric);
+        Assert.Contains("reject.freshProviderTimestamp", trace.Drain(), StringComparison.Ordinal);
+
+        (EwelinkDevice Snapshot, IReadOnlyList<Sample> Samples) ApplyUntimed(EwelinkDevice device, DateTimeOffset at) =>
+            EwelinkMapping.MergeEvent(device, untimed.RootElement, at, trace, EwelinkSocketTimeSource.ServerReceived);
+    }
+
+    [Fact]
+    public void ElectricalEnvelopeTimeCanBeUsedButInvalidOrStaleTimestampsDoNotFallBack()
+    {
+        Assert.Equal(new EwelinkSocketTime(Now.AddSeconds(-1), EwelinkSocketTimeSource.ProviderEnvelope),
+            Parse(Now.AddSeconds(-1).ToUnixTimeSeconds().ToString()));
+        Assert.Null(Parse(Now.AddMinutes(-3).ToUnixTimeSeconds().ToString()));
+        Assert.Null(Parse(Now.AddSeconds(1).ToUnixTimeSeconds().ToString()));
+        Assert.Null(Parse("\"untrusted\""));
+
+        static EwelinkSocketTime? Parse(string timestamp)
+        {
+            using var message = JsonDocument.Parse($$$"""
+                {"action":"update","userAgent":"device","ts":{{{timestamp}}},"params":{"power":"500.00"}}
+                """);
+            return EwelinkSocketProtocol.DeviceEventTime(message.RootElement, Now);
+        }
+    }
+
+    private static EwelinkDevice Meter() => new("fixture-device", "Fixture meter", "PSF-X67", "", false,
+        Connectivity.Online, Now.AddSeconds(-5), true, false, Now.AddSeconds(-5), Uiid: 32);
 
     [Fact]
     public void RecentElectricalReportsUseTheirOwnWatermarkAcrossHttpReconciliation()

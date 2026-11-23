@@ -44,14 +44,14 @@ public sealed partial class EwelinkService
     }
 
     internal async Task<(long Property, int ElectricalSamples)?> IngestSocketEventAsync(EwelinkSocketIdentity identity,
-        string externalId, JsonElement parameters, DateTimeOffset at, CancellationToken ct, EwelinkSocketTrace? diagnostics)
+        string externalId, JsonElement parameters, EwelinkSocketTime time, CancellationToken ct, EwelinkSocketTrace? diagnostics)
     {
         await gate.WaitAsync(ct);
         try
         {
             var now = clock.GetUtcNow();
             var trace = diagnostics is not null && EwelinkMapping.HasElectricalFields(parameters) ? diagnostics : null;
-            if (at < now - EwelinkSocketProtocol.Freshness)
+            if (time.At < now - EwelinkSocketProtocol.Freshness || time.At > now)
             {
                 trace?.Count("reject.expiredBeforeIngest");
                 return null;
@@ -79,9 +79,19 @@ public sealed partial class EwelinkService
                 trace?.Count("reject.sharedDevice");
                 return null;
             }
-            var (snapshot, samples) = EwelinkMapping.MergeEvent(device, parameters, at, trace);
+            var (snapshot, samples) = EwelinkMapping.MergeEvent(device, parameters, time.At, trace, time.Source);
             if (samples.Count == 0) return null;
             var electricalSamples = samples.Count(sample => EwelinkElectricalReporting.IsElectrical(sample.Metric));
+            if (time.Source == EwelinkSocketTimeSource.ServerReceived)
+            {
+                if (!await store.ReceiveTimeSchemaReadyAsync(ct))
+                {
+                    trace?.Count("reject.receiveTimeSchemaRequired");
+                    return null;
+                }
+                trace?.Count("acceptedServerReceivedFrames");
+            }
+            if (electricalSamples > 0) trace?.Count("acceptedElectricalFrames");
             try
             {
                 await IngestAsync(property, row.RoomId, snapshot, includeRelay: false, ct, samples);
@@ -223,12 +233,12 @@ internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOp
         return identity.Matches(account, clock.GetUtcNow());
     }
 
-    private async Task ReceiveAsync(EwelinkSocketIdentity identity, string id, JsonElement parameters, DateTimeOffset at,
+    private async Task ReceiveAsync(EwelinkSocketIdentity identity, string id, JsonElement parameters, EwelinkSocketTime time,
         CancellationToken ct, EwelinkSocketTrace? trace)
     {
         await using var scope = scopes.CreateAsyncScope();
         var service = scope.ServiceProvider.GetRequiredService<EwelinkService>();
-        var result = await service.IngestSocketEventAsync(identity, id, parameters, at, ct, trace);
+        var result = await service.IngestSocketEventAsync(identity, id, parameters, time, ct, trace);
         if (result is { } assigned)
         {
             var notifier = scope.ServiceProvider.GetRequiredService<IEwelinkLiveNotifier>();
@@ -248,10 +258,10 @@ internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOp
 
 internal static class EwelinkSocketSession
 {
-    private sealed record Report(string Device, JsonElement Parameters, DateTimeOffset At);
+    private sealed record Report(string Device, JsonElement Parameters, EwelinkSocketTime Time);
 
     public static async Task RunAsync(WebSocket socket, EwelinkTokens tokens, string appId, TimeProvider clock, Action authenticated,
-        Func<string, JsonElement, DateTimeOffset, CancellationToken, Task> observed,
+        Func<string, JsonElement, EwelinkSocketTime, CancellationToken, Task> observed,
         Func<CancellationToken, Task<bool>> checkIdentity, CancellationToken ct,
         Func<EwelinkActivationChannel, CancellationToken, Task>? activate = null,
         EwelinkSocketTrace? trace = null, ILogger? traceLogger = null)
@@ -305,7 +315,7 @@ internal static class EwelinkSocketSession
         async Task ProcessAsync()
         {
             await foreach (var report in reports.Reader.ReadAllAsync(session.Token))
-                await observed(report.Device, report.Parameters, report.At, session.Token);
+                await observed(report.Device, report.Parameters, report.Time, session.Token);
         }
     }
 
@@ -316,6 +326,7 @@ internal static class EwelinkSocketSession
         while (!ct.IsCancellationRequested)
         {
             var message = await ReadAsync(socket, buffer, ct);
+            var receivedAt = clock.GetUtcNow();
             trace?.Count("frames");
             if (message.Span.SequenceEqual("pong"u8)) continue;
             JsonDocument json;
@@ -330,7 +341,7 @@ internal static class EwelinkSocketSession
                 electrical?.Shape(data, parameters);
                 if (trace is not null && EwelinkMapping.Text(data, "action", 16) == "update")
                     trace.Count($"updateFrames.params.{parameters.ValueKind}");
-                if (EwelinkSocketProtocol.DeviceEventTime(data, clock.GetUtcNow(), electrical) is not { } at) continue;
+                if (EwelinkSocketProtocol.DeviceEventTime(data, receivedAt, electrical) is not { } time) continue;
                 if (EwelinkMapping.Text(data, "apikey", 256) != key)
                 {
                     electrical?.Count("reject.accountKey");
@@ -343,7 +354,7 @@ internal static class EwelinkSocketSession
                 }
                 if (parameters.ValueKind != JsonValueKind.Object) continue;
                 electrical?.Count("queuedElectricalFrames");
-                reports.TryWrite(new(id, parameters.Clone(), at));
+                reports.TryWrite(new(id, parameters.Clone(), time));
             }
         }
     }

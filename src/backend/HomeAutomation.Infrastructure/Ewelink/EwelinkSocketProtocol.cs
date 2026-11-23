@@ -3,6 +3,9 @@ using System.Text.Json;
 
 namespace HomeAutomation.Infrastructure.Ewelink;
 
+internal enum EwelinkSocketTimeSource { ProviderSequence, ProviderEnvelope, ServerReceived }
+internal readonly record struct EwelinkSocketTime(DateTimeOffset At, EwelinkSocketTimeSource Source);
+
 internal static class EwelinkSocketProtocol
 {
     internal static readonly TimeSpan Freshness = TimeSpan.FromMinutes(2);
@@ -51,7 +54,7 @@ internal static class EwelinkSocketProtocol
         return TimeSpan.FromSeconds(interval is { } seconds ? seconds + 7 : 90);
     }
 
-    public static DateTimeOffset? DeviceEventTime(JsonElement message, DateTimeOffset received, EwelinkSocketTrace? trace = null)
+    public static EwelinkSocketTime? DeviceEventTime(JsonElement message, DateTimeOffset received, EwelinkSocketTrace? trace = null)
     {
         if (EwelinkMapping.Text(message, "action", 16) != "update")
         {
@@ -63,10 +66,31 @@ internal static class EwelinkSocketProtocol
             trace?.Count("reject.sender");
             return null;
         }
-        var sequence = EwelinkMapping.Node(message, "d_seq");
+        var deviceSequence = EwelinkMapping.Node(message, "d_seq");
+        var sequence = EwelinkMapping.Node(message, "sequence");
+        var timestamp = EwelinkMapping.Node(message, "ts");
+        var source = EwelinkSocketTimeSource.ProviderSequence;
         long milliseconds;
-        if (sequence.ValueKind != JsonValueKind.Undefined
-                ? sequence.ValueKind != JsonValueKind.Number || !sequence.TryGetInt64(out milliseconds)
+        if (deviceSequence.ValueKind == JsonValueKind.Undefined && sequence.ValueKind == JsonValueKind.Undefined &&
+            EwelinkMapping.HasElectricalFields(EwelinkMapping.Node(message, "params")))
+        {
+            if (timestamp.ValueKind == JsonValueKind.Undefined)
+            {
+                // Align with DATETIME(6), so memory and MySQL agree on ordering and duplicate keys.
+                var utc = new DateTimeOffset(received.UtcTicks / 10 * 10, TimeSpan.Zero);
+                return new(utc, EwelinkSocketTimeSource.ServerReceived);
+            }
+            if (timestamp.ValueKind != JsonValueKind.Number || !timestamp.TryGetInt64(out var seconds) ||
+                seconds < 0 || seconds > DateTimeOffset.MaxValue.ToUnixTimeSeconds())
+            {
+                trace?.Count("reject.timestampMissingOrInvalid");
+                return null;
+            }
+            milliseconds = seconds * 1000;
+            source = EwelinkSocketTimeSource.ProviderEnvelope;
+        }
+        else if (deviceSequence.ValueKind != JsonValueKind.Undefined
+                ? deviceSequence.ValueKind != JsonValueKind.Number || !deviceSequence.TryGetInt64(out milliseconds)
                 : !long.TryParse(EwelinkMapping.Text(message, "sequence", 16), NumberStyles.None,
                     CultureInfo.InvariantCulture, out milliseconds))
         {
@@ -83,7 +107,7 @@ internal static class EwelinkSocketProtocol
             trace?.Count("reject.timestampFuture");
             return null;
         }
-        return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);
+        return new(DateTimeOffset.FromUnixTimeMilliseconds(milliseconds), source);
     }
 
     public static TimeSpan ReconnectDelay(int failures) =>

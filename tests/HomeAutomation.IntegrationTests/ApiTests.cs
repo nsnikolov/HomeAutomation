@@ -598,6 +598,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         private string status = "connected";
         public IReadOnlyList<EwelinkRow> Rows { get; set; } = [];
         public Task<bool> SchemaReadyAsync(CancellationToken ct) => Task.FromResult(true);
+        public Task<bool> ReceiveTimeSchemaReadyAsync(CancellationToken ct) => Task.FromResult(true);
         public Task<EwelinkAccount?> AccountAsync(CancellationToken ct) => Task.FromResult(
             Owner is null ? null : new EwelinkAccount(Owner, Envelope, status, LastSuccess, nextSync, LastAttempt));
         public Task SaveTokensAsync(string owner, byte[]? envelope, CancellationToken ct)
