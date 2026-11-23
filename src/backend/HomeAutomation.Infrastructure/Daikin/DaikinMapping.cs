@@ -57,6 +57,7 @@ internal static class DaikinMapping
             var hydronicGateway = gatewayType == "heating-wlan" || managementPoints.EnumerateArray().Any(point =>
                 point.Node("managementPointType").Text() == "indoorUnitHydro");
             var gatewayModel = gateway.Node("deviceModel").Text();
+            var dx23 = gatewayType == "dx23" && gatewayModel == "dx23";
             var airGateway = gatewayModel is "air-to-air-heat-pump" or "air-conditioner" ||
                 gatewayType is "dx23" or "dx4" && gatewayModel == gatewayType &&
                 managementPoints.EnumerateArray().Any(point => point.Node("managementPointType").Text() == "indoorUnit");
@@ -68,7 +69,8 @@ internal static class DaikinMapping
 
                 var mode = point.Node("operationMode").Value().Text();
                 var power = point.Node("onOffMode").Value().Text();
-                var modes = point.Node("temperatureControl").Value().Node("operationModes");
+                var temperature = point.Node("temperatureControl");
+                var modes = temperature.Value().Node("operationModes");
                 var setpoint = modes.Node(mode).Node("setpoints").Node("roomTemperature");
                 var fan = point.Node("fanControl").Value().Node("operationModes").Node(mode).Node("fanSpeed");
                 var fanMode = fan.Node("currentMode").Value().Text();
@@ -99,7 +101,7 @@ internal static class DaikinMapping
                     fanMode == "fixed" && speed.Value().Number() is >= 0 and var fanStep ? fanStep : null, Label(fanMode, 32),
                     equipment == DaikinEquipment.AirConditioner
                         ? new DaikinControls(Values(point.Node("onOffMode"), "on", "off"), Values(point.Node("operationMode"), "heating", "cooling"),
-                            mode is "heating" or "cooling" && IsCelsius(setpoint) ? Range(setpoint) : null,
+                            RoomTargetRange(temperature, setpoint, mode, dx23),
                             fanMode == "fixed" ? Range(speed) : null)
                         : ReadOnlyControls, fault, equipment, water, Available: true, GatewayTimestamp: gatewayTimestamp,
                     ProviderReceivedAt: received, InvalidSourceTime: invalidSource, CachedResponse: cachedResponse);
@@ -128,6 +130,19 @@ internal static class DaikinMapping
     }
 
     private static bool IsCelsius(JsonElement characteristic) => characteristic.Node("unit").Text() is "C" or "°C";
+
+    private static DaikinRange? RoomTargetRange(JsonElement characteristic, JsonElement setpoint, string? mode, bool dx23)
+    {
+        if (mode is not ("heating" or "cooling") || Range(setpoint) is not { } range) return null;
+        if (IsCelsius(setpoint)) return range;
+
+        // These dx23 profiles omit the unit. ONECTA returned the same profiles in Celsius on a dx4 gateway.
+        if (!dx23 || setpoint.Node("unit").ValueKind != JsonValueKind.Undefined || !characteristic.Settable() ||
+            setpoint.Value().Number() is not { } current || !range.Allows(current))
+            return null;
+        return mode == "heating" && range is { Min: 10, Max: 30, Step: 0.5m } ||
+            mode == "cooling" && range is { Min: 18, Max: 32, Step: 0.5m } ? range : null;
+    }
 
     private static decimal? Celsius(JsonElement characteristic) => IsCelsius(characteristic) ? characteristic.Value().Number() : null;
 

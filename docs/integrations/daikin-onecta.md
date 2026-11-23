@@ -120,6 +120,12 @@ An authenticated live response identified the Altherma energy dataset as heating
 
 Each accepted PATCH resets one account-wide timer to 30 seconds after that acceptance. At expiry, one discovery GET checks all devices and reconciles each open audit independently. If regular polling or another discovery already confirmed the scheduled commands, it cancels the extra GET. A partial read confirms only matching values. The normal 15-minute poll handles unresolved results, quota exhaustion, failed reads, or a backend restart during the in-memory window. The confirmation worker makes one scheduled attempt per window and uses the existing background quota rather than spending the interactive reserve.
 
+### dx23 and dx4 room targets
+
+A read-only ONECTA discovery GET on 2026-11-23 returned `temperatureControl.value.operationModes.<mode>.setpoints.roomTemperature` for both gateway types. The enclosing characteristic and the room target both advertised `settable: true`. The dx23 gateways for Sturgel Kitchen and Room 1 omitted `unit` while reporting heating 10–30, cooling 18–32 and a 0.5 increment. Sturgel Big Room and Small room 2 (dx4) explicitly returned `°C`, with heating 10–31 and cooling 18–33 at the same increment. Another bound dx4 gateway explicitly returned Celsius for the same 10–30 and 18–32 profiles as dx23. [ONECTA Developer Portal](https://developer.cloud.daikineurope.com/)
+
+The adapter accepts the verified unit-omitting profiles only for air conditioners whose gateway type and model are both `dx23`. It requires the enclosing characteristic and the leaf to be writable, the exact observed per-mode range and half-degree step, and a current target on that grid. An explicitly Celsius setpoint uses the provider's own limits. Manual controls cover heating and cooling, and dispatch uses the existing `temperatureControl` characteristic and `/operationModes/<mode>/setpoints/roomTemperature` path. The regular sync or dashboard refresh repopulates the controls after deployment. Capability verification used discovery and mocked command/readback tests.
+
 ### Request cost
 
 The official public FAQ documents a rolling limit of 200 calls per day for private apps. The detailed Developer Portal contract requires an authenticated portal session. A supported multi-characteristic or multi-device write was not verified, so the adapter uses the existing characteristic-specific PATCH. The authenticated account-wide GET can reconcile several devices at once. [Daikin developer FAQ](https://www.daikin.eu/en_us/product-group/control-systems/daikin-developer-portal.html) · [ONECTA Developer Portal](https://developer.cloud.daikineurope.com/)
@@ -134,7 +140,7 @@ Temperature +/- edits are local until **Apply target** submits the final selecti
 
 ### Supervised AC verification
 
-1. With writes off, open the assigned property in the local HTTPS app and refresh discovery if needed. Check the device name and assignment, current setting and mode, explicit reachability, advertised capability, absence of unresolved commands, and remaining quota. A 2026-11-22 live read found four assigned online ACs with power, heating/cooling and fixed fan. Sturgel Big Room and Sturgel Small room 2 also advertised a verified Celsius setpoint. Sturgel Kitchen advertised a writable range and step with no unit, so choose an approved power action there or use an assigned AC that displays temperature controls.
+1. With writes off, open the assigned property in the local HTTPS app and refresh discovery if needed. Check the device name and assignment, current setting and mode, explicit reachability, advertised capability, absence of unresolved commands, and remaining quota. Confirm that the device card shows the expected temperature range before testing a temperature change.
 2. Obtain explicit approval for that specific device and action, with the exact requested value and an operator present to observe the unit. For temperature, pick one neighboring supported value from the currently reported target. Keep Altherma in monitoring mode.
 3. From PowerShell, use a process-scoped opt-in for one backend. Stop the existing backend first to avoid duplicate polling. Keep the normal local HTTPS frontend, sign in as the existing operator, and use its Daikin device card.
 

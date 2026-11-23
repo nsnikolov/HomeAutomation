@@ -65,6 +65,19 @@ it('blocks all writes if an earlier command on the device remains uncertain', ()
   expect(screen.getByRole('button', { name: 'Raise target temperature' })).toBeDisabled()
 })
 
+it.each([['dx23', 30], ['dx4', 31]] as const)('uses the %s heating limit and advertised increment', (model, max) => {
+  view({ ...device, model, target: max - 0.5,
+    controls: { ...device.controls, temperature: { min: 10, max, step: 0.5 } } }, true)
+  expect(screen.getByText(new RegExp(`Target controls .*10–${max} °C .*0.5 °C step`))).toBeInTheDocument()
+  const raise = screen.getByRole('button', { name: 'Raise target temperature' })
+  expect(raise).toBeEnabled()
+  fireEvent.click(raise)
+  expect(screen.getByText(`Requested target ${max} °C`)).toBeInTheDocument()
+  expect(raise).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Lower target temperature' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: 'Apply target' })).toBeEnabled()
+})
+
 it('coalesces target edits until Apply and submits only once while awaiting readback', async () => {
   const command = vi.spyOn(api, 'commandDaikin').mockResolvedValue({
     id: 'fixture-command', operation: 'temperature', value: '17', status: 'uncertain', updatedAt: device.observedAt,

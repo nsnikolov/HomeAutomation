@@ -37,3 +37,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 33. 2026-11-23 · [Milestone 4H — eWeLink UIID 32 Live Electrical Reporting](0033-ewelink-live-electrical-reporting.md)
 34. 2026-11-23 · [Investigate Milestone 4H live electrical telemetry](0034-ewelink-electrical-telemetry-trace.md)
 35. 2026-11-23 · [Fix eWeLink WebSocket Electrical Timestamp Handling](0035-ewelink-electrical-timestamps.md)
+36. 2026-11-23 · [Investigate missing Daikin target temperature controls for dx23 devices](0036-daikin-dx23-target-controls.md)

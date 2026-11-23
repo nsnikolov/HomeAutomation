@@ -48,6 +48,53 @@ public sealed class DaikinTests
         Assert.Equal("duplicateIdentity", Assert.Throws<DaikinFailure>(() => DaikinMapping.Discover(duplicate.RootElement, Now)).Status);
     }
 
+    [Theory]
+    [InlineData("heating", 10, 30)]
+    [InlineData("cooling", 18, 32)]
+    public void VerifiedDx23ProfilesUseTheAnnouncedHalfDegreeRangeWithoutAUnit(string mode, int min, int max)
+    {
+        using var json = JsonDocument.Parse(Dx23Fixture(mode, min, max));
+        var ac = Assert.Single(DaikinMapping.Discover(json.RootElement, Now));
+        Assert.Equal(DaikinEquipment.AirConditioner, ac.Equipment);
+        Assert.Equal(new DaikinRange(min, max, 0.5m), ac.Controls.Temperature);
+        Assert.Equal(22, ac.Target);
+        Assert.Equal($"/operationModes/{mode}/setpoints/roomTemperature",
+            DaikinService.ResolveManualChange(ac, new("temperature", "22.5", mode)).Path);
+        Assert.Null(DaikinMapping.Validate(ac, new("temperature", "22.1")));
+        Assert.Null(DaikinMapping.Validate(ac, new("temperature", (max + 1).ToString())));
+    }
+
+    [Theory]
+    [InlineData("dx4", "heating", 10, 30, "0.5", "", true, true)]
+    [InlineData("dx23", "heating", 10, 30, "1", "", true, true)]
+    [InlineData("dx23", "heating", 10, 30, "0.5", "\"unit\":\"°F\",", true, true)]
+    [InlineData("dx23", "heating", 10, 30, "0.5", "\"unit\":null,", true, true)]
+    [InlineData("dx23", "heating", 10, 30, "0.5", "", false, true)]
+    [InlineData("dx23", "heating", 10, 30, "0.5", "", true, false)]
+    [InlineData("dx23", "auto", 18, 30, "0.5", "", true, true)]
+    public void UnverifiedTemperatureMetadataLeavesTheReadableTargetWithoutWriteControls(string model, string mode,
+        int min, int max, string step, string unit, bool parentWritable, bool leafWritable)
+    {
+        using var json = JsonDocument.Parse(Dx23Fixture(mode, min, max)
+            .Replace("dx23", model, StringComparison.Ordinal)
+            .Replace("\"stepValue\":0.5", $"\"stepValue\":{step}", StringComparison.Ordinal)
+            .Replace("\"temperatureControl\":{\"settable\":true", $"\"temperatureControl\":{{\"settable\":{JsonSerializer.Serialize(parentWritable)}", StringComparison.Ordinal)
+            .Replace("\"roomTemperature\":{\"settable\":true,", $"\"roomTemperature\":{{{unit}\"settable\":{JsonSerializer.Serialize(leafWritable)},", StringComparison.Ordinal));
+        var ac = Assert.Single(DaikinMapping.Discover(json.RootElement, Now));
+        Assert.Equal(22, ac.Target);
+        Assert.Null(ac.Controls.Temperature);
+        Assert.Null(DaikinMapping.Validate(ac, new("temperature", "23")));
+    }
+
+    private static string Dx23Fixture(string mode, int min, int max) => $$$"""
+        [{"_id":"fixture","type":"dx23","deviceModel":"dx23","isCloudConnectionUp":{"value":true},
+          "managementPoints":[{"embeddedId":"zone","managementPointType":"climateControl",
+           "operationMode":{"settable":true,"values":["heating","cooling","auto"],"value":"{{{mode}}}"},
+           "temperatureControl":{"settable":true,"value":{"operationModes":{"{{{mode}}}":{"setpoints":
+             {"roomTemperature":{"settable":true,"minValue":{{{min}}},"maxValue":{{{max}}},"stepValue":0.5,"value":22}} }} }}
+          },{"embeddedId":"indoor","managementPointType":"indoorUnit"}]}]
+        """;
+
     [Fact]
     public void GatewayTimestampAloneDoesNotSupplyDeviceSourceTime()
     {
@@ -299,12 +346,15 @@ public sealed class DaikinTests
         Assert.Equal(2, requests);
     }
 
-    [Fact]
-    public async Task AcceptedTemperaturePatchWaitsForASeparateMatchingProviderRead()
+    [Theory]
+    [InlineData(false, "18.5")]
+    [InlineData(true, "22.5")]
+    public async Task AcceptedTemperaturePatchWaitsForASeparateMatchingProviderRead(bool dx23, string target)
     {
-        using var json = JsonDocument.Parse(Fixture);
+        using var json = JsonDocument.Parse(dx23 ? Dx23Fixture("heating", 10, 30) : Fixture);
         var ac = Assert.Single(DaikinMapping.Discover(json.RootElement, Now)) with { Connectivity = Connectivity.Online };
-        var requested = new DaikinCommand("temperature", "18.5", "heating");
+        var requested = new DaikinCommand("temperature", target, "heating");
+        var value = dx23 ? 22.5m : 18.5m;
         var change = DaikinService.ResolveManualChange(ac, requested);
         using var client = Client(async (request, ct) =>
         {
@@ -312,14 +362,14 @@ public sealed class DaikinTests
             Assert.EndsWith("/characteristics/temperatureControl", request.RequestUri!.AbsolutePath);
             using var content = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
             Assert.Equal("/operationModes/heating/setpoints/roomTemperature", content.RootElement.GetProperty("path").GetString());
-            Assert.Equal(18.5m, content.RootElement.GetProperty("value").GetDecimal());
+            Assert.Equal(value, content.RootElement.GetProperty("value").GetDecimal());
             return Response(HttpStatusCode.NoContent, "");
         }, writes: true);
 
         await client.PatchAsync("fixture", ac, change, default);
         var audit = new DaikinOutcome("fixture", requested.Operation, requested.Value, "pending", Now, "heating");
         Assert.False(DaikinService.MatchesCommand(ac, audit));
-        var readback = ac with { Target = 18.5m, SourceAt = null, ProviderReceivedAt = Now.AddSeconds(5) };
+        var readback = ac with { Target = value, SourceAt = null, ProviderReceivedAt = Now.AddSeconds(5) };
         Assert.True(DaikinService.MatchesCommand(readback, audit));
         Assert.False(DaikinService.MatchesCommand(readback with { Connectivity = Connectivity.Unknown }, audit));
     }
