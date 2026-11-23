@@ -107,6 +107,19 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
     mutationFn: () => api.assignEwelink(property.id, device.id, room ? Number(room) : null),
     onSuccess: () => client.invalidateQueries({ queryKey: ['property', property.id, 'ewelink'] }),
   })
+  const command = useMutation({
+    mutationFn: (on: boolean) => api.commandEwelinkRelay(property.id, device.id, on, !!device.requiresRelayConfirmation),
+    onSettled: () => client.invalidateQueries({ queryKey: ['property', property.id, 'ewelink'] }),
+  })
+  const result = command.data && command.data.id !== device.relayCommand?.id ? command.data : device.relayCommand
+  const commandStatus = command.isPending ? 'pending' : result?.status
+  const commandDisabled = command.isPending || result?.open || device.relayCommand?.open ||
+    device.connectivity !== 'online' || device.relayQuality !== 'fresh' || device.relay === null
+  function setRelay(on: boolean) {
+    if (device.requiresRelayConfirmation &&
+      !window.confirm(`Confirm switching ${device.name} ${on ? 'ON' : 'OFF'}.`)) return
+    command.mutate(on)
+  }
   const relay = device.relay === null ? 'Unavailable' : device.relay ? 'On' : 'Off'
   const supported = device.supportedMetrics ?? device.measurements?.map(reading => reading.metric) ?? []
   const rows = measurementRows.filter(([metric]) => supported.includes(metric))
@@ -130,6 +143,14 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
         </dd></div>
       })}
     </dl>}
+    {device.canWriteRelay && <div className="filters">
+      <Button variant="outline" disabled={commandDisabled || device.relay === true} onClick={() => setRelay(true)}>ON</Button>
+      <Button variant="outline" disabled={commandDisabled || device.relay === false} onClick={() => setRelay(false)}>OFF</Button>
+      {command.isError
+        ? <p role="alert">{command.error instanceof ApiError && command.error.code === 'commandPending'
+          ? 'Pending' : 'Failed to submit relay command. Check the reported state before trying again.'}</p>
+        : commandStatus && <p role="status">{humanize(commandStatus)}</p>}
+    </div>}
     {rooms && <div className="filters">
       <select className="input select-input" aria-label={`Room for ${device.name}`} value={room}
         onChange={event => setRoom(event.target.value)} disabled={assign.isPending}>

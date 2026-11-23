@@ -17,6 +17,8 @@ public sealed class EwelinkOptions
     public string? OperatorEmail { get; set; }
     public int PollMinutes { get; set; } = 5;
     public bool InventoryDiagnostics { get; set; }
+    public bool EnableWrites { get; set; }
+    public Dictionary<string, bool> RelayWriteDevices { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool IsConfigured => !string.IsNullOrWhiteSpace(AppId) && !AppId.Any(char.IsControl) &&
         !string.IsNullOrWhiteSpace(AppSecret) && !string.IsNullOrWhiteSpace(OperatorEmail) &&
         PollMinutes is >= 5 and <= 1440 && Uri.TryCreate(RedirectUri, UriKind.Absolute, out var uri) &&
@@ -166,13 +168,27 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
         return new(devices.Values.ToArray(), partial);
     }
 
-    private async Task<JsonElement> SendAsync(string region, string path, string? token, byte[]? body, CancellationToken ct)
+    public async Task WriteRelayAsync(EwelinkTokens tokens, string device, bool on, CancellationToken ct)
+    {
+        var body = JsonSerializer.SerializeToUtf8Bytes(new { type = 1, id = device, @params = new { @switch = on ? "on" : "off" } });
+        await SendAsync(tokens.Region, "/v2/device/thing/status", tokens.Access, body, ct, allowEmptyData: true);
+    }
+
+    public async Task<bool?> ReadRelayAsync(EwelinkTokens tokens, string device, CancellationToken ct)
+    {
+        var data = await SendAsync(tokens.Region, $"/v2/device/thing/status?type=1&id={Uri.EscapeDataString(device)}&params=switch",
+            tokens.Access, null, ct);
+        return EwelinkMapping.ReadRelay(EwelinkMapping.Node(data, "params"));
+    }
+
+    private async Task<JsonElement> SendAsync(string region, string path, string? token, byte[]? body, CancellationToken ct,
+        bool allowEmptyData = false)
     {
         var host = Host(region) ?? throw new EwelinkFailure("unsupportedRegion");
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, host + path);
         request.Headers.Add("X-CK-Appid", options.AppId);
         request.Headers.Add("X-CK-Nonce", Nonce());
-        request.Headers.Authorization = body is null ? new("Bearer", token) : new("Sign", Sign(body));
+        request.Headers.Authorization = token is not null ? new("Bearer", token) : new("Sign", Sign(body!));
         if (body is not null)
         {
             request.Content = new ByteArrayContent(body);
@@ -189,9 +205,12 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
         {
             using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
             providerCode = EwelinkMapping.Integer(json.RootElement, "error");
-            if (response.IsSuccessStatusCode && providerCode == 0 &&
-                EwelinkMapping.Node(json.RootElement, "data") is { ValueKind: JsonValueKind.Object } data)
-                return data.Clone();
+            if (response.IsSuccessStatusCode && providerCode == 0)
+            {
+                var data = EwelinkMapping.Node(json.RootElement, "data");
+                if (data.ValueKind == JsonValueKind.Object) return data.Clone();
+                if (allowEmptyData) return default;
+            }
         }
         catch (JsonException)
         {

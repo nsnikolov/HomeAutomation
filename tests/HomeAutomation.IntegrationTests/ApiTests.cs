@@ -264,6 +264,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     {
         var store = new EwelinkStoreFixture();
         var provider = new EwelinkProviderFixture();
+        var relayAudit = new EwelinkRelayAuditFixture();
+        const string relayId = "00000000000000000000000000000001";
         using var loginHost = host.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
             services.AddAuthentication(options =>
@@ -277,10 +279,13 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             services.AddSingleton(new EwelinkOptions
             {
                 AppId = "fixture", AppSecret = "fixture", OperatorEmail = PasswordFixture.Email,
-                RedirectUri = "https://ha-dev.britishlab.org:5443/api/v1/ewelink/callback"
+                RedirectUri = "https://ha-dev.britishlab.org:5443/api/v1/ewelink/callback",
+                EnableWrites = true, RelayWriteDevices = { [relayId] = true }
             });
             services.RemoveAll<IEwelinkStore>();
             services.AddSingleton<IEwelinkStore>(store);
+            services.RemoveAll<IEwelinkRelayAudit>();
+            services.AddSingleton<IEwelinkRelayAudit>(relayAudit);
             services.Remove(services.Single(item => item.ServiceType == typeof(IHostedService) &&
                 item.ImplementationType == typeof(EwelinkWorker)));
             services.AddHttpClient<EwelinkClient>().ConfigurePrimaryHttpMessageHandler(() => provider);
@@ -391,6 +396,41 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal(cooldownUntil.ToString("R"), deferred.Response.Headers.RetryAfter);
         Assert.Equal(reads + 1, provider.Reads);
 
+        var relay = new EwelinkDevice("fixture-relay", "Inverter In", "PSF-X67", "", false,
+            Connectivity.Online, now, true, false, now, Uiid: 32);
+        store.Rows = [new EwelinkRow(relayId, relay.ExternalId, 1, null, JsonSerializer.Serialize(relay))];
+        await store.ReportAsync("viewer", "connected", now, now.AddMinutes(5), default, now);
+        Assert.Equal(StatusCodes.Status401Unauthorized, (await Relay(1, confirmed: true, signedIn: false)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status404NotFound, (await Relay(99, confirmed: true)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status400BadRequest, (await Relay(1, confirmed: true, csrfRequired: false)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status409Conflict, (await Relay(1, confirmed: false)).Response.StatusCode);
+        Assert.Equal(0, provider.RelayWrites);
+        await gate.WaitAsync();
+        try
+        {
+            Assert.Equal(StatusCodes.Status409Conflict, (await Relay(1, confirmed: true)).Response.StatusCode);
+            Assert.Equal(0, provider.RelayWrites);
+        }
+        finally { gate.Release(); }
+
+        var readback = await Relay(1, confirmed: true);
+        Assert.Equal(StatusCodes.Status200OK, readback.Response.StatusCode);
+        using var readbackPayload = await JsonDocument.ParseAsync(readback.Response.Body);
+        Assert.Equal("unverified", readbackPayload.RootElement.GetProperty("status").GetString());
+        Assert.Equal(1, provider.RelayWrites);
+        Assert.Equal(1, provider.RelayReads);
+        Assert.Equal(StatusCodes.Status409Conflict, (await Relay(1, confirmed: true)).Response.StatusCode);
+        Assert.Equal(1, provider.RelayWrites);
+
+        await relayAudit.ReconcileAsync(relayId, 1, false, now.AddSeconds(1), default);
+        provider.TimeoutRelay = true;
+        var timedOut = await Relay(1, confirmed: true);
+        Assert.Equal(StatusCodes.Status200OK, timedOut.Response.StatusCode);
+        using var timeoutPayload = await JsonDocument.ParseAsync(timedOut.Response.Body);
+        Assert.Equal("unverified", timeoutPayload.RootElement.GetProperty("status").GetString());
+        Assert.Equal(2, provider.RelayWrites);
+        Assert.Equal(1, provider.RelayReads);
+
         Task<HttpContext> ReturnFromProvider(string stateValue, string? correlationCookie, string upstream = "127.0.0.1") =>
             Request("/api/v1/ewelink/callback", context =>
             {
@@ -408,6 +448,19 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
                 context.Request.Method = "POST";
                 context.Request.Headers.Cookie = connectCookies;
                 if (includeCsrf) context.Request.Headers["X-CSRF-TOKEN"] = connectToken;
+            });
+
+        Task<HttpContext> Relay(long property, bool confirmed, bool signedIn = true, bool csrfRequired = true) =>
+            Request($"/api/v1/ewelink/{property}/devices/{relayId}/relay", context =>
+            {
+                var body = JsonSerializer.SerializeToUtf8Bytes(new { on = true, confirmedProtected = confirmed });
+                context.Request.Method = "POST";
+                context.Request.ContentType = "application/json";
+                context.Request.ContentLength = body.Length;
+                context.Request.Body = new MemoryStream(body, writable: false);
+                context.Features.Set<IHttpRequestBodyDetectionFeature>(new RequestHasBody());
+                if (signedIn) context.Request.Headers.Cookie = connectCookies;
+                if (csrfRequired) context.Request.Headers["X-CSRF-TOKEN"] = connectToken;
             });
 
         async Task<(string State, string Cookie)> Begin()
@@ -459,7 +512,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         public DateTime? LastSuccess { get; private set; }
         private DateTime? nextSync;
         private string status = "connected";
-        public IReadOnlyList<EwelinkRow> Rows { get; init; } = [];
+        public IReadOnlyList<EwelinkRow> Rows { get; set; } = [];
         public Task<bool> SchemaReadyAsync(CancellationToken ct) => Task.FromResult(true);
         public Task<EwelinkAccount?> AccountAsync(CancellationToken ct) => Task.FromResult(
             Owner is null ? null : new EwelinkAccount(Owner, Envelope, status, LastSuccess, nextSync, LastAttempt));
@@ -490,11 +543,40 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             throw new NotSupportedException();
     }
 
+    private sealed class EwelinkRelayAuditFixture : IEwelinkRelayAudit
+    {
+        private EwelinkRelayOutcome? result;
+        public Task<EwelinkRelayOutcome?> LatestAsync(string device, long property, CancellationToken ct) =>
+            Task.FromResult(result);
+        public Task<string> BeginAsync(string actor, string device, long property, bool on, DateTimeOffset now, CancellationToken ct)
+        {
+            Assert.Equal("viewer", actor);
+            Assert.Equal(1, property);
+            Assert.True(on);
+            if (result?.Open == true) throw new EwelinkFailure("commandPending");
+            result = new("fixture-audit", "pending", true);
+            return Task.FromResult(result.Id);
+        }
+        public Task FinishAsync(string id, string status, DateTimeOffset? resolvedAt, CancellationToken ct)
+        {
+            result = new(id, status, resolvedAt is null);
+            return Task.CompletedTask;
+        }
+        public Task ReconcileAsync(string device, long property, bool on, DateTimeOffset observedAt, CancellationToken ct)
+        {
+            if (result is not null) result = result with { Open = false };
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class EwelinkProviderFixture : HttpMessageHandler
     {
         public int Exchanges { get; private set; }
         public int Reads { get; private set; }
         public bool Reject { get; set; }
+        public bool TimeoutRelay { get; set; }
+        public int RelayWrites { get; private set; }
+        public int RelayReads { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -516,6 +598,23 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
                                 rtExpiredTime = DateTimeOffset.UtcNow.AddDays(2).ToUnixTimeMilliseconds()
                             }
                         })
+                });
+            }
+            if (request.RequestUri.AbsolutePath == "/v2/device/thing/status")
+            {
+                if (request.Method == HttpMethod.Post)
+                {
+                    RelayWrites++;
+                    if (TimeoutRelay) throw new TaskCanceledException();
+                }
+                else
+                {
+                    Assert.Equal(HttpMethod.Get, request.Method);
+                    RelayReads++;
+                }
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"error":0,"data":{"params":{}}}""")
                 });
             }
             Assert.Equal(HttpMethod.Get, request.Method);

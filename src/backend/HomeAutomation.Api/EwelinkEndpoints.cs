@@ -103,7 +103,7 @@ internal static class EwelinkEndpoints
                     http.Response.Headers.RetryAfter = retryAt.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
                 return Results.Json(new { status = error.Status }, statusCode: error.Status switch
                 {
-                    "forbidden" => 403, "notFound" => 404, "invalidRoom" => 400,
+                    "forbidden" => 403, "notFound" => 404, "invalidRoom" or "invalidCommand" => 400,
                     "rateLimited" or "quotaExceeded" or "accessOrQuotaLimited" or "syncDeferred" => 429,
                     "unavailable" => 503, _ => 409
                 });
@@ -137,6 +137,10 @@ internal static class EwelinkEndpoints
             await service.AssignAsync(User(http), property, device.ToString("N"), assignment.RoomId, ct);
             return Results.NoContent();
         });
+        propertyRoutes.MapPost("/devices/{device:guid}/relay", (HttpContext http, long property, Guid device,
+            EwelinkRelayCommand command, EwelinkService service, CancellationToken ct) =>
+                service.CommandRelayAsync(User(http), property, device.ToString("N"), command, ct))
+            .RequireRateLimiting("session");
     }
 
     private static CookieOptions CookieSettings() => new()

@@ -73,6 +73,7 @@ public sealed class Migrations(Database database)
             return Scripts.Where(name => (includeDaikin || !name.EndsWith(".003_daikin_onecta.sql", StringComparison.Ordinal)) &&
                 (includeEwelink || !name.EndsWith(".004_ewelink_cloud.sql", StringComparison.Ordinal)) &&
                 (includeEwelink || !name.EndsWith(".007_ewelink_sync_budget.sql", StringComparison.Ordinal)) &&
+                (includeEwelink || !name.EndsWith(".008_ewelink_relay_commands.sql", StringComparison.Ordinal)) &&
                 (includeTuya || !name.EndsWith(".005_tuya_cloud.sql", StringComparison.Ordinal)) &&
                 (includePreferences || !name.EndsWith(".006_device_view_preferences.sql", StringComparison.Ordinal)))
                 .All(installed.Contains);

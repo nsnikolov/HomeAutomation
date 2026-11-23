@@ -1,5 +1,7 @@
 using System.Transactions;
+using System.Net;
 using Dapper;
+using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.Ewelink;
 using HomeAutomation.Infrastructure.MySql;
 using Microsoft.AspNetCore.DataProtection;
@@ -9,6 +11,92 @@ namespace HomeAutomation.UnitTests;
 
 public sealed class EwelinkMySqlTests
 {
+    [RelayMySqlFact]
+    public async Task ConfirmedMockedCommandPersistsActualRelayTelemetry()
+    {
+        var configured = Environment.GetEnvironmentVariable(RelayMySqlFact.ConnectionVariable) ??
+            throw new InvalidOperationException("A disposable relay test database is required.");
+        var connectionString = new MySqlConnectionStringBuilder(configured);
+        Assert.Equal("homeautomation_ewelink_relay_test", connectionString.Database);
+        var database = new Database(connectionString.ConnectionString);
+        var store = new EwelinkStore(database, new Migrations(database));
+        var audit = new EwelinkRelayAudit(database);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var ct = timeout.Token;
+        var clock = TimeProvider.System;
+        var now = clock.GetUtcNow();
+        const string owner = "fixture-owner";
+        const string app = "fixture-app";
+        Assert.Null(await store.AccountAsync(ct));
+        long property;
+        await using (var db = await database.OpenAsync(ct))
+        {
+            property = await db.ExecuteScalarAsync<long>("""
+                INSERT INTO properties(site_key,name,time_zone) VALUES('fixture','Fixture','UTC');
+                SELECT LAST_INSERT_ID();
+                """);
+            await db.ExecuteAsync("""
+                INSERT INTO identity_users(id,email,normalized_email,password_hash,security_stamp,concurrency_stamp)
+                VALUES(@owner,'fixture@example.test','FIXTURE@EXAMPLE.TEST','fixture','fixture','fixture');
+                INSERT INTO property_memberships(property_id,user_id,role_code) VALUES(@property,@owner,'viewer');
+                """, new { owner, property });
+        }
+        var vault = new EwelinkVault(new EphemeralDataProtectionProvider());
+        var tokens = new EwelinkTokens("eu", "fixture-access", "fixture-refresh", now.AddDays(1), now.AddDays(2));
+        await store.SaveTokensAsync(owner, vault.Seal(owner, app, tokens), ct);
+        var device = new EwelinkDevice("fixture-relay", "Boiler", "PSF-X67", "", false,
+            Connectivity.Online, now.AddSeconds(-2), true, false, now.AddSeconds(-2), Uiid: 32);
+        await store.SaveAsync(owner, device, ct);
+        var row = Assert.Single(await store.DevicesAsync(owner, ct));
+        await store.AssignAsync(row, owner, property, null, ct);
+
+        var options = new EwelinkOptions { AppId = app, EnableWrites = true, RelayWriteDevices = { [row.Id] = true } };
+        using var gate = new EwelinkGate();
+        using var handler = new RelayHandler();
+        using var http = new HttpClient(handler);
+        var client = new EwelinkClient(http, options, clock, new EwelinkPace(clock), store: store);
+        var service = new EwelinkService(options, client, store, gate, vault, new MonitoringReader(database, clock, new(), new()),
+            new TelemetryWriter(database, clock), clock, audit);
+        var result = await service.CommandRelayAsync(owner, property, row.Id, new(true, false), ct);
+        Assert.Equal("confirmed", result.Status);
+        Assert.False(result.Open);
+        Assert.Equal(result, await audit.LatestAsync(row.Id, property, ct));
+        Assert.True(Assert.Single(await store.DevicesAsync(owner, ct)).Device.Relay);
+        Assert.Equal([HttpMethod.Post, HttpMethod.Get], handler.Methods);
+        await using var telemetry = await database.OpenAsync(ct);
+        Assert.True(await telemetry.ExecuteScalarAsync<bool>("""
+            SELECT lr.boolean_value FROM latest_readings lr
+            JOIN telemetry_series ts ON ts.id=lr.series_id
+            WHERE ts.property_id=@property AND ts.source_key='ewelink' AND ts.metric='SwitchOn'
+            """, new { property }));
+    }
+
+    private sealed class RelayHandler : HttpMessageHandler
+    {
+        public List<HttpMethod> Methods { get; } = [];
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Assert.Equal("/v2/device/thing/status", request.RequestUri!.AbsolutePath);
+            Methods.Add(request.Method);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(request.Method == HttpMethod.Post
+                    ? """{"error":0}"""
+                    : """{"error":0,"data":{"params":{"switch":"on"}}}""")
+            });
+        }
+    }
+
+    private sealed class RelayMySqlFact : FactAttribute
+    {
+        public const string ConnectionVariable = "HOMEAUTOMATION_EWELINK_RELAY_TEST_MYSQL";
+        public RelayMySqlFact()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ConnectionVariable)))
+                Skip = $"Set {ConnectionVariable} for a fresh disposable homeautomation_ewelink_relay_test schema with the repository migrations.";
+        }
+    }
+
     [MySqlFact]
     public async Task TokenUpsertPreservesOwnershipAndReadsBackEncryptedTokens()
     {
@@ -92,6 +180,43 @@ public sealed class EwelinkMySqlTests
         var connection = new MySqlConnectionStringBuilder(connectionString) { UseXaTransactions = false };
         Assert.Equal("homeautomation_ewelink_test", connection.Database);
         return new Database(connection.ConnectionString);
+    }
+
+    [MySqlFact]
+    public async Task RelayAuditPreventsOverlappingCommandsAndReconcilesOnlyFreshEvidence()
+    {
+        var database = TestDatabase();
+        var audit = new EwelinkRelayAudit(database);
+        using var transaction = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled);
+        var ct = CancellationToken.None;
+        var now = new DateTimeOffset(2026, 11, 23, 12, 0, 0, TimeSpan.Zero);
+        var device = Guid.NewGuid().ToString("N");
+        long property;
+        await using (var connection = await database.OpenAsync(ct))
+        {
+            property = await connection.ExecuteScalarAsync<long>("""
+                INSERT INTO properties(site_key,name,time_zone) VALUES(@key,'Fixture','UTC');
+                SELECT LAST_INSERT_ID();
+                """, new { key = device });
+            await connection.ExecuteAsync("""
+                INSERT INTO ewelink_devices(public_id,owner_id,external_id,property_id,snapshot)
+                VALUES(@device,'fixture-owner',@device,@property,'{}');
+                """, new { device, property });
+        }
+
+        var id = await audit.BeginAsync("fixture-owner", device, property, true, now, ct);
+        var duplicate = await Assert.ThrowsAsync<EwelinkFailure>(() =>
+            audit.BeginAsync("fixture-owner", device, property, false, now, ct));
+        Assert.Equal("commandPending", duplicate.Status);
+        await audit.ReconcileAsync(device, property, true, now.AddSeconds(1), ct);
+        Assert.Equal(new(id, "pending", true), await audit.LatestAsync(device, property, ct));
+        await audit.FinishAsync(id, "unverified", null, ct);
+        await audit.ReconcileAsync(device, property, false, now.AddSeconds(2), ct);
+        Assert.Equal(new(id, "unverified", false), await audit.LatestAsync(device, property, ct));
+        Assert.Null(await audit.LatestAsync(device, property + 1, ct));
+        var next = await audit.BeginAsync("fixture-owner", device, property, true, now.AddSeconds(3), ct);
+        await audit.FinishAsync(next, "confirmed", now.AddSeconds(4), ct);
+        Assert.Equal(new(next, "confirmed", false), await audit.LatestAsync(device, property, ct));
     }
 
     private sealed class MySqlFact : FactAttribute

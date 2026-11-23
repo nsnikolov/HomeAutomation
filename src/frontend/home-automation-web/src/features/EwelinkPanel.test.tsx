@@ -7,6 +7,39 @@ import { EwelinkPanel } from './EwelinkPanel'
 
 const property = { id: 1, name: 'Fixture', timeZone: 'Europe/Sofia' }
 
+it('requires confirmation for each protected relay command and preserves reported state during submission', async () => {
+  const time = '2026-11-23T08:00:00Z'
+  const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
+    status: 'connected', manage: false, lastSuccess: time, nextSync: null, unassigned: [],
+    devices: [{ id: 'relay', name: 'Inverter In', model: 'PSF-X67', roomId: 1, connectivity: 'online',
+      seenAt: time, quality: 'fresh', hasRelay: true, relay: false, relayAt: time, relayQuality: 'fresh',
+      canWriteRelay: true, requiresRelayConfirmation: true }],
+  })
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+  type Result = Awaited<ReturnType<typeof api.commandEwelinkRelay>>
+  let resolve!: (value: Result) => void
+  const result = new Promise<Result>(complete => { resolve = complete })
+  const command = vi.spyOn(api, 'commandEwelinkRelay').mockReturnValue(result)
+  try {
+    view()
+    const on = await screen.findByRole('button', { name: 'ON' })
+    fireEvent.click(on)
+    expect(command).not.toHaveBeenCalled()
+    fireEvent.click(on)
+    expect(await screen.findByText('Pending')).toBeInTheDocument()
+    expect(command).toHaveBeenCalledExactlyOnceWith(1, 'relay', true, true)
+    expect(on).toBeDisabled()
+    expect(screen.getByText('Relay').nextElementSibling).toHaveTextContent('Off')
+    resolve({ id: 'audit', status: 'unverified', open: true })
+    expect(await screen.findByText('Unverified')).toBeInTheDocument()
+    expect(on).toBeDisabled()
+  } finally {
+    status.mockRestore()
+    confirm.mockRestore()
+    command.mockRestore()
+  }
+})
+
 it.each([
   [null, 'succeeded'],
   [new ApiError(429, 'syncDeferred'), 'deferred'],

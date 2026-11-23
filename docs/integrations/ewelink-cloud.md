@@ -1,6 +1,6 @@
 # eWeLink Cloud discovery and monitoring
 
-The integration uses the CoolKit Developer OpenAPI with one locally designated account operator. Account access is working for the installed property. The adapter uses read-only device requests. [CoolKit OAuth API](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md) · [eWeLink Developer Center](https://dev.ewelink.cc/)
+The integration uses the CoolKit Developer OpenAPI with one locally designated account operator. Account access is working for the installed property. Monitoring is read-only by default. [CoolKit OAuth API](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md) · [eWeLink Developer Center](https://dev.ewelink.cc/)
 
 ## Verified contract
 
@@ -29,7 +29,7 @@ Set `Ewelink:InventoryDiagnostics` to `true` locally for a normal poll. The logs
 
 CoolKit describes `beginIndex` as an item sequence cursor and `total` as the number of things, including groups. The documentation does not define a short page as the end of the inventory. When the known total exceeds the number of unique indexes seen, the adapter can follow an advancing cursor from a short page. It retains the last valid total if a later page omits it. Pagination stops when the total is reached, the page is empty, the cursor cannot advance, a short page lacks a known total, or the request budget is spent. Until a later normal poll returns a usable seventh device, the missing thermostat's availability through CoolKit remains unverified. [CoolKit Get Thing List](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md#get-thing-list)
 
-CoolKit's documented browser flow does not advertise PKCE. The app follows its signed authorization-code exchange and uses server-held credentials, short-lived browser-and-user state, HTTPS, and CSRF protection on local management actions. Signed requests follow CoolKit's [official OAuth Postman example](https://raw.githubusercontent.com/CoolKit-Technologies/eWeLink-API/main/media/files/CoolKit_OAuth2.0_Postman_Demo.zip). Restrict the key-ring directory and omit OAuth callback query strings from proxy access logs. The adapter has no provider device write operation and leaves the Sonoff rules under eWeLink's own control. The local CUBE API is a separate contract.
+CoolKit's documented browser flow does not advertise PKCE. The app follows its signed authorization-code exchange and uses server-held credentials, short-lived browser-and-user state, HTTPS, and CSRF protection on local management actions. Signed requests follow CoolKit's [official OAuth Postman example](https://raw.githubusercontent.com/CoolKit-Technologies/eWeLink-API/main/media/files/CoolKit_OAuth2.0_Postman_Demo.zip). Restrict the key-ring directory and omit OAuth callback query strings from proxy access logs. The local CUBE API is a separate contract.
 
 The local session cookie uses `SameSite=Strict`, so the browser omits it on the top-level return from CoolKit. The callback checks the registered HTTPS origin, OAuth state, expiry, and the `Secure; HttpOnly; SameSite=Lax` correlation cookie. It consumes the pending consent once, looks up its original owner, and rechecks that owner's current operator role and property access before exchanging the code. The original owner and property come from the server-side record. The callback saves successful exchanges in the existing encrypted token vault and returns to the property page with a success or failure marker. Local management requests still require a session and a CSRF token. [ASP.NET Core SameSite and antiforgery](https://learn.microsoft.com/aspnet/core/security/anti-request-forgery?view=aspnetcore-10.0)
 
@@ -51,11 +51,26 @@ dotnet user-secrets set 'Ewelink:PollMinutes' '5' --project src/backend/HomeAuto
 
 The environment variable `Ewelink__PollMinutes` takes precedence over User Secrets. Update it in the backend launcher or process environment, or remove it to use the underlying configuration.
 
+## Manual relay control
+
+Apply migration 008 with the existing migration runner using the scoped migration account. Complete a normal inventory sync so the device's stored snapshot includes its UIID. The integration accepts owned, assigned PSF-X67 devices reporting UIID 32 and a single-channel relay. The THR320D remains read-only because no matching UIID 181 write contract was verified. Autonomous thermostat rules remain under eWeLink's control. [CoolKit device status](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md#update-the-status-of-a-device-or-group) · [CoolKit UIID protocols](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/UIIDProtocol.md)
+
+Both permission switches default to off. In the authenticated response from `GET /api/v1/ewelink/{property}`, use the assigned device's `devices[].id` as the internal ID. Enable only the individually reviewed circuits in the backend configuration, then restart the backend.
+
+```powershell
+dotnet user-secrets set 'Ewelink:EnableWrites' 'true' --project src/backend/HomeAutomation.Api
+dotnet user-secrets set 'Ewelink:RelayWriteDevices:<internal-device-id>' 'true' --project src/backend/HomeAutomation.Api
+```
+
+Inverter In and Inverter out are protected. The confirmation requirement follows their internal records after rename. Each command to a protected relay requires explicit confirmation. Authorized operators can select ON or OFF when the relay state is fresh and the device is online. Each command is audited with the local actor, property, internal device ID, requested state, and outcome.
+
+A command sends one signed-in device status POST using the OAuth bearer token. CoolKit acceptance starts a bounded targeted status GET. The app shows Pending while it waits, Confirmed when the returned state matches, Failed after a definitive rejection, and Unverified when the result is ambiguous or readback fails or disagrees. A returned relay state updates the card and telemetry. An unresolved command blocks further commands until normal discovery observes the relay again. The shared request budget, pacing and cooldown apply to both calls.
+
 ## Connect after approval
 
 1. Confirm that the approved Personal Developer application can use OAuth, refresh, family discovery, and thing inventory in the account's region. Record the documented quota and the device/brand entitlement. Obtain its own App ID and app secret.
 2. Register the exact HTTPS callback. On the existing Windows HTTPS development origin, use `https://ha-dev.britishlab.org:5443/api/v1/ewelink/callback` if CoolKit accepts that origin. Otherwise use an approved HTTPS origin that reaches the same Home Automation backend. Start from that same origin after registering it. Confirm the redirect registration and entitlement in the Developer Center before connecting.
-3. Apply the repository migrations through the existing runner with the scoped migration account and dedicated Home Automation schema. eWeLink requires migration 004 and the new migration 007 for attempt times and quota tracking. Use the [Windows migration setup](../../README.md#apply-migrations-and-provision-a-viewer) with `--migrate` alone for an existing installation. Preserve the existing local Data Protection key ring.
+3. Apply the repository migrations through the existing runner with the scoped migration account and dedicated Home Automation schema. eWeLink requires migrations 004, 007 and 008. Use the [Windows migration setup](../../README.md#apply-migrations-and-provision-a-viewer) with `--migrate` alone for an existing installation. Preserve the existing local Data Protection key ring.
 4. From the repository root, set Development User Secrets. Supply the registered callback and an existing local operator email that has access to the intended property.
 
    ```powershell

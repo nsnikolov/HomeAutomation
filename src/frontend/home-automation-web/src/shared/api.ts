@@ -1,4 +1,4 @@
-import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePageKey, DevicePreferences, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, SensorHistory, SensorPeriod, TuyaState } from './types'
+import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePageKey, DevicePreferences, EwelinkRelayOutcome, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, SensorHistory, SensorPeriod, TuyaState } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code?: string) {
@@ -71,6 +71,8 @@ export const api = {
   updateEwelink: (id: number, action: 'disconnect' | 'refresh') => providerAction<void>('ewelink', id, action),
   assignEwelink: (id: number, device: string, roomId: number | null) =>
     providerAction<void>('ewelink', id, `devices/${device}/assign`, { roomId }),
+  commandEwelinkRelay: (id: number, device: string, on: boolean, confirmedProtected: boolean) =>
+    providerAction<EwelinkRelayOutcome>('ewelink', id, `devices/${device}/relay`, { on, confirmedProtected }),
   tuya: (id: number, signal?: AbortSignal) => request<TuyaState>(`/tuya/${id}`, { signal }),
   tuyaHistory: (id: number, device: string, period: SensorPeriod, signal?: AbortSignal) =>
     request<SensorHistory>(`/tuya/${id}/devices/${device}/sensor-history?period=${period}`, { signal }),

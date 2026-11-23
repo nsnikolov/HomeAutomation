@@ -50,11 +50,13 @@ export type Point = Omit<Reading, 'metric' | 'unit' | 'quality'> & { observedAt:
 export type Health = { database: string; simulator: string; lastSuccess: string | null; pollSeconds: number }
 export type GrowattState = { status: string; lastSuccess: string | null; data: PropertyState | null }
 
+export type EwelinkRelayOutcome = { id: string; status: 'pending' | 'confirmed' | 'failed' | 'unverified'; open: boolean }
 export type EwelinkDevice = {
   id: string; name: string; model: string; roomId: number | null; connectivity: Device['connectivity']
   seenAt: string; quality: Quality; hasRelay: boolean; relay: boolean | null; relayAt: string | null; relayQuality: Quality
   measurements?: Reading[]
   supportedMetrics?: Metric[]
+  canWriteRelay?: boolean; requiresRelayConfirmation?: boolean; relayCommand?: EwelinkRelayOutcome | null
 }
 export type EwelinkState = {
   status: string; manage: boolean; lastSuccess: string | null; nextSync: string | null; lastAttempt?: string | null

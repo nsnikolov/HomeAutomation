@@ -13,7 +13,8 @@ namespace HomeAutomation.Infrastructure.Ewelink;
 
 public sealed record EwelinkDeviceView(string Id, string Name, string Model, long? RoomId, Connectivity Connectivity,
     DateTimeOffset SeenAt, ReadingQuality Quality, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt, ReadingQuality RelayQuality,
-    IReadOnlyList<MetricReading> Measurements, IReadOnlyList<Metric> SupportedMetrics);
+    IReadOnlyList<MetricReading> Measurements, IReadOnlyList<Metric> SupportedMetrics, bool CanWriteRelay = false,
+    bool RequiresRelayConfirmation = false, EwelinkRelayOutcome? RelayCommand = null);
 public sealed record EwelinkView(string Status, bool Manage, DateTimeOffset? LastSuccess, DateTimeOffset? NextSync,
     IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned, DateTimeOffset? LastAttempt = null);
 
@@ -41,7 +42,7 @@ internal sealed class EwelinkVault(IDataProtectionProvider provider)
     }
 }
 
-public sealed class EwelinkService
+public sealed partial class EwelinkService
 {
     private readonly EwelinkOptions options;
     private readonly EwelinkClient client;
@@ -51,9 +52,11 @@ public sealed class EwelinkService
     private readonly IMonitoringReader permissions;
     private readonly TelemetryWriter writer;
     private readonly TimeProvider clock;
+    private readonly IEwelinkRelayAudit relayAudit;
 
     internal EwelinkService(EwelinkOptions options, EwelinkClient client, IEwelinkStore store, EwelinkGate gate,
-        EwelinkVault vault, IMonitoringReader permissions, TelemetryWriter writer, TimeProvider clock)
+        EwelinkVault vault, IMonitoringReader permissions, TelemetryWriter writer, TimeProvider clock,
+        IEwelinkRelayAudit relayAudit)
     {
         this.options = options;
         this.client = client;
@@ -63,6 +66,7 @@ public sealed class EwelinkService
         this.permissions = permissions;
         this.writer = writer;
         this.clock = clock;
+        this.relayAudit = relayAudit;
     }
 
     public static void Register(IServiceCollection services)
@@ -71,6 +75,7 @@ public sealed class EwelinkService
         services.AddSingleton<EwelinkPace>();
         services.AddSingleton<EwelinkVault>();
         services.AddScoped<IEwelinkStore, EwelinkStore>();
+        services.AddScoped<IEwelinkRelayAudit, EwelinkRelayAudit>();
         services.AddHttpClient<EwelinkClient>(http =>
         {
             http.Timeout = TimeSpan.FromSeconds(10);
@@ -80,7 +85,8 @@ public sealed class EwelinkService
         services.AddScoped(provider => new EwelinkService(provider.GetRequiredService<EwelinkOptions>(),
             provider.GetRequiredService<EwelinkClient>(), provider.GetRequiredService<IEwelinkStore>(), provider.GetRequiredService<EwelinkGate>(),
             provider.GetRequiredService<EwelinkVault>(), provider.GetRequiredService<IMonitoringReader>(),
-            provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<TimeProvider>()));
+            provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<IEwelinkRelayAudit>()));
         services.AddHostedService<EwelinkWorker>();
     }
 
@@ -97,8 +103,23 @@ public sealed class EwelinkService
         manage &= user == account.Owner;
         var rows = await store.DevicesAsync(account.Owner, ct);
         var reachable = account.Envelope is not null && account.Status != "reauthorizationRequired";
-        var assigned = rows.Where(row => row.PropertyId == property).Select(row => View(row, reachable)).ToArray();
-        if (!manage && assigned.Length == 0) return new("unavailableForProperty", false, null, null, [], []);
+        var assigned = new List<EwelinkDeviceView>();
+        foreach (var row in rows.Where(row => row.PropertyId == property))
+        {
+            var view = View(row, reachable);
+            if (manage && options.EnableWrites)
+            {
+                var device = row.Device;
+                view = view with
+                {
+                    CanWriteRelay = options.RelayWriteDevices.GetValueOrDefault(row.Id) && device.SupportsRelayWrites,
+                    RequiresRelayConfirmation = device.RequiresRelayConfirmation,
+                    RelayCommand = await relayAudit.LatestAsync(row.Id, property, ct)
+                };
+            }
+            assigned.Add(view);
+        }
+        if (!manage && assigned.Count == 0) return new("unavailableForProperty", false, null, null, [], []);
         return new(account.Status, manage, Utc(account.LastSuccess), manage ? Utc(account.NextSync) : null, assigned,
             manage ? rows.Where(row => row.PropertyId is null).Select(row => View(row, reachable)).ToArray() : [],
             Utc(account.LastAttempt));
@@ -111,7 +132,8 @@ public sealed class EwelinkService
         var freshness = TimeSpan.FromMinutes(options.PollMinutes * 2 + 5);
         var quality = authorized ? Telemetry.Quality(device.SeenAt, now, freshness) : ReadingQuality.Stale;
         var relayQuality = device.RelayAt is null ? ReadingQuality.Missing :
-            quality == ReadingQuality.Fresh && device.Connectivity == Connectivity.Online && device.RelayAt == device.SeenAt
+            quality == ReadingQuality.Fresh && device.Connectivity == Connectivity.Online && device.RelayAt >= device.SeenAt &&
+                Telemetry.Quality(device.RelayAt, now, freshness) == ReadingQuality.Fresh
                 ? ReadingQuality.Fresh : ReadingQuality.Stale;
         var measurements = device.Measurements?.Select(item => new MetricReading(item.Key, Telemetry.Unit(item.Key),
             item.Value.ReceivedAt, item.Value.Value, null, null,
@@ -229,9 +251,13 @@ public sealed class EwelinkService
             {
                 previous.TryGetValue(device.ExternalId, out var row);
                 var snapshot = EwelinkMapping.Merge(device, row?.Device);
-                if (row?.PropertyId is { } property && await permissions.CanReadAsync(owner, property, ct))
-                    await IngestAsync(property, row.RoomId, snapshot, device.RelayAt is not null, ct);
                 await store.SaveAsync(owner, snapshot, ct);
+                if (row?.PropertyId is { } property && await permissions.CanReadAsync(owner, property, ct))
+                {
+                    await IngestAsync(property, row.RoomId, snapshot, device.RelayAt is not null, ct);
+                    if (options.EnableWrites && device.Relay is { } relay && device.RelayAt is { } at)
+                        await relayAudit.ReconcileAsync(row.Id, property, relay, at, ct);
+                }
             }
             var now = clock.GetUtcNow();
             await store.ReportAsync(owner, inventory.Partial ? "partial" : "connected", now, now.AddMinutes(options.PollMinutes), ct);

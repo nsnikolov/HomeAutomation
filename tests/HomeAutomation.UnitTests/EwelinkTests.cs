@@ -34,6 +34,57 @@ public sealed class EwelinkTests
         Assert.False(options.IsConfigured);
     }
 
+    [Fact]
+    public async Task RelayDispatchUsesBearerJsonAndReadsActualStateSeparately()
+    {
+        var calls = 0;
+        using var http = new HttpClient(new Handler(async (request, ct) =>
+        {
+            Assert.Equal("/v2/device/thing/status", request.RequestUri!.AbsolutePath);
+            Assert.Equal("Bearer", request.Headers.Authorization!.Scheme);
+            Assert.Equal("fixture-access", request.Headers.Authorization.Parameter);
+            if (++calls == 1)
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+                Assert.Equal(1, body.RootElement.GetProperty("type").GetInt32());
+                Assert.Equal("fixture-relay", body.RootElement.GetProperty("id").GetString());
+                Assert.Equal("off", body.RootElement.GetProperty("params").GetProperty("switch").GetString());
+                Assert.Single(body.RootElement.GetProperty("params").EnumerateObject());
+                return Response("""{"error":0}""");
+            }
+            Assert.Equal(HttpMethod.Get, request.Method);
+            var query = QueryHelpers.ParseQuery(request.RequestUri.Query);
+            Assert.Equal("switch", query["params"].ToString());
+            return Response("""{"error":0,"data":{"params":{"switch":"on"}}}""");
+        }));
+        var client = Client(http);
+        var tokens = new EwelinkTokens("eu", "fixture-access", "unused", Now.AddDays(1), Now.AddDays(2));
+        await client.WriteRelayAsync(tokens, "fixture-relay", false, default);
+        Assert.True(await client.ReadRelayAsync(tokens, "fixture-relay", default));
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public void RelayPolicyRejectsUnverifiedDevicesAndRetainsInverterProtectionAfterRename()
+    {
+        var device = new EwelinkDevice("fixture", "Inverter out", "PSF-X67", "", false,
+            Connectivity.Online, Now, true, false, Now, Uiid: 32);
+        var renamed = EwelinkMapping.Merge(device with { Name = "Renamed" }, device);
+        Assert.True(renamed.ProtectedRelay);
+        EwelinkService.CheckRelayCommand(renamed, true, true, Now, TimeSpan.FromMinutes(15));
+        Reject(renamed, false, "relayConfirmationRequired");
+        Reject(renamed with { Uiid = null }, true, "unsupportedCommand");
+        Reject(renamed with { Uiid = 181, Model = "THR320D" }, true, "unsupportedCommand");
+        Reject(renamed with { Shared = true }, true, "unsupportedCommand");
+        Reject(renamed with { Connectivity = Connectivity.Offline }, true, "relayUnavailable");
+        Reject(renamed with { RelayAt = Now.AddMinutes(-16) }, true, "relayUnavailable");
+
+        static void Reject(EwelinkDevice candidate, bool confirm, string reason) =>
+            Assert.Equal(reason, Assert.Throws<EwelinkFailure>(() =>
+                EwelinkService.CheckRelayCommand(candidate, true, confirm, Now, TimeSpan.FromMinutes(15))).Status);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

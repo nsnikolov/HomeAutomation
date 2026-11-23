@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using HomeAutomation.Application;
 using HomeAutomation.Domain;
 
@@ -9,8 +10,12 @@ internal sealed record EwelinkMeasurement(double Value, DateTimeOffset ReceivedA
 
 internal sealed record EwelinkDevice(string ExternalId, string Name, string Model, string Brand, bool Shared,
     Connectivity Connectivity, DateTimeOffset SeenAt, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt,
-    IReadOnlyDictionary<Metric, EwelinkMeasurement>? Measurements = null, string? SensorType = null)
+    IReadOnlyDictionary<Metric, EwelinkMeasurement>? Measurements = null, string? SensorType = null,
+    int? Uiid = null, bool ProtectedRelay = false)
 {
+    [JsonIgnore] public bool SupportsRelayWrites => HasRelay && !Shared && Uiid == 32 && Model == "PSF-X67";
+    [JsonIgnore] public bool RequiresRelayConfirmation => ProtectedRelay || EwelinkMapping.IsProtectedRelayName(Name);
+
     public IReadOnlyList<Metric> SupportedMetrics()
     {
         var metrics = Measurements?.Keys.ToHashSet() ?? [];
@@ -59,14 +64,14 @@ internal static class EwelinkMapping
             _ => "unsupported"
         } : null;
         // The public OAuth contract identifies switch as the single-channel status.
-        bool? relay = Node(parameters, "switches").ValueKind != JsonValueKind.Undefined ? null :
-            Text(parameters, "switch", 3) switch { "on" => true, "off" => false, _ => null };
+        var relay = ReadRelay(parameters);
         var live = relay.HasValue && online == Connectivity.Online;
         var measurements = online == Connectivity.Online ? ReadMeasurements(uiid, climate, sensor, parameters, received) : null;
-        return new(id, Text(data, "name", 128) ?? "eWeLink device",
+        var name = Text(data, "name", 128) ?? "eWeLink device";
+        return new(id, name,
             model,
             Text(data, "brandName", 64) ?? "", type == 2, online, received, relay.HasValue,
-            live ? relay : null, live ? received : null, measurements, sensor);
+            live ? relay : null, live ? received : null, measurements, sensor, uiid, IsProtectedRelayName(name));
     }
 
     public static EwelinkDevice Merge(EwelinkDevice next, EwelinkDevice? previous)
@@ -90,7 +95,7 @@ internal static class EwelinkMapping
             }
             next = next with { Measurements = merged.Count == 0 ? null : merged };
         }
-        next = next with { SensorType = sensor };
+        next = next with { SensorType = sensor, ProtectedRelay = next.RequiresRelayConfirmation || previous?.RequiresRelayConfirmation == true };
         return next.RelayAt is not null ? next : next with
         {
             HasRelay = next.HasRelay || previous?.HasRelay == true, Relay = previous?.Relay, RelayAt = previous?.RelayAt
@@ -98,6 +103,13 @@ internal static class EwelinkMapping
     }
 
     public static int? Uiid(JsonElement data) => Integer(Node(data, "extra"), "uiid");
+    public static bool IsProtectedRelayName(string name) =>
+        string.Equals(name.Trim(), "Inverter In", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(name.Trim(), "Inverter out", StringComparison.OrdinalIgnoreCase);
+
+    public static bool? ReadRelay(JsonElement parameters) =>
+        Node(parameters, "switches").ValueKind != JsonValueKind.Undefined ? null :
+            Text(parameters, "switch", 3) switch { "on" => true, "off" => false, _ => null };
     public static string Model(JsonElement data) =>
         Text(data, "productModel", 96) ?? Text(Node(data, "extra"), "modelInfo", 96) ?? "";
 
