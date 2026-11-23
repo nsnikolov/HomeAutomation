@@ -9,6 +9,9 @@ export function useLiveUpdates(propertyId: number) {
   useEffect(() => {
     let disposed = false
     let retry: ReturnType<typeof setTimeout> | undefined
+    let ewelinkRefresh: ReturnType<typeof setTimeout> | undefined
+    let ewelinkFetching = false
+    let ewelinkDirty = false
     let attempts = 0
     const connection = new HubConnectionBuilder()
       .withUrl('/hubs/monitoring', { transport: HttpTransportType.WebSockets | HttpTransportType.LongPolling })
@@ -49,6 +52,25 @@ export function useLiveUpdates(propertyId: number) {
     connection.on('stateChanged', (event: { propertyId: number }) => {
       if (event.propertyId === propertyId) invalidate()
     })
+    const scheduleEwelinkRefresh = () => {
+      if (disposed || ewelinkFetching || !ewelinkDirty || ewelinkRefresh !== undefined) return
+      ewelinkRefresh = setTimeout(() => {
+        ewelinkRefresh = undefined
+        if (disposed) return
+        ewelinkDirty = false
+        ewelinkFetching = true
+        void client.invalidateQueries({ queryKey: ['property', propertyId, 'ewelink'], exact: true })
+          .finally(() => {
+            ewelinkFetching = false
+            scheduleEwelinkRefresh()
+          })
+      }, 250)
+    }
+    connection.on('ewelinkChanged', (event: { propertyId: number }) => {
+      if (event.propertyId !== propertyId) return
+      ewelinkDirty = true
+      scheduleEwelinkRefresh()
+    })
     connection.onreconnecting(disconnected)
     connection.onreconnected(subscribe)
     connection.onclose(() => { disconnected(); retryStart() })
@@ -57,7 +79,9 @@ export function useLiveUpdates(propertyId: number) {
     return () => {
       disposed = true
       clearTimeout(retry)
+      clearTimeout(ewelinkRefresh)
       connection.off('stateChanged')
+      connection.off('ewelinkChanged')
       void connection.stop().catch(() => undefined)
     }
   }, [client, propertyId])

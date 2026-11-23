@@ -71,7 +71,8 @@ public sealed partial class EwelinkService
         if (device.RequiresRelayConfirmation && !confirmed) throw new EwelinkFailure("relayConfirmationRequired");
         if (device.Connectivity != Connectivity.Online || device.Relay is null || device.RelayAt < device.SeenAt ||
             Telemetry.Quality(device.SeenAt, now, freshness) != ReadingQuality.Fresh ||
-            Telemetry.Quality(device.RelayAt, now, freshness) != ReadingQuality.Fresh)
+            Telemetry.Quality(device.RelayAt, now, freshness) != ReadingQuality.Fresh ||
+            device.SocketRelayAt > device.RelayAt && device.SocketRelay != device.Relay)
             throw new EwelinkFailure("relayUnavailable");
         if (device.Relay == on) throw new EwelinkFailure("relayAlreadyInState");
     }

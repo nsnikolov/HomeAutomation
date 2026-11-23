@@ -7,6 +7,25 @@ import { EwelinkPanel } from './EwelinkPanel'
 
 const property = { id: 1, name: 'Fixture', timeZone: 'Europe/Sofia' }
 
+it('distinguishes live measurements from last-known values and retains their timestamps', async () => {
+  const time = '2026-11-23T08:00:00Z'
+  const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
+    status: 'connected', manage: false, lastSuccess: time, nextSync: null, unassigned: [],
+    devices: [{ id: 'relay', name: 'Boiler', model: 'PSF-X67', roomId: 1, connectivity: 'online',
+      seenAt: time, quality: 'fresh', hasRelay: true, relay: false, relayAt: time, relayQuality: 'fresh',
+      socketMetrics: ['activePower', 'voltage'], measurements: [
+        { metric: 'activePower', unit: 'W', observedAt: time, number: 54.2, flag: null, code: null, quality: 'fresh' },
+        { metric: 'voltage', unit: 'V', observedAt: time, number: 230, flag: null, code: null, quality: 'stale' },
+      ] }],
+  })
+  try {
+    view()
+    expect((await screen.findByText('Active power')).nextElementSibling).toHaveTextContent(/54.2.*Live/)
+    expect(screen.getByText('Voltage').nextElementSibling).toHaveTextContent(/230.*Last known/)
+    expect(screen.getByText('Active power').nextElementSibling?.querySelector('time')).toHaveAttribute('dateTime', time)
+  } finally { status.mockRestore() }
+})
+
 it('explains per-device opt-in and reveals commands only after the preference is saved', async () => {
   const time = '2026-11-23T08:00:00Z'
   let enabled = false

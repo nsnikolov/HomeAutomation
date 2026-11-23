@@ -14,7 +14,9 @@ namespace HomeAutomation.Infrastructure.Ewelink;
 public sealed record EwelinkDeviceView(string Id, string Name, string Model, long? RoomId, Connectivity Connectivity,
     DateTimeOffset SeenAt, ReadingQuality Quality, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt, ReadingQuality RelayQuality,
     IReadOnlyList<MetricReading> Measurements, IReadOnlyList<Metric> SupportedMetrics, bool CanWriteRelay = false,
-    bool RequiresRelayConfirmation = false, EwelinkRelayOutcome? RelayCommand = null, string? RelayControlStatus = null);
+    bool RequiresRelayConfirmation = false, EwelinkRelayOutcome? RelayCommand = null, string? RelayControlStatus = null,
+    IReadOnlyList<Metric>? SocketMetrics = null, bool? ObservedRelay = null, DateTimeOffset? ObservedRelayAt = null,
+    ReadingQuality? ObservedRelayQuality = null);
 public sealed record EwelinkView(string Status, bool Manage, DateTimeOffset? LastSuccess, DateTimeOffset? NextSync,
     IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned, DateTimeOffset? LastAttempt = null);
 
@@ -88,6 +90,7 @@ public sealed partial class EwelinkService
             provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<IEwelinkRelayAudit>()));
         services.AddHostedService<EwelinkWorker>();
+        services.AddHostedService<EwelinkSocketWorker>();
     }
 
     public bool IsSupportedRegion(string? region) => EwelinkClient.Host(region) is not null;
@@ -137,13 +140,19 @@ public sealed partial class EwelinkService
             quality == ReadingQuality.Fresh && device.Connectivity == Connectivity.Online && device.RelayAt >= device.SeenAt &&
                 Telemetry.Quality(device.RelayAt, now, freshness) == ReadingQuality.Fresh
                 ? ReadingQuality.Fresh : ReadingQuality.Stale;
+        var socketRelayAt = device.RelayAt is null || device.SocketRelayAt > device.RelayAt ? device.SocketRelayAt : null;
         var measurements = device.Measurements?.Select(item => new MetricReading(item.Key, Telemetry.Unit(item.Key),
             item.Value.ReceivedAt, item.Value.Value, null, null,
             quality == ReadingQuality.Fresh && device.Connectivity == Connectivity.Online && item.Value.Present
-                ? Telemetry.Quality(item.Value.ReceivedAt, now, freshness) : ReadingQuality.Stale)).ToArray() ?? [];
+                ? Telemetry.Quality(item.Value.ReceivedAt, now, item.Value.FromSocket ? EwelinkSocketProtocol.Freshness : freshness)
+                : ReadingQuality.Stale)).ToArray() ?? [];
         return new(row.Id, device.Name, device.Model, row.RoomId,
             quality == ReadingQuality.Fresh ? device.Connectivity : Connectivity.Unknown, device.SeenAt, quality,
-            device.HasRelay, device.Relay, device.RelayAt, relayQuality, measurements, device.SupportedMetrics());
+            device.HasRelay, device.Relay, device.RelayAt, relayQuality, measurements, device.SupportedMetrics(),
+            SocketMetrics: device.Measurements?.Where(item => item.Value.FromSocket).Select(item => item.Key).ToArray(),
+            ObservedRelay: socketRelayAt is null ? null : device.SocketRelay, ObservedRelayAt: socketRelayAt,
+            ObservedRelayQuality: socketRelayAt is { } at && quality == ReadingQuality.Fresh && device.Connectivity == Connectivity.Online
+                ? Telemetry.Quality(at, now, EwelinkSocketProtocol.Freshness) : ReadingQuality.Stale);
     }
 
     public async Task ConnectAsync(string owner, string code, string region, CancellationToken ct)
@@ -248,6 +257,8 @@ public sealed partial class EwelinkService
                 tokens = await RefreshAsync(owner, tokens, ct);
                 inventory = await client.DiscoverAsync(tokens, ct);
             }
+            if (options.EnableWebSocket && inventory.AccountKey != tokens.AccountKey)
+                await store.SaveTokensAsync(owner, vault.Seal(owner, options.AppId!, tokens with { AccountKey = inventory.AccountKey }), ct);
             var previous = (await store.DevicesAsync(owner, ct)).ToDictionary(row => row.ExternalId, StringComparer.Ordinal);
             foreach (var device in inventory.Devices)
             {
@@ -293,9 +304,10 @@ public sealed partial class EwelinkService
 
     private TimeSpan FailureDelay => TimeSpan.FromMinutes(Math.Max(30, options.PollMinutes));
 
-    private Task IngestAsync(long property, long? room, EwelinkDevice device, bool includeRelay, CancellationToken ct)
+    private Task IngestAsync(long property, long? room, EwelinkDevice device, bool includeRelay, CancellationToken ct,
+        IReadOnlyList<Sample>? observations = null)
     {
-        var (inventory, batch) = device.Telemetry(includeRelay);
+        var (inventory, batch) = device.Telemetry(includeRelay, observations);
         return writer.StoreCloudDeviceAsync("ewelink", property, room, inventory, batch, ct);
     }
 }

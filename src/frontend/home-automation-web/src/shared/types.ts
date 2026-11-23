@@ -56,6 +56,8 @@ export type EwelinkDevice = {
   seenAt: string; quality: Quality; hasRelay: boolean; relay: boolean | null; relayAt: string | null; relayQuality: Quality
   measurements?: Reading[]
   supportedMetrics?: Metric[]
+  socketMetrics?: Metric[]
+  observedRelay?: boolean | null; observedRelayAt?: string | null; observedRelayQuality?: Quality
   canWriteRelay?: boolean; requiresRelayConfirmation?: boolean; relayCommand?: EwelinkRelayOutcome | null
   relayControlStatus?: 'enabled' | 'deviceDisabled' | 'globalDisabled' | 'awaitingDiscovery' | 'unsupported' | null
 }

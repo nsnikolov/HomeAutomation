@@ -105,6 +105,7 @@ builder.Services.AddSingleton(services =>
     catch (InvalidOperationException) { return new EwelinkOptions(); }
 });
 builder.Services.AddSingleton<EwelinkConsent>();
+builder.Services.AddSingleton<IEwelinkLiveNotifier, EwelinkLiveNotifier>();
 EwelinkService.Register(builder.Services);
 builder.Services.AddSingleton(services =>
 {

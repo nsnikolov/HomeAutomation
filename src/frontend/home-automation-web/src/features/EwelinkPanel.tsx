@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
 import { api, ApiError } from '../shared/api'
@@ -100,7 +100,7 @@ export function EwelinkPanel({ property }: { property: Property }) {
   </section>
 }
 
-function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; property: Property; rooms?: Room[] }) {
+const EwelinkCard = memo(function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; property: Property; rooms?: Room[] }) {
   const client = useQueryClient()
   const [room, setRoom] = useState(device.roomId?.toString() ?? '')
   const assign = useMutation({
@@ -120,7 +120,9 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
   const relayBlocked = result?.open || device.relayCommand?.open
     ? 'Waiting for the next discovery to verify the previous command.'
     : device.connectivity !== 'online' ? 'Relay controls require an online device.'
-      : device.relayQuality !== 'fresh' || device.relay === null ? 'Relay controls require a fresh reported state.' : null
+      : device.relayQuality !== 'fresh' || device.relay === null ? 'Relay controls require a fresh reported state.'
+        : device.observedRelay != null && device.observedRelay !== device.relay
+          ? 'Waiting for HTTP discovery to reconcile the relay state.' : null
   const commandDisabled = command.isPending || preference.isPending || !!relayBlocked
   const controlStatus = device.relayControlStatus
   function setRelay(on: boolean) {
@@ -128,7 +130,8 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
       !window.confirm(`Confirm switching ${device.name} ${on ? 'ON' : 'OFF'}.`)) return
     command.mutate(on)
   }
-  const relay = device.relay === null ? 'Unavailable' : device.relay ? 'On' : 'Off'
+  const reportedRelay = device.observedRelay ?? device.relay
+  const relay = reportedRelay === null ? 'Unavailable' : reportedRelay ? 'On' : 'Off'
   const supported = device.supportedMetrics ?? device.measurements?.map(reading => reading.metric) ?? []
   const rows = measurementRows.filter(([metric]) => supported.includes(metric))
   return <Card className="device-card">
@@ -141,12 +144,18 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
     {device.model && <p>{device.model}</p>}
     <p>Cloud snapshot received {formatMoment(device.seenAt, property.timeZone)}</p>
     {(device.hasRelay || rows.length > 0) && <dl className="device-readings">
-      {device.hasRelay && <div><dt>Relay</dt><dd>{relay}{device.relay !== null && device.relayQuality === 'stale' && ' · Last known'}</dd></div>}
+      {device.hasRelay && <div><dt>Relay</dt><dd>{relay}
+        {device.observedRelayAt ? <ReadingTime at={device.observedRelayAt} timeZone={property.timeZone}
+          label={device.observedRelayQuality === 'fresh' ? 'Live' : 'Last known'} />
+          : device.relay !== null && device.relayQuality === 'stale' && ' · Last known'}
+      </dd></div>}
       {rows.map(([metric, label]) => {
         const reading = device.measurements?.find(item => item.metric === metric)
         return <div key={metric}><dt>{label}</dt><dd>
           {reading && reading.quality !== 'missing' && reading.number !== null ? <>
             {formatReading(reading)}{reading.quality === 'stale' && ' · Last known'}
+            {reading.observedAt && <ReadingTime at={reading.observedAt} timeZone={property.timeZone}
+              label={reading.quality === 'fresh' ? device.socketMetrics?.includes(metric) ? 'Live' : 'Cloud snapshot' : undefined} />}
           </> : 'Unavailable'}
         </dd></div>
       })}
@@ -183,4 +192,8 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
       {assign.isError && <p role="alert">Could not assign this device.</p>}
     </div>}
   </Card>
+})
+
+function ReadingTime({ at, timeZone, label }: { at: string; timeZone: string; label?: string }) {
+  return <small className="muted"> · {label && `${label} · `}<time dateTime={at}>{formatMoment(at, timeZone)}</time></small>
 }

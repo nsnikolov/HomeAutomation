@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.WebSockets;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 using HomeAutomation.Application;
@@ -53,6 +55,39 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsync("/hubs/monitoring/negotiate", null)).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest,
             (await client.PostAsJsonAsync("/api/v1/session/login", new { email = "viewer@example.test", password = "invalid" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task EwelinkSignalRNotificationReachesOnlySubscribedProperty()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var ct = timeout.Token;
+        var client = host.Server.CreateWebSocketClient();
+        client.ConfigureRequest = request => request.Headers["X-Test-User"] = "viewer";
+        using var socket = await client.ConnectAsync(new Uri("ws://localhost/hubs/monitoring"), ct);
+        await SendAsync("""{"protocol":"json","version":1}""");
+        Assert.Equal("{}", await ReceiveAsync());
+        await SendAsync("""{"type":1,"invocationId":"1","target":"Subscribe","arguments":[1]}""");
+        using var subscribed = JsonDocument.Parse(await ReceiveAsync());
+        Assert.Equal(3, subscribed.RootElement.GetProperty("type").GetInt32());
+        Assert.False(subscribed.RootElement.TryGetProperty("error", out _));
+
+        var notifier = host.Services.GetRequiredService<IEwelinkLiveNotifier>();
+        await notifier.ChangedAsync(99, ct);
+        await notifier.ChangedAsync(1, ct);
+        using var notice = JsonDocument.Parse(await ReceiveAsync());
+        Assert.Equal("ewelinkChanged", notice.RootElement.GetProperty("target").GetString());
+        Assert.Equal(1, notice.RootElement.GetProperty("arguments")[0].GetProperty("propertyId").GetInt64());
+
+        ValueTask SendAsync(string record) => socket.SendAsync(Encoding.UTF8.GetBytes(record + "\u001e").AsMemory(),
+            WebSocketMessageType.Text, true, ct);
+        async Task<string> ReceiveAsync()
+        {
+            var buffer = new byte[4096];
+            var response = await socket.ReceiveAsync(buffer.AsMemory(), ct);
+            Assert.True(response.EndOfMessage);
+            return Encoding.UTF8.GetString(buffer.AsSpan(0, response.Count)).TrimEnd('\u001e');
+        }
     }
 
     [Fact]

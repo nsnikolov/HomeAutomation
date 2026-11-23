@@ -17,6 +17,7 @@ public sealed class EwelinkOptions
     public string? OperatorEmail { get; set; }
     public int PollMinutes { get; set; } = 5;
     public bool InventoryDiagnostics { get; set; }
+    public bool EnableWebSocket { get; set; }
     public bool EnableWrites { get; set; }
     public Dictionary<string, bool> RelayWriteDevices { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool IsConfigured => !string.IsNullOrWhiteSpace(AppId) && !AppId.Any(char.IsControl) &&
@@ -35,8 +36,9 @@ public sealed class EwelinkFailure(string status, DateTimeOffset? retryAt = null
     public int? ProviderCode { get; init; }
 }
 
-internal sealed record EwelinkTokens(string Region, string Access, string Refresh, DateTimeOffset AccessExpires, DateTimeOffset RefreshExpires);
-internal sealed record EwelinkInventory(IReadOnlyList<EwelinkDevice> Devices, bool Partial);
+internal sealed record EwelinkTokens(string Region, string Access, string Refresh, DateTimeOffset AccessExpires,
+    DateTimeOffset RefreshExpires, string? AccountKey = null);
+internal sealed record EwelinkInventory(IReadOnlyList<EwelinkDevice> Devices, bool Partial, string? AccountKey = null);
 
 internal sealed class EwelinkPace(TimeProvider clock)
 {
@@ -97,8 +99,9 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
 
     public async Task<EwelinkInventory> DiscoverAsync(EwelinkTokens tokens, CancellationToken ct)
     {
-        var families = await SendAsync(tokens.Region, "/v2/family", tokens.Access, null, ct);
-        var homeIds = EwelinkMapping.Array(families, "familyList").EnumerateArray().Select(home => EwelinkMapping.Id(home, "id")).ToArray();
+        var families = await FamiliesAsync(tokens, ct);
+        var familyList = EwelinkMapping.Array(families, "familyList");
+        var homeIds = familyList.EnumerateArray().Select(home => EwelinkMapping.Id(home, "id")).ToArray();
         var current = EwelinkMapping.Id(families, "currentFamilyId");
         var homes = homeIds.Append(current).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
         var requests = 1;
@@ -165,7 +168,27 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
         if (options.InventoryDiagnostics)
             logger?.LogInformation("eWeLink inventory finished with {UniqueDevices} unique devices, {DuplicateRows} duplicate rows, {HomesScanned} of {Homes} homes scanned, and partial {Partial}.",
                 devices.Count, duplicates, coveredHomes, homes.Length, partial);
-        return new(devices.Values.ToArray(), partial);
+        return new(devices.Values.ToArray(), partial, options.EnableWebSocket ? AccountKey(families) : null);
+    }
+
+    internal Task<JsonElement> FamiliesAsync(EwelinkTokens tokens, CancellationToken ct) =>
+        SendAsync(tokens.Region, "/v2/family", tokens.Access, null, ct);
+
+    internal static string? AccountKey(JsonElement families)
+    {
+        var keys = EwelinkMapping.Array(families, "familyList").EnumerateArray()
+            .Select(home => EwelinkMapping.Text(home, "apikey", 256))
+            .Where(key => !string.IsNullOrWhiteSpace(key) && !key.Any(char.IsWhiteSpace))
+            .Distinct(StringComparer.Ordinal).Take(2).ToArray();
+        return keys.Length == 1 ? keys[0] : null;
+    }
+
+    public async Task<Uri> DispatchAsync(EwelinkTokens tokens, CancellationToken ct)
+    {
+        var root = tokens.Region == "cn" ? "coolkit.cn" : "coolkit.cc";
+        var host = Host(tokens.Region) is not null ? $"https://{tokens.Region}-dispa.{root}" : null;
+        var data = await SendAsync(tokens.Region, "/dispatch/app", tokens.Access, null, ct, overrideHost: host, flatResponse: true);
+        return EwelinkSocketProtocol.Address(data);
     }
 
     public async Task WriteRelayAsync(EwelinkTokens tokens, string device, bool on, CancellationToken ct)
@@ -182,10 +205,10 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
     }
 
     private async Task<JsonElement> SendAsync(string region, string path, string? token, byte[]? body, CancellationToken ct,
-        bool allowEmptyData = false)
+        bool allowEmptyData = false, string? overrideHost = null, bool flatResponse = false)
     {
         var host = Host(region) ?? throw new EwelinkFailure("unsupportedRegion");
-        using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, host + path);
+        using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, (overrideHost ?? host) + path);
         request.Headers.Add("X-CK-Appid", options.AppId);
         request.Headers.Add("X-CK-Nonce", Nonce());
         request.Headers.Authorization = token is not null ? new("Bearer", token) : new("Sign", Sign(body!));
@@ -207,6 +230,7 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
             providerCode = EwelinkMapping.Integer(json.RootElement, "error");
             if (response.IsSuccessStatusCode && providerCode == 0)
             {
+                if (flatResponse) return json.RootElement.Clone();
                 var data = EwelinkMapping.Node(json.RootElement, "data");
                 if (data.ValueKind == JsonValueKind.Object) return data.Clone();
                 if (allowEmptyData) return default;
@@ -239,7 +263,7 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
     };
 
     private string Sign(byte[] bytes) => Convert.ToBase64String(HMACSHA256.HashData(Encoding.UTF8.GetBytes(options.AppSecret!), bytes));
-    private static string Nonce() => Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
+    internal static string Nonce() => Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
     private static string Token(JsonElement data, string name) => EwelinkMapping.Text(data, name, 4096) is { Length: > 0 } token &&
         !token.Any(char.IsWhiteSpace) ? token : throw new EwelinkFailure("invalidResponse");
 

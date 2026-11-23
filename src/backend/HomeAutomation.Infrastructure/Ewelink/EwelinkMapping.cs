@@ -6,12 +6,12 @@ using HomeAutomation.Domain;
 
 namespace HomeAutomation.Infrastructure.Ewelink;
 
-internal sealed record EwelinkMeasurement(double Value, DateTimeOffset ReceivedAt, bool Present = true);
+internal sealed record EwelinkMeasurement(double Value, DateTimeOffset ReceivedAt, bool Present = true, bool FromSocket = false);
 
 internal sealed record EwelinkDevice(string ExternalId, string Name, string Model, string Brand, bool Shared,
     Connectivity Connectivity, DateTimeOffset SeenAt, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt,
     IReadOnlyDictionary<Metric, EwelinkMeasurement>? Measurements = null, string? SensorType = null,
-    int? Uiid = null, bool ProtectedRelay = false)
+    int? Uiid = null, bool ProtectedRelay = false, bool? SocketRelay = null, DateTimeOffset? SocketRelayAt = null)
 {
     [JsonIgnore] public bool SupportsRelayWrites => HasRelay && !Shared && Uiid == 32 && Model == "PSF-X67";
     [JsonIgnore] public bool RequiresRelayConfirmation => ProtectedRelay || EwelinkMapping.IsProtectedRelayName(Name);
@@ -24,14 +24,15 @@ internal sealed record EwelinkDevice(string ExternalId, string Name, string Mode
         return metrics.Order().ToArray();
     }
 
-    public (DiscoveredDevice Inventory, ObservationBatch Batch) Telemetry(bool includeRelay)
+    public (DiscoveredDevice Inventory, ObservationBatch Batch) Telemetry(bool includeRelay, IReadOnlyList<Sample>? observations = null)
     {
         var capabilities = new HashSet<Capability>();
         if (HasRelay) capabilities.Add(Capability.Switch);
         foreach (var metric in SupportedMetrics()) capabilities.Add(EwelinkMapping.CapabilityFor(metric));
         var kind = HasRelay ? DeviceKind.SmartSwitch : capabilities.Count > 0 ? DeviceKind.Sensor : DeviceKind.Unknown;
         var inventory = new DiscoveredDevice(ExternalId, Name, kind, "", Brand, Model, [new("main", "Device", capabilities)]);
-        var samples = includeRelay && Relay is { } relay && RelayAt is { } at ? new[] { Sample.Boolean(Metric.SwitchOn, at, relay) } : [];
+        var samples = observations ?? (includeRelay && Relay is { } relay && RelayAt is { } at
+            ? [Sample.Boolean(Metric.SwitchOn, at, relay)] : []);
         return (inventory, new(SeenAt, [new(ExternalId, Connectivity, null, [new("main", samples)], SeenAt)], []));
     }
 }
@@ -89,17 +90,44 @@ internal static class EwelinkMapping
                      metric == Metric.Humidity && !MeasuresHumidity(sensor)))
                     continue;
                 if (!merged.TryGetValue(metric, out var reading))
-                    merged.Add(metric, last with { Present = false });
+                    merged.Add(metric, last with { Present = last.FromSocket && last.Present });
                 else if (reading.Value == last.Value)
-                    merged[metric] = reading with { ReceivedAt = last.ReceivedAt };
+                    merged[metric] = last with { Present = true };
             }
             next = next with { Measurements = merged.Count == 0 ? null : merged };
         }
         next = next with { SensorType = sensor, ProtectedRelay = next.RequiresRelayConfirmation || previous?.RequiresRelayConfirmation == true };
         return next.RelayAt is not null ? next : next with
         {
-            HasRelay = next.HasRelay || previous?.HasRelay == true, Relay = previous?.Relay, RelayAt = previous?.RelayAt
+            HasRelay = next.HasRelay || previous?.HasRelay == true, Relay = previous?.Relay, RelayAt = previous?.RelayAt,
+            SocketRelay = previous?.SocketRelay, SocketRelayAt = previous?.SocketRelayAt
         };
+    }
+
+    public static (EwelinkDevice Snapshot, IReadOnlyList<Sample> Samples) MergeEvent(
+        EwelinkDevice device, JsonElement parameters, DateTimeOffset at)
+    {
+        if (device.Connectivity != Connectivity.Online || at <= device.SeenAt) return (device, []);
+        var samples = new List<Sample>();
+        var climate = device.Uiid == 181 && device.Model == "THR320D";
+        var meter = device.Uiid == 32 && device.Model == "PSF-X67";
+        if (!climate && !meter) return (device, []);
+
+        var measurements = device.Measurements?.ToDictionary() ?? [];
+        foreach (var (metric, reading) in ReadMeasurements(device.Uiid, climate, device.SensorType, parameters, at)
+                     ?? Enumerable.Empty<KeyValuePair<Metric, EwelinkMeasurement>>())
+        {
+            if (measurements.TryGetValue(metric, out var previous) && previous.ReceivedAt >= at) continue;
+            measurements[metric] = reading with { FromSocket = true };
+            samples.Add(Sample.Numeric(metric, at, reading.Value));
+        }
+        if (device.HasRelay && ReadRelay(parameters) is { } relay &&
+            (device.RelayAt is null || at > device.RelayAt) && (device.SocketRelayAt is null || at > device.SocketRelayAt))
+        {
+            device = device with { SocketRelay = relay, SocketRelayAt = at };
+            samples.Add(Sample.Boolean(Metric.SwitchOn, at, relay));
+        }
+        return (device with { Measurements = measurements }, samples);
     }
 
     public static int? Uiid(JsonElement data) => Integer(Node(data, "extra"), "uiid");
