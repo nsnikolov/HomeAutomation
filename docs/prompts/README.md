@@ -30,3 +30,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 26. 2026-11-23 · [Milestone 4B — eWeLink Discovery and Extended Telemetry](0026-ewelink-discovery-extended-telemetry.md)
 27. 2026-11-23 · [Milestone 4C — eWeLink Capability-Based UI and Live Telemetry Fix](0027-ewelink-capability-ui-live-telemetry.md)
 28. 2026-11-23 · [Small Enhancement — eWeLink Refresh and Daikin Development Defaults](0028-ewelink-refresh-daikin-development-defaults.md)
+29. 2026-11-23 · [Fix eWeLink inventory pagination for the missing seventh device](0029-ewelink-inventory-pagination.md)

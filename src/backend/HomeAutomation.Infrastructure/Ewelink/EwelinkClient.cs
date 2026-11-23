@@ -113,6 +113,7 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
             coveredHomes++;
             var index = -9999999;
             var indexes = new HashSet<int>();
+            int? reportedTotal = null;
             while (requests < MaxInventoryRequests)
             {
                 var path = $"/v2/device/thing?familyid={Uri.EscapeDataString(home)}&num={PageSize}&beginIndex={index.ToString(CultureInfo.InvariantCulture)}";
@@ -121,6 +122,7 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
                 var page = EwelinkMapping.Array(data, "thingList").EnumerateArray().ToArray();
                 var observed = clock.GetUtcNow();
                 var total = EwelinkMapping.Integer(data, "total");
+                if (total is >= 0) reportedTotal = total;
                 if (options.InventoryDiagnostics && logger is not null)
                     EwelinkInventoryDiagnostics.LogPage(logger, page, total);
                 foreach (var item in page)
@@ -133,27 +135,31 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
                     duplicates++;
                     if (devices[device.ExternalId].Shared && !device.Shared) devices[device.ExternalId] = device;
                 }
-                var hasTotal = total is >= 0 && indexes.Count >= total.Value;
-                if (hasTotal || page.Length < PageSize)
-                {
-                    partial |= !hasTotal;
-                    if (!hasTotal && options.InventoryDiagnostics)
-                        logger?.LogInformation("eWeLink inventory stopped on a short page before reaching the reported total.");
-                    break;
-                }
+                var complete = reportedTotal is { } expected && indexes.Count >= expected;
                 var next = indexes.Count == 0 ? index : indexes.Max();
-                if (next <= index || requests == MaxInventoryRequests)
+                var stopReason = complete ? "reportedTotalReached"
+                    : page.Length == 0 ? "emptyPage"
+                    : reportedTotal is null && page.Length < PageSize ? "shortPageWithoutTotal"
+                    : next <= index ? "cursorDidNotAdvance"
+                    : requests == MaxInventoryRequests ? "requestBudget"
+                    : null;
+                if (stopReason is not null)
                 {
-                    partial = true;
+                    partial |= !complete;
                     if (options.InventoryDiagnostics)
-                        logger?.LogInformation("eWeLink inventory pagination stopped at {Reason}.",
-                            next <= index ? "cursorDidNotAdvance" : "requestBudget");
+                        logger?.LogInformation("eWeLink inventory pagination stopped with {Reason} after {SeenIndexes} of {ReportedTotal} reported indexes.",
+                            stopReason, indexes.Count, reportedTotal);
                     break;
                 }
                 index = next;
             }
         }
-        partial |= coveredHomes < homes.Length;
+        if (coveredHomes < homes.Length)
+        {
+            partial = true;
+            if (options.InventoryDiagnostics)
+                logger?.LogInformation("eWeLink inventory reached the request budget before scanning all homes.");
+        }
         if (options.InventoryDiagnostics)
             logger?.LogInformation("eWeLink inventory finished with {UniqueDevices} unique devices, {DuplicateRows} duplicate rows, {HomesScanned} of {Homes} homes scanned, and partial {Partial}.",
                 devices.Count, duplicates, coveredHomes, homes.Length, partial);

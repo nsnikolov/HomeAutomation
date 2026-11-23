@@ -158,7 +158,7 @@ public sealed class EwelinkTests
                     """));
         }));
         var inventory = await Client(http).DiscoverAsync(new("eu", "fixture-access", "unused", Now, Now), default);
-        Assert.Equal(3, calls);
+        Assert.Equal(4, calls);
         Assert.True(inventory.Partial);
         var device = Assert.Single(inventory.Devices);
         Assert.Equal("id1", device.ExternalId);
@@ -192,7 +192,7 @@ public sealed class EwelinkTests
             })));
         }));
         var inventory = await Client(http).DiscoverAsync(new("eu", "fixture-access", "unused", Now, Now), default);
-        Assert.Equal(["listed", "current"], homes);
+        Assert.Equal(returned ? ["listed", "current"] : new[] { "listed", "current", "current" }, homes);
         Assert.Equal(returned ? 7 : 6, inventory.Devices.Count);
         Assert.Equal(!returned, inventory.Partial);
         Assert.False(Assert.Single(inventory.Devices, device => device.ExternalId == "fixture-0").Shared);
@@ -328,6 +328,65 @@ public sealed class EwelinkTests
         Assert.Equal(2, pages);
         Assert.Equal(advances ? 31 : 30, inventory.Devices.Count);
         Assert.Equal(!advances, inventory.Partial);
+    }
+
+    [Theory]
+    [InlineData("seventh", 7, "reportedTotalReached")]
+    [InlineData("repeated", 6, "cursorDidNotAdvance")]
+    [InlineData("empty", 6, "emptyPage")]
+    public async Task AShortPageBelowTheReportedTotalContinuesOnlyWithCursorProgress(string nextPage, int expected, string stopReason)
+    {
+        var cursors = new List<string>();
+        using var http = new HttpClient(new Handler((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/v2/family")
+                return Task.FromResult(Response("""{"error":0,"data":{"familyList":[{"id":"home"}]}}"""));
+
+            var cursor = QueryHelpers.ParseQuery(request.RequestUri.Query)["beginIndex"].ToString();
+            cursors.Add(cursor);
+            var positions = cursor switch
+            {
+                "-9999999" => new[] { -5, -3, 2, 9, 11, 16 },
+                "16" when nextPage == "seventh" => [16, 30],
+                "16" when nextPage == "repeated" => [16],
+                "16" when nextPage == "empty" => [],
+                _ => throw new InvalidOperationException("Unexpected pagination request.")
+            };
+            var rows = positions.Select(index => new { index, itemType = 1, itemData = new { deviceid = $"fixture-{index}" } });
+            return Task.FromResult(Response(JsonSerializer.Serialize(new
+            {
+                error = 0, data = new { total = nextPage == "empty" && cursor == "16" ? (int?)null : 7, thingList = rows }
+            })));
+        }));
+        var clock = new FixtureClock();
+        var logger = new CaptureLogger();
+        var options = new EwelinkOptions { AppId = Options.AppId, InventoryDiagnostics = true };
+        var client = new EwelinkClient(http, options, clock, new EwelinkPace(clock), logger);
+        var inventory = await client.DiscoverAsync(new("eu", "fixture-access", "unused", Now, Now), default);
+
+        Assert.Equal(["-9999999", "16"], cursors);
+        Assert.Equal(expected, inventory.Devices.Count);
+        Assert.Equal(expected == 6, inventory.Partial);
+        Assert.Equal(expected == 7, inventory.Devices.Any(device => device.ExternalId == "fixture-30"));
+        Assert.Contains(logger.Messages, message => message.Contains(stopReason, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AdvancingShortPagesStillStopAtTheDiscoveryRequestBudget()
+    {
+        var pages = 0;
+        using var http = new HttpClient(new Handler((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/v2/family")
+                return Task.FromResult(Response("""{"error":0,"data":{"familyList":[{"id":"home"}]}}"""));
+            var index = ++pages;
+            var row = new { index, itemType = 1, itemData = new { deviceid = $"fixture-{index}" } };
+            return Task.FromResult(Response(JsonSerializer.Serialize(new { error = 0, data = new { total = 100, thingList = new[] { row } } })));
+        }));
+        var inventory = await Client(http).DiscoverAsync(new("eu", "fixture-access", "unused", Now, Now), default);
+        Assert.Equal(11, pages);
+        Assert.Equal(11, inventory.Devices.Count);
+        Assert.True(inventory.Partial);
     }
 
     [Theory]
