@@ -15,7 +15,7 @@ public sealed record EwelinkDeviceView(string Id, string Name, string Model, lon
     DateTimeOffset SeenAt, ReadingQuality Quality, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt, ReadingQuality RelayQuality,
     IReadOnlyList<MetricReading> Measurements, IReadOnlyList<Metric> SupportedMetrics);
 public sealed record EwelinkView(string Status, bool Manage, DateTimeOffset? LastSuccess, DateTimeOffset? NextSync,
-    IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned);
+    IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned, DateTimeOffset? LastAttempt = null);
 
 internal sealed class EwelinkGate : SemaphoreSlim
 {
@@ -100,7 +100,8 @@ public sealed class EwelinkService
         var assigned = rows.Where(row => row.PropertyId == property).Select(row => View(row, reachable)).ToArray();
         if (!manage && assigned.Length == 0) return new("unavailableForProperty", false, null, null, [], []);
         return new(account.Status, manage, Utc(account.LastSuccess), manage ? Utc(account.NextSync) : null, assigned,
-            manage ? rows.Where(row => row.PropertyId is null).Select(row => View(row, reachable)).ToArray() : []);
+            manage ? rows.Where(row => row.PropertyId is null).Select(row => View(row, reachable)).ToArray() : [],
+            Utc(account.LastAttempt));
     }
 
     private EwelinkDeviceView View(EwelinkRow row, bool authorized)
@@ -168,7 +169,11 @@ public sealed class EwelinkService
 
     public async Task SyncAsync(string? owner, CancellationToken ct)
     {
-        await gate.WaitAsync(ct);
+        if (!await gate.WaitAsync(0, ct))
+        {
+            if (owner is not null) throw new EwelinkFailure("syncDeferred");
+            return;
+        }
         try
         {
             var account = await store.AccountAsync(ct);
@@ -178,11 +183,20 @@ public sealed class EwelinkService
                 if (owner is not null) throw new EwelinkFailure(account?.Status ?? "disconnected");
                 return;
             }
-            if (Utc(account.NextSync) > clock.GetUtcNow())
+            var now = clock.GetUtcNow();
+            var next = Utc(account.NextSync);
+            var lastAttempt = Utc(account.LastAttempt);
+            var regularSchedule = account.Status is ("connected" or "partial") &&
+                (lastAttempt is null || lastAttempt <= Utc(account.LastSuccess));
+            if (next > now && (owner is null || !regularSchedule))
             {
-                if (owner is not null) throw new EwelinkFailure("syncDeferred", Utc(account.NextSync));
+                if (owner is not null)
+                    throw new EwelinkFailure(account.Status is "rateLimited" or "quotaExceeded" or "accessOrQuotaLimited"
+                        ? account.Status : "syncDeferred", next);
                 return;
             }
+            if (owner is not null && lastAttempt?.AddMinutes(1) is { } manualAllowedAt && manualAllowedAt > now)
+                throw new EwelinkFailure("syncDeferred", manualAllowedAt);
             EwelinkTokens tokens;
             try { tokens = vault.Open(account.Owner, options.AppId!, account.Envelope); }
             catch (EwelinkFailure error)
@@ -199,7 +213,8 @@ public sealed class EwelinkService
     {
         try
         {
-            await store.ReportAsync(owner, "syncing", null, clock.GetUtcNow().AddMinutes(options.PollMinutes), ct);
+            var attempt = clock.GetUtcNow();
+            await store.ReportAsync(owner, "syncing", null, attempt + FailureDelay, ct, attempt);
             var refreshed = tokens.AccessExpires <= clock.GetUtcNow().AddMinutes(5);
             if (refreshed) tokens = await RefreshAsync(owner, tokens, ct);
             EwelinkInventory inventory;
@@ -244,9 +259,11 @@ public sealed class EwelinkService
 
     private Task ReportFailureAsync(string owner, EwelinkFailure error, CancellationToken ct)
     {
-        var minimum = clock.GetUtcNow().AddMinutes(options.PollMinutes);
+        var minimum = clock.GetUtcNow() + FailureDelay;
         return store.ReportAsync(owner, error.Status, null, error.RetryAt > minimum ? error.RetryAt.Value : minimum, ct);
     }
+
+    private TimeSpan FailureDelay => TimeSpan.FromMinutes(Math.Max(30, options.PollMinutes));
 
     private Task IngestAsync(long property, long? room, EwelinkDevice device, bool includeRelay, CancellationToken ct)
     {

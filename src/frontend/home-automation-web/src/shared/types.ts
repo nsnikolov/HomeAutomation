@@ -57,7 +57,7 @@ export type EwelinkDevice = {
   supportedMetrics?: Metric[]
 }
 export type EwelinkState = {
-  status: string; manage: boolean; lastSuccess: string | null; nextSync: string | null
+  status: string; manage: boolean; lastSuccess: string | null; nextSync: string | null; lastAttempt?: string | null
   devices: EwelinkDevice[]; unassigned: EwelinkDevice[]
 }
 

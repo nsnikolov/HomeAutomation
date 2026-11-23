@@ -1,11 +1,41 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { expect, it, vi } from 'vitest'
-import { api } from '../shared/api'
+import { api, ApiError } from '../shared/api'
 import { EwelinkPanel } from './EwelinkPanel'
 
 const property = { id: 1, name: 'Fixture', timeZone: 'Europe/Sofia' }
+
+it.each([
+  [null, 'succeeded'],
+  [new ApiError(429, 'syncDeferred'), 'deferred'],
+  [new ApiError(429, 'quotaExceeded'), 'rate-limited'],
+  [new ApiError(503, 'unavailable'), 'failed'],
+] as const)('reports Force Refresh as %s with the expected outcome %s', async (error, outcome) => {
+  const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
+    status: 'connected', manage: true, lastSuccess: '2026-11-23T08:00:00Z', lastAttempt: '2026-11-23T08:10:00Z',
+    nextSync: '2099-11-23T08:20:00Z', devices: [], unassigned: [],
+  })
+  const rooms = vi.spyOn(api, 'rooms').mockResolvedValue([])
+  const refresh = vi.spyOn(api, 'updateEwelink').mockImplementation(async () => {
+    if (error) throw error
+  })
+  try {
+    view()
+    const button = await screen.findByRole('button', { name: 'Force Refresh' })
+    expect(button).toBeEnabled()
+    expect(screen.getByText(/^Last attempt/)).toBeInTheDocument()
+    expect(screen.getByText(/^Last successful sync/)).toBeInTheDocument()
+    fireEvent.click(button)
+    expect(await screen.findByText(new RegExp(`^Refresh ${outcome}`))).toBeInTheDocument()
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(1, 'refresh')
+  } finally {
+    status.mockRestore()
+    rooms.mockRestore()
+    refresh.mockRestore()
+  }
+})
 
 function view(path = '/') {
   return render(<QueryClientProvider client={new QueryClient()}>

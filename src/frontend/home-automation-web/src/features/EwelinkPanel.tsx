@@ -55,11 +55,19 @@ export function EwelinkPanel({ property }: { property: Property }) {
   const connected = view?.status !== 'disconnected'
   const deferred = view?.nextSync && Date.parse(view.nextSync) > Date.now()
   const errorCode = action.error instanceof ApiError ? action.error.code : undefined
+  const refreshResult = action.variables === 'refresh'
+    ? action.isSuccess ? 'Refresh succeeded.'
+      : action.isError ? errorCode === 'syncDeferred' ? 'Refresh deferred.'
+        : action.error instanceof ApiError && action.error.status === 429 ? 'Refresh rate-limited.'
+          : 'Refresh failed.'
+        : null
+    : null
   return <section aria-label="eWeLink Cloud">
     <div className="page-heading"><h1>eWeLink Cloud</h1>
       <p role="status">{query.isError ? 'eWeLink status could not be loaded.'
         : view ? statuses[view.status] ?? 'eWeLink could not synchronize.' : 'Loading eWeLink…'}</p>
-      {view?.lastSuccess && <p>Last synchronized {formatMoment(view.lastSuccess, property.timeZone)}</p>}
+      {view && <p>Last attempt {view.lastAttempt ? formatMoment(view.lastAttempt, property.timeZone) : 'Unavailable'}</p>}
+      {view && <p>Last successful sync {view.lastSuccess ? formatMoment(view.lastSuccess, property.timeZone) : 'Unavailable'}</p>}
     </div>
     {params.get('connect') === 'failed' && <p role="alert">eWeLink could not complete the connection or initial discovery.</p>}
     {params.get('connect') === 'success' && <p>eWeLink authorization completed.</p>}
@@ -70,11 +78,13 @@ export function EwelinkPanel({ property }: { property: Property }) {
         </Button>}
       {connected && <>
         <Button variant="outline" onClick={() => action.mutate('refresh')}
-          disabled={action.isPending || !!deferred || view.status === 'reauthorizationRequired'}>Refresh discovery</Button>
+          disabled={action.isPending || view.status === 'reauthorizationRequired'}>Force Refresh</Button>
         <Button variant="outline" onClick={() => action.mutate('disconnect')} disabled={action.isPending}>Disconnect account</Button>
       </>}
       {deferred && view.nextSync && connected && <p>Next sync {formatMoment(view.nextSync, property.timeZone)}</p>}
-      {action.isError && <p role="alert">{errorCode && statuses[errorCode] || 'eWeLink account action failed.'}</p>}
+      {refreshResult && <p role={action.isError ? 'alert' : 'status'}>{refreshResult} {errorCode && statuses[errorCode]}</p>}
+      {action.isError && action.variables !== 'refresh' &&
+        <p role="alert">{errorCode && statuses[errorCode] || 'eWeLink account action failed.'}</p>}
       {rooms.isError && <p role="alert">Rooms could not be loaded.</p>}
     </div>}
     {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}

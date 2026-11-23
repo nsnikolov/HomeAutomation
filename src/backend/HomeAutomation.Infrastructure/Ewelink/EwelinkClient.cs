@@ -15,11 +15,11 @@ public sealed class EwelinkOptions
     public string? AppSecret { get; set; }
     public string? RedirectUri { get; set; }
     public string? OperatorEmail { get; set; }
-    public int PollMinutes { get; set; } = 30;
+    public int PollMinutes { get; set; } = 5;
     public bool InventoryDiagnostics { get; set; }
     public bool IsConfigured => !string.IsNullOrWhiteSpace(AppId) && !AppId.Any(char.IsControl) &&
         !string.IsNullOrWhiteSpace(AppSecret) && !string.IsNullOrWhiteSpace(OperatorEmail) &&
-        PollMinutes is >= 15 and <= 1440 && Uri.TryCreate(RedirectUri, UriKind.Absolute, out var uri) &&
+        PollMinutes is >= 5 and <= 1440 && Uri.TryCreate(RedirectUri, UriKind.Absolute, out var uri) &&
         uri.Scheme == "https" && uri.AbsolutePath == "/api/v1/ewelink/callback" &&
         uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0;
     public bool IsOperator(string? email) => IsConfigured && string.Equals(email, OperatorEmail, StringComparison.OrdinalIgnoreCase);
@@ -50,7 +50,7 @@ internal sealed class EwelinkPace(TimeProvider clock)
 }
 
 internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, TimeProvider clock, EwelinkPace pace,
-    ILogger<EwelinkClient>? logger = null)
+    ILogger<EwelinkClient>? logger = null, IEwelinkStore? store = null)
 {
     private const string AuthorizePage = "https://c2ccdn.coolkit.cc/oauth/index.html";
     private const int PageSize = 30;
@@ -172,6 +172,7 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
             request.Content = new ByteArrayContent(body);
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         }
+        if (store is not null) await store.ReserveRequestAsync(region, clock.GetUtcNow(), ct);
         await pace.WaitAsync(ct);
         using var response = await http.SendAsync(request, ct);
         var retry = response.Headers.RetryAfter;

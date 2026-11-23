@@ -35,15 +35,25 @@ CoolKit documents a 30-second code lifetime and error `405` for an expired code.
 
 ## Polling and limits
 
-The default is one inventory scan every 30 minutes. `Ewelink:PollMinutes` accepts 15 through 1440. One running backend serializes the integration, spaces outbound Cloud requests by at least one second, and uses the same persisted cooldown for operator refresh and background work. A scan uses at most 12 discovery calls, including the family list. A truncated or brand-filtered result is shown as partial. Discovery failures retain the previous readings, and one safe read replay is allowed after refreshing an expired or rejected access token.
+The default sync interval is five minutes. `Ewelink:PollMinutes` accepts 5 through 1440. One running backend serializes the integration and spaces outbound Cloud requests by at least one second. A scan uses at most 12 discovery calls, including the family list. A truncated or brand-filtered result is shown as partial. Discovery failures retain the previous readings and back off for at least 30 minutes, or longer when the configured interval or provider cooldown requires it. One safe read replay is allowed after refreshing an expired or rejected access token.
 
-CoolKit publishes a free-app quota of 50,000 requests per region per month and an IP limit of 300 calls per five minutes. At the minimum interval, 12 reads per scheduled scan use at most 35,712 requests in a 31-day month for one continuously running installation before refresh or exceptional replay. Confirm the approved app's entitlement and any shared usage. HTTP 429 respects Retry-After. Provider error 412 identifies a quota limit, and bare HTTP 403 may indicate quota or denied access. A cooldown of at least a day protects those cases when the response carries no retry time. [CoolKit OAuth limits](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md#requirements-of-calling-interface-important)
+**Force Refresh** runs the same provider discovery and ingestion immediately if only the normal schedule is pending. It requires the account operator, access to the selected property, and CSRF validation. A running synchronization, an attempt in the past minute, a provider cooldown, or exhausted quota defers the request. The page reports its actual outcome and shows when the last scan started and last succeeded. Inventory diagnostics also run for forced scans when enabled.
+
+CoolKit publishes a free-app quota of 50,000 requests per region per month and an IP limit of 300 calls per five minutes. At five minutes, an account that uses all 12 discovery calls per scan could exceed the monthly quota. Home Automation persists regional request counts in UTC day buckets covering at least 31 days and stops at 50,000. It counts token calls and replays and starts tracking when migration 007 is applied. Usage from other applications or before the migration remains subject to CoolKit's upstream quota. The integration honors HTTP 429 Retry-After and enforces a day-long default cooldown for provider error 412 or bare HTTP 403 when no retry time is supplied. [CoolKit OAuth limits](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md#requirements-of-calling-interface-important)
+
+An existing User Secrets or environment override still sets the effective polling interval. In a local Development backend, update or remove the User Secrets override and restart the backend.
+
+```powershell
+dotnet user-secrets set 'Ewelink:PollMinutes' '5' --project src/backend/HomeAutomation.Api
+```
+
+The environment variable `Ewelink__PollMinutes` takes precedence over User Secrets. Update it in the backend launcher or process environment, or remove it to use the underlying configuration.
 
 ## Connect after approval
 
 1. Confirm that the approved Personal Developer application can use OAuth, refresh, family discovery, and thing inventory in the account's region. Record the documented quota and the device/brand entitlement. Obtain its own App ID and app secret.
 2. Register the exact HTTPS callback. On the existing Windows HTTPS development origin, use `https://ha-dev.britishlab.org:5443/api/v1/ewelink/callback` if CoolKit accepts that origin. Otherwise use an approved HTTPS origin that reaches the same Home Automation backend. Start from that same origin after registering it. Confirm the redirect registration and entitlement in the Developer Center before connecting.
-3. Apply `004_ewelink_cloud.sql` through the existing migration runner with the scoped migration account and the dedicated Home Automation schema. Use the [Windows migration setup](../../README.md#apply-migrations-and-provision-a-viewer) with `--migrate` alone for an existing installation. The runtime verifies this migration only for eWeLink actions. Preserve the existing local Data Protection key ring.
+3. Apply the repository migrations through the existing runner with the scoped migration account and dedicated Home Automation schema. eWeLink requires migration 004 and the new migration 007 for attempt times and quota tracking. Use the [Windows migration setup](../../README.md#apply-migrations-and-provision-a-viewer) with `--migrate` alone for an existing installation. Preserve the existing local Data Protection key ring.
 4. From the repository root, set Development User Secrets. Supply the registered callback and an existing local operator email that has access to the intended property.
 
    ```powershell
@@ -52,7 +62,7 @@ CoolKit publishes a free-app quota of 50,000 requests per region per month and a
        'Ewelink:AppSecret' = [System.Net.NetworkCredential]::new('', (Read-Host 'eWeLink app secret' -AsSecureString)).Password
        'Ewelink:RedirectUri' = Read-Host 'Registered HTTPS callback URL'
        'Ewelink:OperatorEmail' = Read-Host 'Existing local operator email'
-       'Ewelink:PollMinutes' = 30
+       'Ewelink:PollMinutes' = 5
    } | ConvertTo-Json -Compress | dotnet user-secrets set --project src/backend/HomeAutomation.Api
    ```
 

@@ -21,6 +21,35 @@ public sealed class EwelinkTests
     };
 
     [Fact]
+    public void PollingDefaultsToFiveMinutesAndRejectsShorterIntervals()
+    {
+        var options = new EwelinkOptions
+        {
+            AppId = Options.AppId, AppSecret = Options.AppSecret,
+            RedirectUri = Options.RedirectUri, OperatorEmail = Options.OperatorEmail
+        };
+        Assert.Equal(5, options.PollMinutes);
+        Assert.True(options.IsConfigured);
+        options.PollMinutes = 4;
+        Assert.False(options.IsConfigured);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CompletedDiscoveryReportsInventoryOnlyWhenDiagnosticsAreEnabled(bool enabled)
+    {
+        using var http = new HttpClient(new Handler((_, _) =>
+            Task.FromResult(Response("""{"error":0,"data":{"familyList":[]}}"""))));
+        var clock = new FixtureClock();
+        var logger = new CaptureLogger();
+        var options = new EwelinkOptions { AppId = Options.AppId, InventoryDiagnostics = enabled };
+        var client = new EwelinkClient(http, options, clock, new EwelinkPace(clock), logger);
+        await client.DiscoverAsync(new("eu", "fixture-access", "unused", Now, Now), default);
+        Assert.Equal(enabled, logger.Messages.Any(message => message.Contains("inventory finished", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task ExchangesAndRefreshesUsingOfficialSignedJsonAndRegionalHosts()
     {
         var calls = 0;
@@ -379,7 +408,7 @@ public sealed class EwelinkTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => send(request, ct);
     }
-    private sealed class CaptureLogger : ILogger
+    private sealed class CaptureLogger : ILogger<EwelinkClient>
     {
         public List<string> Messages { get; } = [];
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;

@@ -1,4 +1,5 @@
 using System.Transactions;
+using Dapper;
 using HomeAutomation.Infrastructure.Ewelink;
 using HomeAutomation.Infrastructure.MySql;
 using Microsoft.AspNetCore.DataProtection;
@@ -11,14 +12,7 @@ public sealed class EwelinkMySqlTests
     [MySqlFact]
     public async Task TokenUpsertPreservesOwnershipAndReadsBackEncryptedTokens()
     {
-        var connectionString = Environment.GetEnvironmentVariable(MySqlFact.ConnectionVariable) ??
-            throw new InvalidOperationException("A disposable eWeLink MySQL test database is required.");
-        var connection = new MySqlConnectionStringBuilder(connectionString)
-        {
-            UseXaTransactions = false
-        };
-        Assert.Equal("homeautomation_ewelink_test", connection.Database);
-        var database = new Database(connection.ConnectionString);
+        var database = TestDatabase();
         var store = new EwelinkStore(database, new Migrations(database));
         using var transaction = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -59,6 +53,45 @@ public sealed class EwelinkMySqlTests
             Assert.Equal(expected, vault.Open(owner, appId, envelope));
             Assert.Throws<EwelinkFailure>(() => vault.Open(other, appId, envelope));
         }
+    }
+
+    [MySqlFact]
+    public async Task RequestBudgetAndSyncTimestampsPersistAcrossStoreInstances()
+    {
+        var database = TestDatabase();
+        var migrations = new Migrations(database);
+        var store = new EwelinkStore(database, migrations);
+        using var transaction = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ct = timeout.Token;
+        var now = new DateTimeOffset(2026, 11, 23, 12, 0, 0, TimeSpan.Zero);
+        await store.SaveTokensAsync("fixture-owner", [1], ct);
+        await store.ReportAsync("fixture-owner", "syncing", null, now.AddMinutes(30), ct, now);
+        await store.ReportAsync("fixture-owner", "connected", now.AddSeconds(2), now.AddMinutes(5), ct);
+        await using (var db = await database.OpenAsync(ct))
+            await db.ExecuteAsync(Database.Query("""
+                INSERT INTO ewelink_request_days(region,day_utc,requests) VALUES('eu',@day,49999)
+                """, ct, new { day = now.UtcDateTime.Date }));
+
+        await store.ReserveRequestAsync("eu", now, ct);
+        var reopened = new EwelinkStore(database, migrations);
+        var blocked = await Assert.ThrowsAsync<EwelinkFailure>(() => reopened.ReserveRequestAsync("eu", now, ct));
+        Assert.Equal("quotaExceeded", blocked.Status);
+        Assert.Equal(now.AddDays(32).Date, blocked.RetryAt!.Value.UtcDateTime);
+        await reopened.ReserveRequestAsync("us", now, ct);
+        await reopened.ReserveRequestAsync("eu", now.AddDays(32), ct);
+        var account = Assert.IsType<EwelinkAccount>(await reopened.AccountAsync(ct));
+        Assert.Equal(now.UtcDateTime, account.LastAttempt);
+        Assert.Equal(now.AddSeconds(2).UtcDateTime, account.LastSuccess);
+    }
+
+    private static Database TestDatabase()
+    {
+        var connectionString = Environment.GetEnvironmentVariable(MySqlFact.ConnectionVariable) ??
+            throw new InvalidOperationException("A disposable eWeLink MySQL test database is required.");
+        var connection = new MySqlConnectionStringBuilder(connectionString) { UseXaTransactions = false };
+        Assert.Equal("homeautomation_ewelink_test", connection.Database);
+        return new Database(connection.ConnectionString);
     }
 
     private sealed class MySqlFact : FactAttribute

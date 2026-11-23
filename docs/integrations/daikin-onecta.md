@@ -22,7 +22,6 @@ The adapter targets the ONECTA developer API, using the identity provider's `/v1
      'Daikin:OperatorEmail' = Read-Host 'Home Automation operator email'
      'Daikin:RedirectUri' = 'https://ha-dev.example.net:5443/api/v1/daikin/callback'
      'Daikin:TokenKey' = [Convert]::ToBase64String($daikinKey)
-     'Daikin:EnableWrites' = $false
    }
    $daikinSettings | ConvertTo-Json -Compress | dotnet user-secrets set --project src/backend/HomeAutomation.Api
    Remove-Variable daikinSettings,daikinKey,daikinRng
@@ -30,7 +29,15 @@ The adapter targets the ONECTA developer API, using the identity provider's `/v1
 
    Retain the existing key when reconfiguring an installation. For deployment, supply secrets through a protected backend secret store. S256 PKCE is on by default. Use `Daikin:UsePkce=false` only if the authenticated Daikin contract confirms that the confidential client cannot use PKCE.
 4. Apply migration 003 with the dedicated migration account using the [database setup instructions](../../README.md). Restart one Home Automation backend process. Sign in to the same application origin you registered, select a property, select **Daikin ONECTA**, and choose **Connect account**. After granting consent on Daikin, choose **Finish connecting**. The callback uses a short-lived browser-bound state. The final POST needs the original local operator session, property membership and CSRF validation.
-5. Check discovery and assign each unit from **Unassigned devices** to the active property and optionally a room. Switch property before assigning a unit elsewhere. Assignments use stable gateway and management point identities. The same unit can only be assigned to one property; in-property room changes are supported. Compare the available readings with ONECTA first and leave write execution disabled.
+5. Check discovery and assign each unit from **Unassigned devices** to the active property and optionally a room. Switch property before assigning a unit elsewhere. Assignments use stable gateway and management point identities. The same unit can only be assigned to one property. In-property room changes are supported. Compare the available readings with ONECTA before dispatching commands.
+
+Manual AC writes default to enabled when the backend runs in Development and disabled in Production. Existing User Secrets and environment overrides still take precedence over the defaults. To explicitly disable local writes, set `Daikin:EnableWrites` to `false` in User Secrets and restart the backend.
+
+```powershell
+dotnet user-secrets set 'Daikin:EnableWrites' 'false' --project src/backend/HomeAutomation.Api
+```
+
+If `Daikin__EnableWrites` is set in the launcher or environment, set it to `false` there or remove it to allow the User Secrets value to take effect. Altherma monitoring remains read-only.
 
 **Disconnect account** stops polling and clears the stored access and refresh tokens locally. Historical telemetry and assignments are retained. The authenticated contract for upstream revocation could not be verified, so use Daikin's account or app management to revoke its grant where available. Reconnect may be required after expiration or revocation.
 

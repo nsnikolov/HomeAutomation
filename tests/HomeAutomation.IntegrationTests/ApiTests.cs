@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -29,6 +30,19 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
 {
     private readonly Host host;
     public ApiTests(Host host) => this.host = host;
+
+    [Theory]
+    [InlineData("Development", true)]
+    [InlineData("Production", false)]
+    public void DaikinWritesDefaultOnlyInDevelopmentAndAcceptAnOverride(string environment, bool defaultWrites)
+    {
+        var root = host.Services.GetRequiredService<IHostEnvironment>().ContentRootPath;
+        var config = new ConfigurationBuilder().SetBasePath(root).AddJsonFile("appsettings.json")
+            .AddJsonFile($"appsettings.{environment}.json", optional: true);
+        Assert.Equal(defaultWrites, config.Build().GetValue<bool>("Daikin:EnableWrites"));
+        config.AddInMemoryCollection(new Dictionary<string, string?> { ["Daikin:EnableWrites"] = (!defaultWrites).ToString() });
+        Assert.Equal(!defaultWrites, config.Build().GetValue<bool>("Daikin:EnableWrites"));
+    }
 
     [Fact]
     public async Task PublicLivenessAndAnonymousPropertyRequestsReturnExpectedStatuses()
@@ -346,6 +360,37 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal(1, store.TokenWrites);
         Assert.Same(envelope, store.Envelope);
 
+        var now = DateTimeOffset.UtcNow;
+        await store.ReportAsync("viewer", "connected", now.AddMinutes(-2), now.AddMinutes(3), default, now.AddMinutes(-2));
+        var reads = provider.Reads;
+        var requests = store.Requests;
+        Assert.Equal(StatusCodes.Status400BadRequest, (await Start(1, false, "refresh")).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status404NotFound, (await Start(99, true, "refresh")).Response.StatusCode);
+        var gate = loginHost.Services.GetRequiredService<EwelinkGate>();
+        await gate.WaitAsync();
+        try
+        {
+            Assert.Equal(StatusCodes.Status429TooManyRequests, (await Start(1, true, "refresh")).Response.StatusCode);
+            Assert.Equal(reads, provider.Reads);
+        }
+        finally { gate.Release(); }
+        Assert.Equal(StatusCodes.Status204NoContent, (await Start(1, true, "refresh")).Response.StatusCode);
+        Assert.Equal(reads + 1, provider.Reads);
+        Assert.Equal(requests + 1, store.Requests);
+        Assert.True(store.LastAttempt >= now.UtcDateTime);
+        Assert.True(store.LastSuccess >= store.LastAttempt);
+        Assert.Equal(StatusCodes.Status429TooManyRequests, (await Start(1, true, "refresh")).Response.StatusCode);
+        Assert.Equal(reads + 1, provider.Reads);
+
+        var cooldownUntil = now.AddHours(1);
+        await store.ReportAsync("viewer", "quotaExceeded", null, cooldownUntil, default);
+        var deferred = await Start(1, true, "refresh");
+        Assert.Equal(StatusCodes.Status429TooManyRequests, deferred.Response.StatusCode);
+        using var reason = await JsonDocument.ParseAsync(deferred.Response.Body);
+        Assert.Equal("quotaExceeded", reason.RootElement.GetProperty("status").GetString());
+        Assert.Equal(cooldownUntil.ToString("R"), deferred.Response.Headers.RetryAfter);
+        Assert.Equal(reads + 1, provider.Reads);
+
         Task<HttpContext> ReturnFromProvider(string stateValue, string? correlationCookie, string upstream = "127.0.0.1") =>
             Request("/api/v1/ewelink/callback", context =>
             {
@@ -357,8 +402,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
                 if (correlationCookie is not null) context.Request.Headers.Cookie = correlationCookie;
             });
 
-        Task<HttpContext> Start(long property, bool includeCsrf) =>
-            Request($"/api/v1/ewelink/{property}/connect", context =>
+        Task<HttpContext> Start(long property, bool includeCsrf, string operation = "connect") =>
+            Request($"/api/v1/ewelink/{property}/{operation}", context =>
             {
                 context.Request.Method = "POST";
                 context.Request.Headers.Cookie = connectCookies;
@@ -409,10 +454,15 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         public string? Owner { get; private set; }
         public byte[]? Envelope { get; private set; }
         public int TokenWrites { get; private set; }
+        public int Requests { get; private set; }
+        public DateTime? LastAttempt { get; private set; }
+        public DateTime? LastSuccess { get; private set; }
+        private DateTime? nextSync;
+        private string status = "connected";
         public IReadOnlyList<EwelinkRow> Rows { get; init; } = [];
         public Task<bool> SchemaReadyAsync(CancellationToken ct) => Task.FromResult(true);
         public Task<EwelinkAccount?> AccountAsync(CancellationToken ct) => Task.FromResult(
-            Owner is null ? null : new EwelinkAccount(Owner, Envelope, "connected", null, null));
+            Owner is null ? null : new EwelinkAccount(Owner, Envelope, status, LastSuccess, nextSync, LastAttempt));
         public Task SaveTokensAsync(string owner, byte[]? envelope, CancellationToken ct)
         {
             Owner = owner;
@@ -420,8 +470,20 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             TokenWrites++;
             return Task.CompletedTask;
         }
-        public Task ReportAsync(string owner, string status, DateTimeOffset? success, DateTimeOffset next, CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task ReportAsync(string owner, string status, DateTimeOffset? success, DateTimeOffset next, CancellationToken ct,
+            DateTimeOffset? attempt = null)
+        {
+            this.status = status;
+            LastSuccess = success?.UtcDateTime ?? LastSuccess;
+            LastAttempt = attempt?.UtcDateTime ?? LastAttempt;
+            nextSync = next.UtcDateTime;
+            return Task.CompletedTask;
+        }
+        public Task ReserveRequestAsync(string region, DateTimeOffset now, CancellationToken ct)
+        {
+            Requests++;
+            return Task.CompletedTask;
+        }
         public Task<IReadOnlyList<EwelinkRow>> DevicesAsync(string owner, CancellationToken ct) => Task.FromResult(Rows);
         public Task SaveAsync(string owner, EwelinkDevice device, CancellationToken ct) => throw new NotSupportedException();
         public Task AssignAsync(EwelinkRow row, string owner, long property, long? room, CancellationToken ct) =>
@@ -431,6 +493,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     private sealed class EwelinkProviderFixture : HttpMessageHandler
     {
         public int Exchanges { get; private set; }
+        public int Reads { get; private set; }
         public bool Reject { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -457,6 +520,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             }
             Assert.Equal(HttpMethod.Get, request.Method);
             Assert.Equal("/v2/family", request.RequestUri.AbsolutePath);
+            Reads++;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("""{"error":0,"data":{"familyList":[]}}""")
