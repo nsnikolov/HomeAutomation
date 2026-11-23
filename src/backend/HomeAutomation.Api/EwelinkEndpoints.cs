@@ -131,6 +131,13 @@ internal static class EwelinkEndpoints
             await service.SyncAsync(User(http), ct);
             return Results.NoContent();
         }).RequireRateLimiting("session");
+        propertyRoutes.MapPost("/electrical-viewer", async (HttpContext http, long property, ElectricalViewer viewer,
+            EwelinkService service, CancellationToken ct) =>
+        {
+            if (viewer.Tab == Guid.Empty || viewer.Active is not { } active) return Results.BadRequest();
+            await service.SetElectricalViewerAsync(User(http), property, viewer.Tab, active, ct);
+            return Results.NoContent();
+        }).RequireRateLimiting("ewelink-presence");
         propertyRoutes.MapPost("/devices/{device:guid}/assign", async (HttpContext http, long property, Guid device,
             RoomAssignment assignment, EwelinkService service, CancellationToken ct) =>
         {
@@ -160,4 +167,5 @@ internal static class EwelinkEndpoints
     private static string User(HttpContext http) => http.User.FindFirstValue(ClaimTypes.NameIdentifier)!;
     private sealed record RoomAssignment(long? RoomId);
     private sealed record RelayPreference(bool? Enabled);
+    private sealed record ElectricalViewer(Guid Tab, bool? Active);
 }

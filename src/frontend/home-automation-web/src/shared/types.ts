@@ -58,12 +58,14 @@ export type EwelinkDevice = {
   supportedMetrics?: Metric[]
   socketMetrics?: Metric[]
   observedRelay?: boolean | null; observedRelayAt?: string | null; observedRelayQuality?: Quality
+  electricalReporting?: { status: 'waitingForActivation' | 'awaitingReport' | 'receivingReports' | 'activationRejected' | 'activationUnconfirmed'; providerCode?: number | null } | null
   canWriteRelay?: boolean; requiresRelayConfirmation?: boolean; relayCommand?: EwelinkRelayOutcome | null
   relayControlStatus?: 'enabled' | 'deviceDisabled' | 'globalDisabled' | 'awaitingDiscovery' | 'unsupported' | null
 }
 export type EwelinkState = {
   status: string; manage: boolean; lastSuccess: string | null; nextSync: string | null; lastAttempt?: string | null
   devices: EwelinkDevice[]; unassigned: EwelinkDevice[]
+  canViewLiveElectrical?: boolean
 }
 
 export type TuyaReading = {

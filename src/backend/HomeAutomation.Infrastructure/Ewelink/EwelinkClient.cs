@@ -18,6 +18,8 @@ public sealed class EwelinkOptions
     public int PollMinutes { get; set; } = 5;
     public bool InventoryDiagnostics { get; set; }
     public bool EnableWebSocket { get; set; }
+    public bool EnableLiveElectricalReporting { get; set; }
+    public bool LiveElectricalConfigured => EnableWebSocket && EnableLiveElectricalReporting;
     public bool EnableWrites { get; set; }
     public Dictionary<string, bool> RelayWriteDevices { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool IsConfigured => !string.IsNullOrWhiteSpace(AppId) && !AppId.Any(char.IsControl) &&
@@ -189,6 +191,12 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
         var host = Host(tokens.Region) is not null ? $"https://{tokens.Region}-dispa.{root}" : null;
         var data = await SendAsync(tokens.Region, "/dispatch/app", tokens.Access, null, ct, overrideHost: host, flatResponse: true);
         return EwelinkSocketProtocol.Address(data);
+    }
+
+    public async Task ReserveElectricalActivationAsync(string region, CancellationToken ct)
+    {
+        if (store is not null) await store.ReserveRequestAsync(region, clock.GetUtcNow(), ct, electrical: true);
+        await pace.WaitAsync(ct);
     }
 
     public async Task WriteRelayAsync(EwelinkTokens tokens, string device, bool on, CancellationToken ct)

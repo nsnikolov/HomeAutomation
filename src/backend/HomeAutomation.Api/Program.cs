@@ -150,12 +150,20 @@ builder.Services.AddAntiforgery(options =>
     options.Cookie.SameSite = SameSiteMode.Strict;
     options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
 });
-builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("session", limiter =>
+builder.Services.AddRateLimiter(options =>
 {
-    limiter.PermitLimit = 30;
-    limiter.Window = TimeSpan.FromMinutes(1);
-    limiter.QueueLimit = 0;
-}));
+    options.AddFixedWindowLimiter("session", limiter =>
+    {
+        limiter.PermitLimit = 30;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
+    options.AddPolicy("ewelink-presence", context => RateLimitPartition.GetFixedWindowLimiter(
+        MonitoringEndpoints.UserId(context.User), _ => new()
+        {
+            PermitLimit = 240, Window = TimeSpan.FromMinutes(1), QueueLimit = 0
+        }));
+});
 var keyDirectory = builder.Configuration["DataProtection:KeyDirectory"];
 var protection = builder.Services.AddDataProtection().SetApplicationName("HomeAutomation");
 if (!string.IsNullOrWhiteSpace(keyDirectory))

@@ -16,9 +16,10 @@ public sealed record EwelinkDeviceView(string Id, string Name, string Model, lon
     IReadOnlyList<MetricReading> Measurements, IReadOnlyList<Metric> SupportedMetrics, bool CanWriteRelay = false,
     bool RequiresRelayConfirmation = false, EwelinkRelayOutcome? RelayCommand = null, string? RelayControlStatus = null,
     IReadOnlyList<Metric>? SocketMetrics = null, bool? ObservedRelay = null, DateTimeOffset? ObservedRelayAt = null,
-    ReadingQuality? ObservedRelayQuality = null);
+    ReadingQuality? ObservedRelayQuality = null, EwelinkElectricalStatus? ElectricalReporting = null);
 public sealed record EwelinkView(string Status, bool Manage, DateTimeOffset? LastSuccess, DateTimeOffset? NextSync,
-    IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned, DateTimeOffset? LastAttempt = null);
+    IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned, DateTimeOffset? LastAttempt = null,
+    bool CanViewLiveElectrical = false);
 
 internal sealed class EwelinkGate : SemaphoreSlim
 {
@@ -55,10 +56,11 @@ public sealed partial class EwelinkService
     private readonly TelemetryWriter writer;
     private readonly TimeProvider clock;
     private readonly IEwelinkRelayAudit relayAudit;
+    private readonly EwelinkElectricalReporting? electrical;
 
     internal EwelinkService(EwelinkOptions options, EwelinkClient client, IEwelinkStore store, EwelinkGate gate,
         EwelinkVault vault, IMonitoringReader permissions, TelemetryWriter writer, TimeProvider clock,
-        IEwelinkRelayAudit relayAudit)
+        IEwelinkRelayAudit relayAudit, EwelinkElectricalReporting? electrical = null)
     {
         this.options = options;
         this.client = client;
@@ -69,6 +71,7 @@ public sealed partial class EwelinkService
         this.writer = writer;
         this.clock = clock;
         this.relayAudit = relayAudit;
+        this.electrical = electrical;
     }
 
     public static void Register(IServiceCollection services)
@@ -76,6 +79,7 @@ public sealed partial class EwelinkService
         services.AddSingleton<EwelinkGate>();
         services.AddSingleton<EwelinkPace>();
         services.AddSingleton<EwelinkVault>();
+        services.AddSingleton<EwelinkElectricalReporting>();
         services.AddScoped<IEwelinkStore, EwelinkStore>();
         services.AddScoped<IEwelinkRelayAudit, EwelinkRelayAudit>();
         services.AddHttpClient<EwelinkClient>(http =>
@@ -88,7 +92,7 @@ public sealed partial class EwelinkService
             provider.GetRequiredService<EwelinkClient>(), provider.GetRequiredService<IEwelinkStore>(), provider.GetRequiredService<EwelinkGate>(),
             provider.GetRequiredService<EwelinkVault>(), provider.GetRequiredService<IMonitoringReader>(),
             provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<TimeProvider>(),
-            provider.GetRequiredService<IEwelinkRelayAudit>()));
+            provider.GetRequiredService<IEwelinkRelayAudit>(), provider.GetRequiredService<EwelinkElectricalReporting>()));
         services.AddHostedService<EwelinkWorker>();
         services.AddHostedService<EwelinkSocketWorker>();
     }
@@ -119,7 +123,9 @@ public sealed partial class EwelinkService
                     CanWriteRelay = control == "enabled",
                     RequiresRelayConfirmation = device.RequiresRelayConfirmation,
                     RelayCommand = control == "enabled" ? await relayAudit.LatestAsync(row.Id, property, ct) : null,
-                    RelayControlStatus = control
+                    RelayControlStatus = control,
+                    ElectricalReporting = options.LiveElectricalConfigured && EwelinkElectricalReporting.IsMeter(device)
+                        ? electrical?.Status(device) : null
                 };
             }
             assigned.Add(view);
@@ -127,7 +133,8 @@ public sealed partial class EwelinkService
         if (!manage && assigned.Count == 0) return new("unavailableForProperty", false, null, null, [], []);
         return new(account.Status, manage, Utc(account.LastSuccess), manage ? Utc(account.NextSync) : null, assigned,
             manage ? rows.Where(row => row.PropertyId is null).Select(row => View(row, reachable)).ToArray() : [],
-            Utc(account.LastAttempt));
+            Utc(account.LastAttempt), manage && reachable && options.LiveElectricalConfigured && electrical?.IsStopped == false &&
+                assigned.Any(device => device.ElectricalReporting is not null));
     }
 
     private EwelinkDeviceView View(EwelinkRow row, bool authorized)

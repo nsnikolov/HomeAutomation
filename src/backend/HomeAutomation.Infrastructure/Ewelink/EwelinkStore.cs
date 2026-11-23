@@ -20,7 +20,7 @@ internal interface IEwelinkStore
     Task SaveTokensAsync(string owner, byte[]? envelope, CancellationToken ct);
     Task ReportAsync(string owner, string status, DateTimeOffset? success, DateTimeOffset next, CancellationToken ct,
         DateTimeOffset? attempt = null);
-    Task ReserveRequestAsync(string region, DateTimeOffset now, CancellationToken ct);
+    Task ReserveRequestAsync(string region, DateTimeOffset now, CancellationToken ct, bool electrical = false);
     Task<IReadOnlyList<EwelinkRow>> DevicesAsync(string owner, CancellationToken ct);
     Task SaveAsync(string owner, EwelinkDevice device, CancellationToken ct);
     Task AssignAsync(EwelinkRow row, string owner, long property, long? room, CancellationToken ct);
@@ -64,7 +64,7 @@ internal sealed class EwelinkStore(Database database, Migrations migrations) : I
             """, ct, new { owner, status, success = success?.UtcDateTime, next = next.UtcDateTime, attempt = attempt?.UtcDateTime }));
     }
 
-    public async Task ReserveRequestAsync(string region, DateTimeOffset now, CancellationToken ct)
+    public async Task ReserveRequestAsync(string region, DateTimeOffset now, CancellationToken ct, bool electrical = false)
     {
         await using var db = await database.OpenAsync(ct);
         const string lockName = "homeautomation:ewelink:requests";
@@ -77,7 +77,8 @@ internal sealed class EwelinkStore(Database database, Migrations migrations) : I
             var count = await db.ExecuteScalarAsync<long>(Query("""
                 SELECT COALESCE(SUM(requests),0) FROM ewelink_request_days WHERE region=@Region AND day_utc>=@Cutoff
                 """, ct, args));
-            if (count >= 50_000)
+            // Leave the final 5,000 calls in the shared budget available for HTTP reconciliation and other existing operations.
+            if (count >= (electrical ? 45_000 : 50_000))
             {
                 var oldest = await db.ExecuteScalarAsync<DateTime>(Query("""
                     SELECT MIN(day_utc) FROM ewelink_request_days WHERE region=@Region AND day_utc>=@Cutoff

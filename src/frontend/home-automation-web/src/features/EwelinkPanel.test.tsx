@@ -1,11 +1,46 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { expect, it, vi } from 'vitest'
 import { api, ApiError } from '../shared/api'
 import { EwelinkPanel } from './EwelinkPanel'
 
 const property = { id: 1, name: 'Fixture', timeZone: 'Europe/Sofia' }
+
+it('submits presence only while visible and distinguishes acceptance from live measurements', async () => {
+  const time = '2026-11-23T08:00:00Z'
+  const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
+    status: 'connected', manage: false, lastSuccess: time, nextSync: null, unassigned: [],
+    canViewLiveElectrical: true,
+    devices: [{ id: 'relay', name: 'Boiler', model: 'PSF-X67', roomId: 1, connectivity: 'online',
+      seenAt: time, quality: 'fresh', hasRelay: true, relay: false, relayAt: time, relayQuality: 'fresh',
+      electricalReporting: { status: 'awaitingReport' }, measurements: [
+        { metric: 'activePower', unit: 'W', observedAt: time, number: 0, flag: null, code: null, quality: 'fresh' },
+      ] }],
+  })
+  const send = vi.fn(async (_active: boolean) => {})
+  const prepare = vi.spyOn(api, 'prepareEwelinkElectricalViewer').mockResolvedValue(send)
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  try {
+    const page = view()
+    expect(await screen.findByText('Electrical reporting accepted. Waiting for a measurement change.')).toBeInTheDocument()
+    expect(screen.getByText('Active power').nextElementSibling).toHaveTextContent(/0 W.*Last known/)
+    await waitFor(() => expect(send.mock.calls).toEqual([[true]]))
+    visibility.mockReturnValue('hidden')
+    fireEvent(document, new Event('visibilitychange'))
+    await waitFor(() => expect(send.mock.calls).toEqual([[true], [false]]))
+    visibility.mockReturnValue('visible')
+    fireEvent(document, new Event('visibilitychange'))
+    await waitFor(() => expect(send.mock.calls).toEqual([[true], [false], [true]]))
+    page.unmount()
+    await waitFor(() => expect(send.mock.calls).toEqual([[true], [false], [true], [false]]))
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(1, expect.any(String))
+  } finally {
+    status.mockRestore()
+    prepare.mockRestore()
+    visibility.mockRestore()
+  }
+})
 
 it('distinguishes live measurements from last-known values and retains their timestamps', async () => {
   const time = '2026-11-23T08:00:00Z'

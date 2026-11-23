@@ -69,6 +69,16 @@ export const api = {
   ewelink: (id: number, signal?: AbortSignal) => request<EwelinkState>(`/ewelink/${id}`, { signal }),
   connectEwelink: (id: number) => providerAction<{ authorizationUrl: string }>('ewelink', id, 'connect'),
   updateEwelink: (id: number, action: 'disconnect' | 'refresh') => providerAction<void>('ewelink', id, action),
+  prepareEwelinkElectricalViewer: async (id: number, tab: string) => {
+    const { token } = await request<{ token: string }>('/session/csrf')
+    return (active: boolean) => request<void>(`/ewelink/${id}/electrical-viewer`, {
+      method: 'POST',
+      headers: { 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tab, active }),
+      keepalive: !active,
+      signal: AbortSignal.timeout(5_000),
+    })
+  },
   assignEwelink: (id: number, device: string, roomId: number | null) =>
     providerAction<void>('ewelink', id, `devices/${device}/assign`, { roomId }),
   commandEwelinkRelay: (id: number, device: string, on: boolean, confirmedProtected: boolean) =>

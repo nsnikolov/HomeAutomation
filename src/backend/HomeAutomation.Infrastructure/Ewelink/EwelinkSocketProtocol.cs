@@ -26,6 +26,13 @@ internal static class EwelinkSocketProtocol
             nonce = EwelinkClient.Nonce(), ts = now.ToUnixTimeSeconds(), userAgent = "app", sequence
         });
 
+    public static string ActivateElectricalReporting(string key, string device, string sequence) =>
+        JsonSerializer.Serialize(new
+        {
+            action = "update", apikey = key, deviceid = device, userAgent = "app", sequence,
+            @params = new { uiActive = EwelinkElectricalReporting.ActivationSeconds }
+        });
+
     public static TimeSpan? Heartbeat(JsonElement reply, string sequence, string key, DateTimeOffset now)
     {
         var error = EwelinkMapping.Integer(reply, "error");

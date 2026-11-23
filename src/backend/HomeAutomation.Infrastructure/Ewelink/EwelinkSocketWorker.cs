@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -67,7 +68,7 @@ public sealed partial class EwelinkService
 }
 
 internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOptions options, TimeProvider clock,
-    ILogger<EwelinkSocketWorker> logger) : BackgroundService
+    EwelinkElectricalReporting electrical, ILogger<EwelinkSocketWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -94,7 +95,8 @@ internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOp
                     await EwelinkSocketSession.RunAsync(socket, active.Identity.Tokens, options.AppId!, clock,
                         () => logger.LogInformation("eWeLink WebSocket authenticated."),
                         (id, parameters, at, token) => ReceiveAsync(active.Identity, id, parameters, at, token),
-                        token => CheckIdentityAsync(active.Identity, token), ct);
+                        token => CheckIdentityAsync(active.Identity, token), ct,
+                        options.LiveElectricalConfigured ? (channel, token) => ActivateAsync(active.Identity, channel, token) : null);
                     failures = 0;
                     delay = EwelinkSocketProtocol.ReconnectDelay(1);
                 }
@@ -116,6 +118,55 @@ internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOp
             }
             await Task.Delay(delay, clock, ct);
         }
+    }
+
+    private async Task ActivateAsync(EwelinkSocketIdentity identity, EwelinkActivationChannel channel, CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2), clock);
+        DateTimeOffset? retryAt = null;
+        do
+        {
+            if (electrical.IsStopped || retryAt > clock.GetUtcNow() || electrical.ViewedProperties(identity.Owner).Length == 0)
+                continue;
+            await using var scope = scopes.CreateAsyncScope();
+            var service = scope.ServiceProvider.GetRequiredService<EwelinkService>();
+            var notifier = scope.ServiceProvider.GetRequiredService<IEwelinkLiveNotifier>();
+            foreach (var target in await service.ElectricalTargetsAsync(identity, ct))
+            {
+                try
+                {
+                    var reply = await service.SendElectricalActivationAsync(identity, target, channel, ct);
+                    if (reply is null) continue;
+                    var code = await reply.WaitAsync(TimeSpan.FromSeconds(4), clock, ct);
+                    if (code != 0)
+                    {
+                        await StopActivatingAsync("activationRejected", code);
+                        break;
+                    }
+                    electrical.Accepted(target.ExternalId);
+                    await notifier.ChangedAsync(target.PropertyId!.Value, ct);
+                }
+                catch (TimeoutException)
+                {
+                    await StopActivatingAsync("activationUnconfirmed", null);
+                    break;
+                }
+                catch (EwelinkFailure failure) when (failure.Status is "quotaExceeded" or "syncDeferred")
+                {
+                    retryAt = failure.RetryAt ?? clock.GetUtcNow().AddMinutes(1);
+                    logger.LogWarning("eWeLink electrical activation deferred with {Status} until {RetryAt}.", failure.Status, retryAt);
+                    break;
+                }
+            }
+
+            async Task StopActivatingAsync(string reason, int? providerCode)
+            {
+                electrical.Stop(reason, providerCode);
+                logger.LogWarning("eWeLink electrical activation stopped with {Status}, CoolKit code {ProviderCode}.", reason, providerCode);
+                foreach (var property in electrical.ViewedProperties(identity.Owner))
+                    await notifier.ChangedAsync(property, ct);
+            }
+        } while (await timer.WaitForNextTickAsync(ct));
     }
 
     private async Task<bool> CheckIdentityAsync(EwelinkSocketIdentity identity, CancellationToken ct)
@@ -141,9 +192,12 @@ internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOp
 
 internal static class EwelinkSocketSession
 {
+    private sealed record Report(string Device, JsonElement Parameters, DateTimeOffset At);
+
     public static async Task RunAsync(WebSocket socket, EwelinkTokens tokens, string appId, TimeProvider clock, Action authenticated,
         Func<string, JsonElement, DateTimeOffset, CancellationToken, Task> observed,
-        Func<CancellationToken, Task<bool>> checkIdentity, CancellationToken ct)
+        Func<CancellationToken, Task<bool>> checkIdentity, CancellationToken ct,
+        Func<EwelinkActivationChannel, CancellationToken, Task>? activate = null)
     {
         var now = clock.GetUtcNow();
         var sequence = now.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
@@ -158,18 +212,42 @@ internal static class EwelinkSocketSession
         }
         authenticated();
         using var session = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var read = ReceiveAsync(socket, tokens.AccountKey!, buffer, clock, observed, session.Token);
-        var ping = HeartbeatAsync(socket, heartbeat, clock, session.Token);
+        using var sendGate = new SemaphoreSlim(1, 1);
+        async ValueTask Send(string text, CancellationToken token)
+        {
+            await sendGate.WaitAsync(token);
+            try { await SendAsync(socket, text, token); }
+            finally { sendGate.Release(); }
+        }
+        var channel = activate is null ? null : new EwelinkActivationChannel(tokens.AccountKey!, clock, Send, now.ToUnixTimeMilliseconds());
+        // Keep ACK handling independent from database ingestion, which can wait behind HTTP reconciliation.
+        var reports = Channel.CreateBounded<Report>(new BoundedChannelOptions(128)
+        {
+            SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.DropOldest
+        });
+        var read = ReceiveAsync(socket, tokens.AccountKey!, buffer, clock, reports.Writer, channel, session.Token);
+        var process = ProcessAsync();
+        var ping = HeartbeatAsync(Send, heartbeat, clock, session.Token);
         var identity = WatchIdentityAsync(tokens.AccessExpires, clock, checkIdentity, session.Token);
-        var first = await Task.WhenAny(read, ping, identity);
+        var activation = channel is null ? Task.Delay(Timeout.InfiniteTimeSpan, clock, session.Token)
+            : activate!(channel, session.Token);
+        var tasks = new[] { read, process, ping, identity, activation };
+        var first = await Task.WhenAny(tasks);
         await session.CancelAsync();
-        try { await Task.WhenAll(read, ping, identity); }
+        try { await Task.WhenAll(tasks); }
         catch (OperationCanceledException) when (session.IsCancellationRequested) { }
         await first;
+
+        async Task ProcessAsync()
+        {
+            await foreach (var report in reports.Reader.ReadAllAsync(session.Token))
+                await observed(report.Device, report.Parameters, report.At, session.Token);
+        }
     }
 
     private static async Task ReceiveAsync(WebSocket socket, string key, byte[] buffer, TimeProvider clock,
-        Func<string, JsonElement, DateTimeOffset, CancellationToken, Task> observed, CancellationToken ct)
+        ChannelWriter<Report> reports, EwelinkActivationChannel? channel,
+        CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -181,22 +259,24 @@ internal static class EwelinkSocketSession
             using (json)
             {
                 var data = json.RootElement;
+                if (channel?.Receive(data) == true) continue;
                 if (EwelinkSocketProtocol.DeviceEventTime(data, clock.GetUtcNow()) is { } at &&
                     EwelinkMapping.Text(data, "apikey", 256) == key &&
                     EwelinkMapping.Id(data, "deviceid") is { } id &&
                     EwelinkMapping.Node(data, "params") is { ValueKind: JsonValueKind.Object } parameters)
-                    await observed(id, parameters, at, ct);
+                    reports.TryWrite(new(id, parameters.Clone(), at));
             }
         }
     }
 
-    private static async Task HeartbeatAsync(WebSocket socket, TimeSpan? interval, TimeProvider clock, CancellationToken ct)
+    private static async Task HeartbeatAsync(Func<string, CancellationToken, ValueTask> send, TimeSpan? interval,
+        TimeProvider clock, CancellationToken ct)
     {
         if (interval is null) await Task.Delay(Timeout.InfiniteTimeSpan, clock, ct);
         else
         {
             using var timer = new PeriodicTimer(interval.Value, clock);
-            while (await timer.WaitForNextTickAsync(ct)) await SendAsync(socket, "ping", ct);
+            while (await timer.WaitForNextTickAsync(ct)) await send("ping", ct);
         }
     }
 
@@ -226,5 +306,38 @@ internal static class EwelinkSocketSession
             if (fragment.EndOfMessage) return buffer.AsMemory(0, length);
         }
         throw new EwelinkFailure("invalidSocketFrame");
+    }
+}
+
+internal sealed class EwelinkActivationChannel(string key, TimeProvider clock, Func<string, CancellationToken, ValueTask> send,
+    long handshakeSequence)
+{
+    private sealed record Request(string Device, string Sequence, TaskCompletionSource<int> Reply);
+    private Request? pending;
+    private long lastSequence = handshakeSequence;
+
+    public async Task<Task<int>> SendAsync(string device, CancellationToken ct)
+    {
+        lastSequence = Math.Max(lastSequence + 1, clock.GetUtcNow().ToUnixTimeMilliseconds());
+        var sequence = lastSequence.ToString(CultureInfo.InvariantCulture);
+        var request = new Request(device, sequence, new(TaskCreationOptions.RunContinuationsAsynchronously));
+        Volatile.Write(ref pending, request);
+        await send(EwelinkSocketProtocol.ActivateElectricalReporting(key, device, sequence), ct);
+        return request.Reply.Task;
+    }
+
+    public bool Receive(JsonElement data)
+    {
+        var request = Volatile.Read(ref pending);
+        if (request is null || EwelinkMapping.Text(data, "sequence", 32) != request.Sequence ||
+            EwelinkMapping.Node(data, "params").ValueKind != JsonValueKind.Undefined ||
+            EwelinkMapping.Text(data, "userAgent", 16) == "device" ||
+            EwelinkMapping.Integer(data, "error") is not { } code ||
+            (EwelinkMapping.Node(data, "deviceid").ValueKind != JsonValueKind.Undefined &&
+                EwelinkMapping.Id(data, "deviceid") != request.Device) ||
+            (EwelinkMapping.Node(data, "apikey").ValueKind != JsonValueKind.Undefined &&
+                EwelinkMapping.Text(data, "apikey", 256) != key))
+            return false;
+        return request.Reply.TrySetResult(code);
     }
 }

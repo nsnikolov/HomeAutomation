@@ -7,6 +7,15 @@ import { Badge, Button, Card } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
 import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
 import { formatReading } from './Devices'
+import { useEwelinkElectricalViewer } from './useEwelinkElectricalViewer'
+
+const electricalStatuses = {
+  waitingForActivation: 'Waiting to activate electrical reporting.',
+  awaitingReport: 'Electrical reporting accepted. Waiting for a measurement change.',
+  receivingReports: 'Receiving live electrical reports.',
+  activationRejected: 'CoolKit rejected electrical reporting.',
+  activationUnconfirmed: 'CoolKit did not acknowledge electrical reporting.',
+}
 
 const measurementRows = [
   ['temperature', 'Temperature'],
@@ -42,6 +51,7 @@ export function EwelinkPanel({ property }: { property: Property }) {
   const key = ['property', property.id, 'ewelink']
   const query = useQuery({ queryKey: key, queryFn: ({ signal }) => api.ewelink(property.id, signal), refetchInterval: 30_000 })
   const view = query.data
+  useEwelinkElectricalViewer(property.id, view?.canViewLiveElectrical === true)
   const rooms = useQuery({
     queryKey: ['property', property.id, 'rooms'], queryFn: ({ signal }) => api.rooms(property.id, signal), enabled: !!view?.manage,
   })
@@ -143,6 +153,10 @@ const EwelinkCard = memo(function EwelinkCard({ device, property, rooms }: { dev
     </div>
     {device.model && <p>{device.model}</p>}
     <p>Cloud snapshot received {formatMoment(device.seenAt, property.timeZone)}</p>
+    {device.electricalReporting && <p className="muted">
+      {electricalStatuses[device.electricalReporting.status]}
+      {device.electricalReporting.providerCode != null && ` (CoolKit code ${device.electricalReporting.providerCode})`}
+    </p>}
     {(device.hasRelay || rows.length > 0) && <dl className="device-readings">
       {device.hasRelay && <div><dt>Relay</dt><dd>{relay}
         {device.observedRelayAt ? <ReadingTime at={device.observedRelayAt} timeZone={property.timeZone}
@@ -151,11 +165,14 @@ const EwelinkCard = memo(function EwelinkCard({ device, property, rooms }: { dev
       </dd></div>}
       {rows.map(([metric, label]) => {
         const reading = device.measurements?.find(item => item.metric === metric)
+        const fromSocket = device.socketMetrics?.includes(metric)
+        const electricalSnapshot = device.electricalReporting && !fromSocket &&
+          (metric === 'activePower' || metric === 'voltage' || metric === 'current')
         return <div key={metric}><dt>{label}</dt><dd>
           {reading && reading.quality !== 'missing' && reading.number !== null ? <>
-            {formatReading(reading)}{reading.quality === 'stale' && ' · Last known'}
+            {formatReading(reading)}{(reading.quality === 'stale' || electricalSnapshot) && ' · Last known'}
             {reading.observedAt && <ReadingTime at={reading.observedAt} timeZone={property.timeZone}
-              label={reading.quality === 'fresh' ? device.socketMetrics?.includes(metric) ? 'Live' : 'Cloud snapshot' : undefined} />}
+              label={reading.quality === 'fresh' ? fromSocket ? 'Live' : 'Cloud snapshot' : undefined} />}
           </> : 'Unavailable'}
         </dd></div>
       })}

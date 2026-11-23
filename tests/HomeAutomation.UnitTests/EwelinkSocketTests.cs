@@ -56,6 +56,122 @@ public sealed class EwelinkSocketTests
         Assert.False(lease.Matches(account, Tokens.AccessExpires));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(504)]
+    public async Task ElectricalActivationSendsOnlyUiActiveAndMatchesItsReply(int providerCode)
+    {
+        using var socket = new FixtureSocket();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var clock = new SessionClock();
+        var acknowledged = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ingestionBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = EwelinkSocketSession.RunAsync(socket, Tokens, "fixture-app", clock, () => { },
+            (_, _, _, ct) =>
+            {
+                ingestionBlocked.TrySetResult();
+                return Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }, _ => Task.FromResult(true), stop.Token,
+            async (channel, ct) =>
+            {
+                var reply = await channel.SendAsync("fixture-device", ct);
+                acknowledged.SetResult(await reply.WaitAsync(ct));
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            });
+        using var handshake = JsonDocument.Parse(await socket.Sent.Reader.ReadAsync(stop.Token));
+        socket.Incoming.Writer.TryWrite(JsonSerializer.Serialize(new
+        {
+            error = 0, apikey = AccountKey, sequence = handshake.RootElement.GetProperty("sequence").GetString(),
+            config = new { hb = 0 }
+        }));
+        using var activation = JsonDocument.Parse(await socket.Sent.Reader.ReadAsync(stop.Token));
+        var command = activation.RootElement;
+        Assert.Equal("update", command.GetProperty("action").GetString());
+        Assert.Equal("fixture-device", command.GetProperty("deviceid").GetString());
+        Assert.Equal(AccountKey, command.GetProperty("apikey").GetString());
+        Assert.Equal("app", command.GetProperty("userAgent").GetString());
+        var parameter = Assert.Single(command.GetProperty("params").EnumerateObject());
+        Assert.Equal("uiActive", parameter.Name);
+        Assert.Equal(60, parameter.Value.GetInt32());
+        var sequence = command.GetProperty("sequence").GetString();
+        string Reply(string id, string? seq, int code) => JsonSerializer.Serialize(new { deviceid = id, sequence = seq, error = code });
+        socket.Incoming.Writer.TryWrite(Reply("fixture-device", "wrong-sequence", 7));
+        socket.Incoming.Writer.TryWrite(Reply("another-device", sequence, 7));
+        socket.Incoming.Writer.TryWrite(Event(AccountKey, "device", Now));
+        await ingestionBlocked.Task.WaitAsync(stop.Token);
+        Assert.False(acknowledged.Task.IsCompleted);
+        socket.Incoming.Writer.TryWrite(Reply("fixture-device", sequence, providerCode));
+        Assert.Equal(providerCode, await acknowledged.Task.WaitAsync(stop.Token));
+        await stop.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session);
+    }
+
+    [Fact]
+    public void ElectricalViewingCoalescesTabsRenewalAndReconnectAndExpiresWithoutAViewer()
+    {
+        var clock = new ElectricalClock();
+        var state = new EwelinkElectricalReporting(clock);
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        const string owner = "owner";
+        const string device = "meter";
+        const long property = 1;
+        Assert.False(state.TryStart(owner, property, device));
+        Assert.True(state.View(owner, property, first, true));
+        Assert.True(state.View(owner, property, second, true));
+        Assert.Equal([property], state.ViewedProperties(owner));
+        Assert.Empty(state.ViewedProperties("other-owner"));
+        Assert.True(state.TryStart(owner, property, device));
+        Assert.False(state.TryStart(owner, property, device));
+        state.Accepted(device);
+        var meter = new EwelinkDevice(device, "Boiler", "PSF-X67", "", false, Connectivity.Online,
+            Now.AddSeconds(-2), true, false, Now.AddSeconds(-2), Uiid: 32);
+        Assert.Equal("awaitingReport", state.Status(meter).Status);
+        using var report = JsonDocument.Parse("""{"power":"1908.02","voltage":"239.83","current":"7.97"}""");
+        var (observed, samples) = EwelinkMapping.MergeEvent(meter, report.RootElement, Now.AddSeconds(1));
+        Assert.Equal(3, samples.Count);
+        Assert.False(observed.Relay);
+        Assert.Null(observed.SocketRelay);
+        Assert.Equal("receivingReports", state.Status(observed).Status);
+
+        state.View(owner, property, first, false);
+        clock.Advance(20);
+        state.View(owner, property, second, true);
+        clock.Advance(20);
+        state.View(owner, property, second, true);
+        clock.Advance(9);
+        Assert.False(state.TryStart(owner, property, device)); // The account socket can reconnect before the renewal is due.
+        clock.Advance(1);
+        Assert.True(state.TryStart(owner, property, device));
+        state.Accepted(device);
+        Assert.Equal("receivingReports", state.Status(observed).Status);
+        state.View(owner, property, second, false);
+        Assert.Empty(state.ViewedProperties(owner));
+
+        state.View(owner, property, first, true);
+        clock.Advance(60);
+        Assert.Empty(state.ViewedProperties(owner));
+        Assert.Equal("waitingForActivation", state.Status(observed).Status);
+        Assert.False(state.TryStart(owner, property, device));
+    }
+
+    [Fact]
+    public void ElectricalActivationCapsDevicesAndLatchesProviderRejectionAcrossSessions()
+    {
+        var clock = new ElectricalClock();
+        var state = new EwelinkElectricalReporting(clock);
+        Assert.True(state.View("owner", 1, Guid.NewGuid(), true));
+        for (var i = 0; i < EwelinkElectricalReporting.MaxDevices; i++) Assert.True(state.TryStart("owner", 1, $"meter-{i}"));
+        Assert.False(state.TryStart("owner", 1, "overflow"));
+        state.Stop("activationRejected", 504);
+        clock.Advance(100);
+        Assert.True(state.View("owner", 1, Guid.NewGuid(), true));
+        Assert.False(state.TryStart("owner", 1, "meter-1"));
+        var meter = new EwelinkDevice("meter-1", "Boiler", "PSF-X67", "", false, Connectivity.Online, Now,
+            true, false, Now, Uiid: 32);
+        Assert.Equal(new EwelinkElectricalStatus("activationRejected", 504), state.Status(meter));
+    }
+
     [Fact]
     public async Task SessionAuthenticatesSendsHeartbeatAndDeliversOnlyDeviceReportsForItsAccount()
     {
@@ -174,6 +290,13 @@ public sealed class EwelinkSocketTests
         public override DateTimeOffset GetUtcNow() => Now;
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
             base.CreateTimer(callback, state, dueTime == TimeSpan.FromSeconds(8) ? TimeSpan.FromMilliseconds(20) : dueTime, period);
+    }
+
+    private sealed class ElectricalClock : TimeProvider
+    {
+        private DateTimeOffset current = Now;
+        public override DateTimeOffset GetUtcNow() => current;
+        public void Advance(int seconds) => current = current.AddSeconds(seconds);
     }
 
     private sealed class FixtureSocket : WebSocket

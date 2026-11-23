@@ -318,14 +318,16 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             {
                 AppId = "fixture", AppSecret = "fixture", OperatorEmail = PasswordFixture.Email,
                 RedirectUri = "https://ha-dev.britishlab.org:5443/api/v1/ewelink/callback",
-                EnableWrites = true
+                EnableWrites = true, EnableWebSocket = true, EnableLiveElectricalReporting = true
             });
             services.RemoveAll<IEwelinkStore>();
             services.AddSingleton<IEwelinkStore>(store);
             services.RemoveAll<IEwelinkRelayAudit>();
             services.AddSingleton<IEwelinkRelayAudit>(relayAudit);
-            services.Remove(services.Single(item => item.ServiceType == typeof(IHostedService) &&
-                item.ImplementationType == typeof(EwelinkWorker)));
+            foreach (var worker in services.Where(item => item.ServiceType == typeof(IHostedService) &&
+                         item.ImplementationType is { } type &&
+                         (type == typeof(EwelinkWorker) || type == typeof(EwelinkSocketWorker))).ToArray())
+                services.Remove(worker);
             services.AddHttpClient<EwelinkClient>().ConfigurePrimaryHttpMessageHandler(() => provider);
         }));
 
@@ -438,6 +440,34 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             Connectivity.Online, now, true, false, now, Uiid: 32);
         store.Rows = [new EwelinkRow(relayId, relay.ExternalId, 1, null, JsonSerializer.Serialize(relay))];
         await store.ReportAsync("viewer", "connected", now, now.AddMinutes(5), default, now);
+        var tab = Guid.NewGuid();
+        var reporting = loginHost.Services.GetRequiredService<EwelinkElectricalReporting>();
+        Assert.Equal(StatusCodes.Status401Unauthorized, (await Presence(1, true, false, false)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status404NotFound, (await Presence(99, true)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status400BadRequest, (await Presence(1, true, csrfRequired: false)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status204NoContent, (await Presence(1, true)).Response.StatusCode);
+        Assert.Equal([1L], reporting.ViewedProperties("viewer"));
+        var assigned = Assert.Single(store.Rows);
+        store.Rows = [assigned,
+            Candidate("offline", 1, relay with { Connectivity = Connectivity.Offline }),
+            Candidate("stale", 1, relay with { SeenAt = now.AddHours(-1) }),
+            Candidate("unknown", 1, relay with { Uiid = null }),
+            Candidate("shared", 1, relay with { Shared = true }),
+            Candidate("unassigned", null, relay),
+            Candidate("other-property", 2, relay)];
+        await using (var scope = loginHost.Services.CreateAsyncScope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<EwelinkService>();
+            var identity = new EwelinkSocketIdentity("viewer", envelope, vault.Open("viewer", "fixture", envelope));
+            Assert.Equal(assigned, Assert.Single(await service.ElectricalTargetsAsync(identity, default)));
+            await store.ReportAsync("viewer", "rateLimited", null, cooldownUntil, default);
+            Assert.Empty(await service.ElectricalTargetsAsync(identity, default));
+            await store.ReportAsync("viewer", "connected", now, now.AddMinutes(5), default, now);
+        }
+        store.Rows = [assigned];
+        Assert.Equal(StatusCodes.Status204NoContent, (await Presence(1, false)).Response.StatusCode);
+        Assert.Empty(reporting.ViewedProperties("viewer"));
+        Assert.Equal(0, provider.RelayWrites);
         Assert.Equal(StatusCodes.Status401Unauthorized, (await Relay(1, confirmed: true, signedIn: false)).Response.StatusCode);
         Assert.Equal(StatusCodes.Status404NotFound, (await Relay(99, confirmed: true)).Response.StatusCode);
         Assert.Equal(StatusCodes.Status400BadRequest, (await Relay(1, confirmed: true, csrfRequired: false)).Response.StatusCode);
@@ -472,6 +502,9 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal(2, provider.RelayWrites);
         Assert.Equal(1, provider.RelayReads);
 
+        static EwelinkRow Candidate(string id, long? property, EwelinkDevice device) => new(id, id, property, null,
+            JsonSerializer.Serialize(device with { ExternalId = id }));
+
         Task<HttpContext> ReturnFromProvider(string stateValue, string? correlationCookie, string upstream = "127.0.0.1") =>
             Request("/api/v1/ewelink/callback", context =>
             {
@@ -495,7 +528,13 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             RelayPost(property, "relay", new { on = true, confirmedProtected = confirmed }, signedIn, csrfRequired);
 
         Task<HttpContext> RelayPost(long property, string operation, object values, bool signedIn, bool csrfRequired) =>
-            Request($"/api/v1/ewelink/{property}/devices/{relayId}/{operation}", context =>
+            Post($"/api/v1/ewelink/{property}/devices/{relayId}/{operation}", values, signedIn, csrfRequired);
+
+        Task<HttpContext> Presence(long property, bool active, bool signedIn = true, bool csrfRequired = true) =>
+            Post($"/api/v1/ewelink/{property}/electrical-viewer", new { tab, active }, signedIn, csrfRequired);
+
+        Task<HttpContext> Post(string path, object values, bool signedIn, bool csrfRequired) =>
+            Request(path, context =>
             {
                 var body = JsonSerializer.SerializeToUtf8Bytes(values);
                 context.Request.Method = "POST";
@@ -576,7 +615,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             nextSync = next.UtcDateTime;
             return Task.CompletedTask;
         }
-        public Task ReserveRequestAsync(string region, DateTimeOffset now, CancellationToken ct)
+        public Task ReserveRequestAsync(string region, DateTimeOffset now, CancellationToken ct, bool electrical = false)
         {
             Requests++;
             return Task.CompletedTask;

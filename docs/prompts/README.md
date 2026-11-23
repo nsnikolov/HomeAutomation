@@ -34,3 +34,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 30. 2026-11-23 · [Milestone 4E — eWeLink Relay ON/OFF Control](0030-ewelink-manual-relay-control.md)
 31. 2026-11-23 · [eWeLink per-device relay enablement](0031-ewelink-relay-opt-in-ui.md)
 32. 2026-11-23 · [Milestone 4G — Real-Time eWeLink Telemetry via WebSocket](0032-ewelink-websocket-telemetry.md)
+33. 2026-11-23 · [Milestone 4H — eWeLink UIID 32 Live Electrical Reporting](0033-ewelink-live-electrical-reporting.md)
