@@ -7,7 +7,8 @@ namespace HomeAutomation.Infrastructure.Ewelink;
 
 internal sealed record EwelinkAccount(string Owner, byte[]? Envelope, string Status, DateTime? LastSuccess, DateTime? NextSync,
     DateTime? LastAttempt);
-internal sealed record EwelinkRow(string Id, string ExternalId, long? PropertyId, long? RoomId, string Snapshot)
+internal sealed record EwelinkRow(string Id, string ExternalId, long? PropertyId, long? RoomId, string Snapshot,
+    bool? RelayWriteEnabled = null)
 {
     public EwelinkDevice Device => JsonSerializer.Deserialize<EwelinkDevice>(Snapshot)!;
 }
@@ -23,6 +24,7 @@ internal interface IEwelinkStore
     Task<IReadOnlyList<EwelinkRow>> DevicesAsync(string owner, CancellationToken ct);
     Task SaveAsync(string owner, EwelinkDevice device, CancellationToken ct);
     Task AssignAsync(EwelinkRow row, string owner, long property, long? room, CancellationToken ct);
+    Task SetRelayWritesAsync(string id, string owner, long property, bool enabled, CancellationToken ct);
 }
 
 internal sealed class EwelinkStore(Database database, Migrations migrations) : IEwelinkStore
@@ -97,9 +99,20 @@ internal sealed class EwelinkStore(Database database, Migrations migrations) : I
     {
         await using var db = await database.OpenAsync(ct);
         return (await db.QueryAsync<EwelinkRow>(Query("""
-            SELECT public_id AS Id,external_id AS ExternalId,property_id AS PropertyId,room_id AS RoomId,snapshot AS Snapshot
+            SELECT public_id AS Id,external_id AS ExternalId,property_id AS PropertyId,room_id AS RoomId,snapshot AS Snapshot,
+                   relay_write_enabled AS RelayWriteEnabled
             FROM ewelink_devices WHERE owner_id=@owner ORDER BY public_id
             """, ct, new { owner }))).AsList();
+    }
+
+    public async Task SetRelayWritesAsync(string id, string owner, long property, bool enabled, CancellationToken ct)
+    {
+        await using var db = await database.OpenAsync(ct);
+        if (await db.ExecuteAsync(Query("""
+            UPDATE ewelink_devices SET relay_write_enabled=@enabled
+            WHERE public_id=@id AND owner_id=@owner AND property_id=@property
+            """, ct, new { id, owner, property, enabled })) != 1)
+            throw new EwelinkFailure("notFound");
     }
 
     public async Task SaveAsync(string owner, EwelinkDevice device, CancellationToken ct)

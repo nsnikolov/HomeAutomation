@@ -53,14 +53,15 @@ The environment variable `Ewelink__PollMinutes` takes precedence over User Secre
 
 ## Manual relay control
 
-Apply migration 008 with the existing migration runner using the scoped migration account. Complete a normal inventory sync so the device's stored snapshot includes its UIID. The integration accepts owned, assigned PSF-X67 devices reporting UIID 32 and a single-channel relay. The THR320D remains read-only because no matching UIID 181 write contract was verified. Autonomous thermostat rules remain under eWeLink's control. [CoolKit device status](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md#update-the-status-of-a-device-or-group) · [CoolKit UIID protocols](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/UIIDProtocol.md)
+Apply migrations 008 and 009 with the existing migration runner using the scoped migration account. Complete a normal inventory sync so the device's stored snapshot includes its UIID. The integration accepts owned, assigned PSF-X67 devices reporting UIID 32 and a single-channel relay. The THR320D remains read-only because no matching UIID 181 write contract was verified. Autonomous thermostat rules remain under eWeLink's control. [CoolKit device status](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md#update-the-status-of-a-device-or-group) · [CoolKit UIID protocols](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/UIIDProtocol.md)
 
-Both permission switches default to off. In the authenticated response from `GET /api/v1/ewelink/{property}`, use the assigned device's `devices[].id` as the internal ID. Enable only the individually reviewed circuits in the backend configuration, then restart the backend.
+Both permission switches default to off. Enable the global setting in backend configuration, then restart the backend.
 
 ```powershell
 dotnet user-secrets set 'Ewelink:EnableWrites' 'true' --project src/backend/HomeAutomation.Api
-dotnet user-secrets set 'Ewelink:RelayWriteDevices:<internal-device-id>' 'true' --project src/backend/HomeAutomation.Api
 ```
+
+As the eWeLink operator, open the assigned property and select **Enable relay controls** on each eligible device you want to control. This stores a preference by internal device ID and reveals ON/OFF on that card. **Disable relay controls** revokes the opt-in. Existing `Ewelink:RelayWriteDevices` configuration entries are used for devices without a saved preference. A saved UI preference takes precedence, while `Ewelink:EnableWrites=false` disables all writes.
 
 Inverter In and Inverter out are protected. The confirmation requirement follows their internal records after rename. Each command to a protected relay requires explicit confirmation. Authorized operators can select ON or OFF when the relay state is fresh and the device is online. Each command is audited with the local actor, property, internal device ID, requested state, and outcome.
 
@@ -70,7 +71,7 @@ A command sends one signed-in device status POST using the OAuth bearer token. C
 
 1. Confirm that the approved Personal Developer application can use OAuth, refresh, family discovery, and thing inventory in the account's region. Record the documented quota and the device/brand entitlement. Obtain its own App ID and app secret.
 2. Register the exact HTTPS callback. On the existing Windows HTTPS development origin, use `https://ha-dev.britishlab.org:5443/api/v1/ewelink/callback` if CoolKit accepts that origin. Otherwise use an approved HTTPS origin that reaches the same Home Automation backend. Start from that same origin after registering it. Confirm the redirect registration and entitlement in the Developer Center before connecting.
-3. Apply the repository migrations through the existing runner with the scoped migration account and dedicated Home Automation schema. eWeLink requires migrations 004, 007 and 008. Use the [Windows migration setup](../../README.md#apply-migrations-and-provision-a-viewer) with `--migrate` alone for an existing installation. Preserve the existing local Data Protection key ring.
+3. Apply the repository migrations through the existing runner with the scoped migration account and dedicated Home Automation schema. eWeLink requires migrations 004, 007, 008 and 009. Use the [Windows migration setup](../../README.md#apply-migrations-and-provision-a-viewer) with `--migrate` alone for an existing installation. Preserve the existing local Data Protection key ring.
 4. From the repository root, set Development User Secrets. Supply the registered callback and an existing local operator email that has access to the intended property.
 
    ```powershell

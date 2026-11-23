@@ -14,7 +14,7 @@ namespace HomeAutomation.Infrastructure.Ewelink;
 public sealed record EwelinkDeviceView(string Id, string Name, string Model, long? RoomId, Connectivity Connectivity,
     DateTimeOffset SeenAt, ReadingQuality Quality, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt, ReadingQuality RelayQuality,
     IReadOnlyList<MetricReading> Measurements, IReadOnlyList<Metric> SupportedMetrics, bool CanWriteRelay = false,
-    bool RequiresRelayConfirmation = false, EwelinkRelayOutcome? RelayCommand = null);
+    bool RequiresRelayConfirmation = false, EwelinkRelayOutcome? RelayCommand = null, string? RelayControlStatus = null);
 public sealed record EwelinkView(string Status, bool Manage, DateTimeOffset? LastSuccess, DateTimeOffset? NextSync,
     IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned, DateTimeOffset? LastAttempt = null);
 
@@ -107,14 +107,16 @@ public sealed partial class EwelinkService
         foreach (var row in rows.Where(row => row.PropertyId == property))
         {
             var view = View(row, reachable);
-            if (manage && options.EnableWrites)
+            if (manage)
             {
                 var device = row.Device;
+                var control = RelayControlStatus(row, device);
                 view = view with
                 {
-                    CanWriteRelay = options.RelayWriteDevices.GetValueOrDefault(row.Id) && device.SupportsRelayWrites,
+                    CanWriteRelay = control == "enabled",
                     RequiresRelayConfirmation = device.RequiresRelayConfirmation,
-                    RelayCommand = await relayAudit.LatestAsync(row.Id, property, ct)
+                    RelayCommand = control == "enabled" ? await relayAudit.LatestAsync(row.Id, property, ct) : null,
+                    RelayControlStatus = control
                 };
             }
             assigned.Add(view);

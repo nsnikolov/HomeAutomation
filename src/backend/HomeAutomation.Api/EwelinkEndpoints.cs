@@ -141,6 +141,13 @@ internal static class EwelinkEndpoints
             EwelinkRelayCommand command, EwelinkService service, CancellationToken ct) =>
                 service.CommandRelayAsync(User(http), property, device.ToString("N"), command, ct))
             .RequireRateLimiting("session");
+        propertyRoutes.MapPost("/devices/{device:guid}/relay-preference", async (HttpContext http, long property, Guid device,
+            RelayPreference preference, EwelinkService service, CancellationToken ct) =>
+        {
+            if (preference.Enabled is not { } enabled) return Results.BadRequest();
+            await service.SetRelayWritesAsync(User(http), property, device.ToString("N"), enabled, ct);
+            return Results.NoContent();
+        }).RequireRateLimiting("session");
     }
 
     private static CookieOptions CookieSettings() => new()
@@ -152,4 +159,5 @@ internal static class EwelinkEndpoints
         string.Equals(request.Host.Value, redirect.Authority, StringComparison.OrdinalIgnoreCase);
     private static string User(HttpContext http) => http.User.FindFirstValue(ClaimTypes.NameIdentifier)!;
     private sealed record RoomAssignment(long? RoomId);
+    private sealed record RelayPreference(bool? Enabled);
 }

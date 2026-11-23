@@ -50,19 +50,32 @@ public sealed class EwelinkMySqlTests
         var row = Assert.Single(await store.DevicesAsync(owner, ct));
         await store.AssignAsync(row, owner, property, null, ct);
 
-        var options = new EwelinkOptions { AppId = app, EnableWrites = true, RelayWriteDevices = { [row.Id] = true } };
+        var options = new EwelinkOptions { AppId = app, EnableWrites = true };
         using var gate = new EwelinkGate();
         using var handler = new RelayHandler();
         using var http = new HttpClient(handler);
         var client = new EwelinkClient(http, options, clock, new EwelinkPace(clock), store: store);
         var service = new EwelinkService(options, client, store, gate, vault, new MonitoringReader(database, clock, new(), new()),
             new TelemetryWriter(database, clock), clock, audit);
+        var blocked = await Assert.ThrowsAsync<EwelinkFailure>(() =>
+            service.CommandRelayAsync(owner, property, row.Id, new(true, false), ct));
+        Assert.Equal("forbidden", blocked.Status);
+        Assert.Empty(handler.Methods);
+        await service.SetRelayWritesAsync(owner, property, row.Id, true, ct);
+        Assert.True(Assert.Single(await store.DevicesAsync(owner, ct)).RelayWriteEnabled);
         var result = await service.CommandRelayAsync(owner, property, row.Id, new(true, false), ct);
         Assert.Equal("confirmed", result.Status);
         Assert.False(result.Open);
         Assert.Equal(result, await audit.LatestAsync(row.Id, property, ct));
         Assert.True(Assert.Single(await store.DevicesAsync(owner, ct)).Device.Relay);
+        Assert.True(Assert.Single(await store.DevicesAsync(owner, ct)).RelayWriteEnabled);
         Assert.Equal([HttpMethod.Post, HttpMethod.Get], handler.Methods);
+        options.RelayWriteDevices[row.Id] = true;
+        await service.SetRelayWritesAsync(owner, property, row.Id, false, ct);
+        var disabled = await Assert.ThrowsAsync<EwelinkFailure>(() =>
+            service.CommandRelayAsync(owner, property, row.Id, new(false, false), ct));
+        Assert.Equal("forbidden", disabled.Status);
+        Assert.Equal(2, handler.Methods.Count);
         await using var telemetry = await database.OpenAsync(ct);
         Assert.True(await telemetry.ExecuteScalarAsync<bool>("""
             SELECT lr.boolean_value FROM latest_readings lr

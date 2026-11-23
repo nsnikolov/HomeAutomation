@@ -111,10 +111,18 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
     mutationFn: (on: boolean) => api.commandEwelinkRelay(property.id, device.id, on, !!device.requiresRelayConfirmation),
     onSettled: () => client.invalidateQueries({ queryKey: ['property', property.id, 'ewelink'] }),
   })
+  const preference = useMutation({
+    mutationFn: (enabled: boolean) => api.setEwelinkRelayWrites(property.id, device.id, enabled),
+    onSettled: () => client.invalidateQueries({ queryKey: ['property', property.id, 'ewelink'] }),
+  })
   const result = command.data && command.data.id !== device.relayCommand?.id ? command.data : device.relayCommand
   const commandStatus = command.isPending ? 'pending' : result?.status
-  const commandDisabled = command.isPending || result?.open || device.relayCommand?.open ||
-    device.connectivity !== 'online' || device.relayQuality !== 'fresh' || device.relay === null
+  const relayBlocked = result?.open || device.relayCommand?.open
+    ? 'Waiting for the next discovery to verify the previous command.'
+    : device.connectivity !== 'online' ? 'Relay controls require an online device.'
+      : device.relayQuality !== 'fresh' || device.relay === null ? 'Relay controls require a fresh reported state.' : null
+  const commandDisabled = command.isPending || preference.isPending || !!relayBlocked
+  const controlStatus = device.relayControlStatus
   function setRelay(on: boolean) {
     if (device.requiresRelayConfirmation &&
       !window.confirm(`Confirm switching ${device.name} ${on ? 'ON' : 'OFF'}.`)) return
@@ -143,9 +151,23 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
         </dd></div>
       })}
     </dl>}
+    {controlStatus === 'globalDisabled' && <p>Relay writes are disabled in the eWeLink backend configuration.</p>}
+    {controlStatus === 'awaitingDiscovery' && <p>Run discovery to verify this device’s relay protocol.</p>}
+    {controlStatus === 'unsupported' && <p>This device is read-only.</p>}
+    {controlStatus === 'deviceDisabled' && <p>Relay writes are off for this device. Enable them to allow manual ON/OFF commands.</p>}
+    {(controlStatus === 'deviceDisabled' || controlStatus === 'enabled') &&
+      <div className="filters">
+        <Button variant="outline" disabled={preference.isPending || command.isPending}
+          onClick={() => preference.mutate(controlStatus === 'deviceDisabled')}>
+          {controlStatus === 'deviceDisabled' ? 'Enable relay controls' : 'Disable relay controls'}
+        </Button>
+        {device.requiresRelayConfirmation && <p>Every command to this relay requires confirmation.</p>}
+        {preference.isError && <p role="alert">Could not update relay controls. Try again after the current sync or command finishes.</p>}
+      </div>}
     {device.canWriteRelay && <div className="filters">
       <Button variant="outline" disabled={commandDisabled || device.relay === true} onClick={() => setRelay(true)}>ON</Button>
       <Button variant="outline" disabled={commandDisabled || device.relay === false} onClick={() => setRelay(false)}>OFF</Button>
+      {relayBlocked && <p>{relayBlocked}</p>}
       {command.isError
         ? <p role="alert">{command.error instanceof ApiError && command.error.code === 'commandPending'
           ? 'Pending' : 'Failed to submit relay command. Check the reported state before trying again.'}</p>

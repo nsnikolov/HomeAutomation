@@ -73,6 +73,8 @@ export const api = {
     providerAction<void>('ewelink', id, `devices/${device}/assign`, { roomId }),
   commandEwelinkRelay: (id: number, device: string, on: boolean, confirmedProtected: boolean) =>
     providerAction<EwelinkRelayOutcome>('ewelink', id, `devices/${device}/relay`, { on, confirmedProtected }),
+  setEwelinkRelayWrites: (id: number, device: string, enabled: boolean) =>
+    providerAction<void>('ewelink', id, `devices/${device}/relay-preference`, { enabled }),
   tuya: (id: number, signal?: AbortSignal) => request<TuyaState>(`/tuya/${id}`, { signal }),
   tuyaHistory: (id: number, device: string, period: SensorPeriod, signal?: AbortSignal) =>
     request<SensorHistory>(`/tuya/${id}/devices/${device}/sensor-history?period=${period}`, { signal }),

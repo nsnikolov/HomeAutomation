@@ -57,6 +57,7 @@ export type EwelinkDevice = {
   measurements?: Reading[]
   supportedMetrics?: Metric[]
   canWriteRelay?: boolean; requiresRelayConfirmation?: boolean; relayCommand?: EwelinkRelayOutcome | null
+  relayControlStatus?: 'enabled' | 'deviceDisabled' | 'globalDisabled' | 'awaitingDiscovery' | 'unsupported' | null
 }
 export type EwelinkState = {
   status: string; manage: boolean; lastSuccess: string | null; nextSync: string | null; lastAttempt?: string | null

@@ -5,11 +5,37 @@ namespace HomeAutomation.Infrastructure.Ewelink;
 
 public sealed partial class EwelinkService
 {
+    private bool RelayWritesEnabled(EwelinkRow row) =>
+        row.RelayWriteEnabled ?? options.RelayWriteDevices.GetValueOrDefault(row.Id);
+
+    private string RelayControlStatus(EwelinkRow row, EwelinkDevice device)
+    {
+        if (!device.SupportsRelayWrites)
+            return device.Model == "PSF-X67" && device.Uiid is null && !device.Shared ? "awaitingDiscovery" : "unsupported";
+        if (!options.EnableWrites) return "globalDisabled";
+        return RelayWritesEnabled(row) ? "enabled" : "deviceDisabled";
+    }
+
+    public async Task SetRelayWritesAsync(string actor, long property, string id, bool enabled, CancellationToken ct)
+    {
+        if (!options.EnableWrites || !await permissions.CanReadAsync(actor, property, ct))
+            throw new EwelinkFailure("forbidden");
+        if (!await gate.WaitAsync(0, ct)) throw new EwelinkFailure("commandPending");
+        try
+        {
+            if ((await store.AccountAsync(ct))?.Owner != actor) throw new EwelinkFailure("forbidden");
+            var row = (await store.DevicesAsync(actor, ct)).SingleOrDefault(item => item.Id == id && item.PropertyId == property)
+                ?? throw new EwelinkFailure("notFound");
+            if (!row.Device.SupportsRelayWrites) throw new EwelinkFailure("unsupportedCommand");
+            await store.SetRelayWritesAsync(id, actor, property, enabled, ct);
+        }
+        finally { gate.Release(); }
+    }
+
     public async Task<EwelinkRelayOutcome> CommandRelayAsync(string actor, long property, string id,
         EwelinkRelayCommand command, CancellationToken ct)
     {
-        if (!options.EnableWrites || !options.RelayWriteDevices.GetValueOrDefault(id) ||
-            !await permissions.CanReadAsync(actor, property, ct)) throw new EwelinkFailure("forbidden");
+        if (!options.EnableWrites || !await permissions.CanReadAsync(actor, property, ct)) throw new EwelinkFailure("forbidden");
         if (command.On is not { } on) throw new EwelinkFailure("invalidCommand");
         if (!await gate.WaitAsync(0, ct)) throw new EwelinkFailure("commandPending");
 
@@ -26,6 +52,7 @@ public sealed partial class EwelinkService
 
             var row = (await store.DevicesAsync(actor, ct)).SingleOrDefault(item => item.Id == id && item.PropertyId == property)
                 ?? throw new EwelinkFailure("notFound");
+            if (!RelayWritesEnabled(row)) throw new EwelinkFailure("forbidden");
             var device = row.Device;
             CheckRelayCommand(device, on, command.ConfirmedProtected, now, TimeSpan.FromMinutes(options.PollMinutes * 2 + 5));
             var tokens = vault.Open(actor, options.AppId!, account.Envelope);

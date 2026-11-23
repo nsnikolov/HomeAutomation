@@ -7,6 +7,33 @@ import { EwelinkPanel } from './EwelinkPanel'
 
 const property = { id: 1, name: 'Fixture', timeZone: 'Europe/Sofia' }
 
+it('explains per-device opt-in and reveals commands only after the preference is saved', async () => {
+  const time = '2026-11-23T08:00:00Z'
+  let enabled = false
+  const status = vi.spyOn(api, 'ewelink').mockImplementation(async () => ({
+    status: 'connected', manage: false, lastSuccess: time, nextSync: null, unassigned: [],
+    devices: [{ id: 'relay', name: 'Boiler', model: 'PSF-X67', roomId: 1, connectivity: 'online',
+      seenAt: time, quality: 'fresh', hasRelay: true, relay: false, relayAt: time, relayQuality: 'fresh',
+      canWriteRelay: enabled, relayControlStatus: enabled ? 'enabled' : 'deviceDisabled' }],
+  }))
+  const save = vi.spyOn(api, 'setEwelinkRelayWrites').mockImplementation(async (_, __, value) => { enabled = value })
+  const actuator = vi.spyOn(api, 'commandEwelinkRelay')
+  try {
+    view()
+    expect(await screen.findByText(/Relay writes are off for this device/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'ON' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Enable relay controls' }))
+    expect(await screen.findByRole('button', { name: 'ON' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Disable relay controls' })).toBeEnabled()
+    expect(save).toHaveBeenCalledExactlyOnceWith(1, 'relay', true)
+    expect(actuator).not.toHaveBeenCalled()
+  } finally {
+    status.mockRestore()
+    save.mockRestore()
+    actuator.mockRestore()
+  }
+})
+
 it('requires confirmation for each protected relay command and preserves reported state during submission', async () => {
   const time = '2026-11-23T08:00:00Z'
   const status = vi.spyOn(api, 'ewelink').mockResolvedValue({

@@ -119,6 +119,9 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/v1/ewelink/99")).StatusCode);
         Assert.Contains("notConfigured", await viewer.GetStringAsync("/api/v1/ewelink/1"));
         Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsync("/api/v1/ewelink/1/connect", null)).StatusCode);
+        const string preference = "/api/v1/ewelink/1/devices/00000000000000000000000000000001/relay-preference";
+        Assert.Equal(HttpStatusCode.Unauthorized, (await guest.PostAsJsonAsync(preference, new { enabled = true })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsJsonAsync(preference, new { enabled = true })).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await viewer.PostAsJsonAsync(
             "/api/v1/ewelink/1/devices/00000000000000000000000000000001/commands", new { operation = "power" })).StatusCode);
     }
@@ -280,7 +283,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             {
                 AppId = "fixture", AppSecret = "fixture", OperatorEmail = PasswordFixture.Email,
                 RedirectUri = "https://ha-dev.britishlab.org:5443/api/v1/ewelink/callback",
-                EnableWrites = true, RelayWriteDevices = { [relayId] = true }
+                EnableWrites = true
             });
             services.RemoveAll<IEwelinkStore>();
             services.AddSingleton<IEwelinkStore>(store);
@@ -403,6 +406,9 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal(StatusCodes.Status401Unauthorized, (await Relay(1, confirmed: true, signedIn: false)).Response.StatusCode);
         Assert.Equal(StatusCodes.Status404NotFound, (await Relay(99, confirmed: true)).Response.StatusCode);
         Assert.Equal(StatusCodes.Status400BadRequest, (await Relay(1, confirmed: true, csrfRequired: false)).Response.StatusCode);
+        Assert.Equal(StatusCodes.Status204NoContent,
+            (await RelayPost(1, "relay-preference", new { enabled = true }, true, true)).Response.StatusCode);
+        Assert.True(Assert.Single(store.Rows).RelayWriteEnabled);
         Assert.Equal(StatusCodes.Status409Conflict, (await Relay(1, confirmed: false)).Response.StatusCode);
         Assert.Equal(0, provider.RelayWrites);
         await gate.WaitAsync();
@@ -451,9 +457,12 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             });
 
         Task<HttpContext> Relay(long property, bool confirmed, bool signedIn = true, bool csrfRequired = true) =>
-            Request($"/api/v1/ewelink/{property}/devices/{relayId}/relay", context =>
+            RelayPost(property, "relay", new { on = true, confirmedProtected = confirmed }, signedIn, csrfRequired);
+
+        Task<HttpContext> RelayPost(long property, string operation, object values, bool signedIn, bool csrfRequired) =>
+            Request($"/api/v1/ewelink/{property}/devices/{relayId}/{operation}", context =>
             {
-                var body = JsonSerializer.SerializeToUtf8Bytes(new { on = true, confirmedProtected = confirmed });
+                var body = JsonSerializer.SerializeToUtf8Bytes(values);
                 context.Request.Method = "POST";
                 context.Request.ContentType = "application/json";
                 context.Request.ContentLength = body.Length;
@@ -541,6 +550,13 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         public Task SaveAsync(string owner, EwelinkDevice device, CancellationToken ct) => throw new NotSupportedException();
         public Task AssignAsync(EwelinkRow row, string owner, long property, long? room, CancellationToken ct) =>
             throw new NotSupportedException();
+        public Task SetRelayWritesAsync(string id, string owner, long property, bool enabled, CancellationToken ct)
+        {
+            Assert.Equal(Owner, owner);
+            var row = Assert.Single(Rows, item => item.Id == id && item.PropertyId == property);
+            Rows = [row with { RelayWriteEnabled = enabled }];
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class EwelinkRelayAuditFixture : IEwelinkRelayAudit
