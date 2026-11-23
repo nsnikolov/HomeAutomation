@@ -6,6 +6,16 @@ import type { EwelinkDevice, Property, Room } from '../shared/types'
 import { Badge, Button, Card } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
 import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
+import { formatReading } from './Devices'
+
+const measurementRows = [
+  ['temperature', 'Temperature'],
+  ['humidity', 'Relative humidity'],
+  ['activePower', 'Active power'],
+  ['voltage', 'Voltage'],
+  ['current', 'Current'],
+  ['energy', 'Cumulative energy'],
+] as const
 
 const statuses: Record<string, string> = {
   notConfigured: 'eWeLink Cloud needs approved Developer credentials.',
@@ -99,8 +109,15 @@ function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; prope
     <p>Cloud snapshot received {formatMoment(device.seenAt, property.timeZone)}</p>
     <dl className="device-readings">
       <div><dt>Relay</dt><dd>{relay}{device.relayQuality === 'stale' && ' · Last known'}</dd></div>
-      <div><dt>Temperature</dt><dd>Unavailable</dd></div>
-      <div><dt>Relative humidity</dt><dd>Unavailable</dd></div>
+      {measurementRows.map(([metric, label]) => {
+        const reading = device.measurements?.find(item => item.metric === metric)
+        return <div key={metric}><dt>{label}</dt><dd>
+          {reading && reading.quality !== 'missing' && reading.number !== null ? <>
+            {formatReading(reading)}{reading.quality === 'stale' && ' · Last known'}
+          </> : 'Unavailable'}
+        </dd></div>
+      })}
+      <div><dt>Energy today</dt><dd>Unavailable</dd></div>
     </dl>
     {rooms && <div className="filters">
       <select className="input select-input" aria-label={`Room for ${device.name}`} value={room}

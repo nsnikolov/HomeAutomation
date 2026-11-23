@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Logging;
 
 namespace HomeAutomation.Infrastructure.Ewelink;
 
@@ -15,6 +16,7 @@ public sealed class EwelinkOptions
     public string? RedirectUri { get; set; }
     public string? OperatorEmail { get; set; }
     public int PollMinutes { get; set; } = 30;
+    public bool InventoryDiagnostics { get; set; }
     public bool IsConfigured => !string.IsNullOrWhiteSpace(AppId) && !AppId.Any(char.IsControl) &&
         !string.IsNullOrWhiteSpace(AppSecret) && !string.IsNullOrWhiteSpace(OperatorEmail) &&
         PollMinutes is >= 15 and <= 1440 && Uri.TryCreate(RedirectUri, UriKind.Absolute, out var uri) &&
@@ -47,7 +49,8 @@ internal sealed class EwelinkPace(TimeProvider clock)
     }
 }
 
-internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, TimeProvider clock, EwelinkPace pace)
+internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, TimeProvider clock, EwelinkPace pace,
+    ILogger<EwelinkClient>? logger = null)
 {
     private const string AuthorizePage = "https://c2ccdn.coolkit.cc/oauth/index.html";
     private const int PageSize = 30;
@@ -94,10 +97,14 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
     {
         var families = await SendAsync(tokens.Region, "/v2/family", tokens.Access, null, ct);
         var homeIds = EwelinkMapping.Array(families, "familyList").EnumerateArray().Select(home => EwelinkMapping.Id(home, "id")).ToArray();
-        var homes = homeIds.OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
+        var current = EwelinkMapping.Id(families, "currentFamilyId");
+        var homes = homeIds.Append(current).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
         var requests = 1;
         var devices = new Dictionary<string, EwelinkDevice>(StringComparer.Ordinal);
-        var partial = homeIds.Any(id => id is null);
+        var partial = homes.Length == 0 || homeIds.Any(id => id is null);
+        if (options.InventoryDiagnostics)
+            logger?.LogInformation("eWeLink inventory listed {ListedHomes} homes and will inspect up to {SelectedHomes} homes.",
+                homeIds.Length, homes.Length);
         foreach (var home in homes)
         {
             var index = -9999999;
@@ -109,15 +116,18 @@ internal sealed class EwelinkClient(HttpClient http, EwelinkOptions options, Tim
                 var data = await SendAsync(tokens.Region, path, tokens.Access, null, ct);
                 var page = EwelinkMapping.Array(data, "thingList").EnumerateArray().ToArray();
                 var observed = clock.GetUtcNow();
+                var total = EwelinkMapping.Integer(data, "total");
+                if (options.InventoryDiagnostics && logger is not null)
+                    EwelinkInventoryDiagnostics.LogPage(logger, page, total);
                 foreach (var item in page)
                 {
                     if (EwelinkMapping.Integer(item, "index") is { } position) indexes.Add(position);
                     var device = EwelinkMapping.Map(item, observed);
-                    if (device is null && EwelinkMapping.Integer(item, "itemType") is 1 or 2) partial = true;
+                    if (device is null && EwelinkMapping.Integer(item, "itemType") is not (3 or 4)) partial = true;
                     if (device is not null && (!devices.TryGetValue(device.ExternalId, out var prior) || prior.Shared && !device.Shared))
                         devices[device.ExternalId] = device;
                 }
-                var hasTotal = EwelinkMapping.Integer(data, "total") is { } total && indexes.Count >= total;
+                var hasTotal = total is >= 0 && indexes.Count >= total.Value;
                 if (hasTotal || page.Length < PageSize)
                 {
                     partial |= !hasTotal;

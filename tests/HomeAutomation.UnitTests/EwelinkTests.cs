@@ -7,6 +7,7 @@ using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.Ewelink;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Logging;
 
 namespace HomeAutomation.UnitTests;
 
@@ -141,6 +142,99 @@ public sealed class EwelinkTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task CurrentHomeCanSupplyASeventhDeviceWithoutInventingMissingThings(bool returned)
+    {
+        var homes = new List<string>();
+        using var http = new HttpClient(new Handler((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/v2/family")
+                return Task.FromResult(Response("""{"error":0,"data":{"familyList":[{"id":"listed"}],"currentFamilyId":"current"}}"""));
+            var home = QueryHelpers.ParseQuery(request.RequestUri.Query)["familyid"].ToString();
+            homes.Add(home);
+            var count = home == "listed" ? 6 : returned ? 2 : 1;
+            var items = Enumerable.Range(0, count).Select(index => new
+            {
+                index, itemType = home == "listed" ? 1 : 2,
+                itemData = new { deviceid = home == "listed" ? $"fixture-{index}" : index == 0 ? "fixture-0" : "fixture-missing" }
+            });
+            return Task.FromResult(Response(JsonSerializer.Serialize(new
+            {
+                error = 0, data = new { total = home == "listed" ? 6 : 2, thingList = items }
+            })));
+        }));
+        var inventory = await Client(http).DiscoverAsync(new("eu", "fixture-access", "unused", Now, Now), default);
+        Assert.Equal(["listed", "current"], homes);
+        Assert.Equal(returned ? 7 : 6, inventory.Devices.Count);
+        Assert.Equal(!returned, inventory.Partial);
+        Assert.False(Assert.Single(inventory.Devices, device => device.ExternalId == "fixture-0").Shared);
+    }
+
+    [Fact]
+    public void DocumentedReadingsUseTheirEngineeringUnitsAndDoNotGenerateNumericHistory()
+    {
+        var thermostat = MapMeasurements(181, """{"switch":"on","sensorType":"AM2301","currentTemperature":"12.9","currentHumidity":"100"}""");
+        var climate = Assert.IsAssignableFrom<IReadOnlyDictionary<Metric, EwelinkMeasurement>>(thermostat.Measurements);
+        Assert.Equal(12.9, climate[Metric.Temperature].Value);
+        Assert.Equal(100, climate[Metric.Humidity].Value);
+        var meter = MapMeasurements(32, """{"switch":"off","power":"815.42","voltage":"230.09","current":"3.51","oneKwhData":"2.98","dayKwh":"1.2"}""");
+        var electrical = Assert.IsAssignableFrom<IReadOnlyDictionary<Metric, EwelinkMeasurement>>(meter.Measurements);
+        Assert.Equal(815.42, electrical[Metric.ActivePower].Value);
+        Assert.Equal(230.09, electrical[Metric.Voltage].Value);
+        Assert.Equal(3.51, electrical[Metric.Current].Value);
+        Assert.Equal(3, electrical.Count);
+        var (inventory, batch) = meter.Telemetry(true);
+        Assert.Equal(Access.ReadOnly, Assert.Single(inventory.Endpoints).AccessFor(Capability.PowerMeasurement));
+        Assert.Equal(Metric.SwitchOn, Assert.Single(Assert.Single(Assert.Single(batch.Devices).Endpoints).Samples).Metric);
+        Assert.Null(MapMeasurements(77, """{"power":"815.42","currentTemperature":"21.9"}""").Measurements);
+        Assert.Null(MapMeasurements(32, """{"switch":"on","power":81542,"current":"-3","voltage":"unavailable"}""").Measurements);
+        Assert.Null(MapMeasurements(181, """{"sensorType":"MS01","currentHumidity":"50"}""").Measurements);
+        Assert.Null(MapMeasurements(181, """{"sensorType":"AM2301","currentHumidity":"101","currentTemperature":"unavailable"}""").Measurements);
+    }
+
+    [Fact]
+    public void MissingAndRepeatedValuesDoNotBecomeNewReadings()
+    {
+        var prior = MapMeasurements(15, """{"sensorType":"AM2301","currentTemperature":"12.9","currentHumidity":"100"}""");
+        var received = Now.AddMinutes(30);
+        var next = MapMeasurements(15, """{"sensorType":"AM2301","currentTemperature":"12.9"}""", received: received);
+        var merged = EwelinkMapping.Merge(next, prior);
+        Assert.Equal(new(12.9, Now), merged.Measurements![Metric.Temperature]);
+        Assert.Equal(new(100, Now, false), merged.Measurements[Metric.Humidity]);
+        var offline = EwelinkMapping.Merge(MapMeasurements(15,
+            """{"sensorType":"AM2301","currentTemperature":"19"}""", online: false), merged);
+        Assert.Equal(new(12.9, Now, false), offline.Measurements![Metric.Temperature]);
+    }
+
+    [Fact]
+    public void DiagnosticOutputUsesAnAllowlistAndOmitsRawFieldsAndValues()
+    {
+        using var json = JsonDocument.Parse("""
+            [{"itemType":1,"itemData":{"deviceid":"private-id","name":"private-name","online":true,"extra":{"uiid":32},
+              "params":{"power":"895.42","private-field":"private-value","devicekey":"private-key"}}}]
+            """);
+        var logger = new CaptureLogger();
+        EwelinkInventoryDiagnostics.LogPage(logger, json.RootElement.EnumerateArray().ToArray(), 2);
+        var log = string.Join("\n", logger.Messages);
+        Assert.Contains("power=String", log);
+        Assert.Contains("PowerMeasurement", log);
+        Assert.Contains("returned 1 of 2", log);
+        Assert.DoesNotContain("private", log);
+        Assert.DoesNotContain("895.42", log);
+        Assert.DoesNotContain("devicekey", log);
+    }
+
+    private static EwelinkDevice MapMeasurements(int uiid, string parameters, bool online = true, DateTimeOffset? received = null)
+    {
+        using var json = JsonDocument.Parse($$$"""
+            {"itemType":1,"itemData":{"deviceid":"fixture","online":{{{(online ? "true" : "false")}}},
+              "extra":{"uiid":{{{uiid}}}},"params":{{{parameters}}}}}
+            """);
+        return EwelinkMapping.Map(json.RootElement, received ?? Now)!;
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task PaginationHandlesAnOverlappingCursorAndStopsIfItCannotAdvance(bool advances)
     {
         var pages = 0;
@@ -241,5 +335,13 @@ public sealed class EwelinkTests
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => send(request, ct);
+    }
+    private sealed class CaptureLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Add(formatter(state, exception));
     }
 }

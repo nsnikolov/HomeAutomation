@@ -12,7 +12,8 @@ using static HomeAutomation.Infrastructure.MySql.Database;
 namespace HomeAutomation.Infrastructure.Ewelink;
 
 public sealed record EwelinkDeviceView(string Id, string Name, string Model, long? RoomId, Connectivity Connectivity,
-    DateTimeOffset SeenAt, ReadingQuality Quality, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt, ReadingQuality RelayQuality);
+    DateTimeOffset SeenAt, ReadingQuality Quality, bool HasRelay, bool? Relay, DateTimeOffset? RelayAt, ReadingQuality RelayQuality,
+    IReadOnlyList<MetricReading> Measurements);
 public sealed record EwelinkView(string Status, bool Manage, DateTimeOffset? LastSuccess, DateTimeOffset? NextSync,
     IReadOnlyList<EwelinkDeviceView> Devices, IReadOnlyList<EwelinkDeviceView> Unassigned);
 
@@ -111,9 +112,13 @@ public sealed class EwelinkService
         var relayQuality = device.RelayAt is null ? ReadingQuality.Missing :
             quality == ReadingQuality.Fresh && device.Connectivity == Connectivity.Online && device.RelayAt == device.SeenAt
                 ? ReadingQuality.Fresh : ReadingQuality.Stale;
+        var measurements = device.Measurements?.Select(item => new MetricReading(item.Key, Telemetry.Unit(item.Key),
+            item.Value.ReceivedAt, item.Value.Value, null, null,
+            quality == ReadingQuality.Fresh && device.Connectivity == Connectivity.Online && item.Value.Present
+                ? Telemetry.Quality(item.Value.ReceivedAt, now, freshness) : ReadingQuality.Stale)).ToArray() ?? [];
         return new(row.Id, device.Name, device.Model, row.RoomId,
             quality == ReadingQuality.Fresh ? device.Connectivity : Connectivity.Unknown, device.SeenAt, quality,
-            device.HasRelay, device.Relay, device.RelayAt, relayQuality);
+            device.HasRelay, device.Relay, device.RelayAt, relayQuality, measurements);
     }
 
     public async Task ConnectAsync(string owner, string code, string region, CancellationToken ct)

@@ -45,14 +45,22 @@ it('shows offline and last-known state without offering physical controls', asyn
   const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
     status: 'partial', manage: false, lastSuccess: timestamp, nextSync: null, unassigned: [],
     devices: [{ id: 'fixture', name: 'Test relay', model: 'Fixture', roomId: 1, connectivity: 'offline',
-      seenAt: timestamp, quality: 'fresh', hasRelay: true, relay: true, relayAt: timestamp, relayQuality: 'stale' }],
+      seenAt: timestamp, quality: 'fresh', hasRelay: true, relay: true, relayAt: timestamp, relayQuality: 'stale',
+      measurements: [
+        { metric: 'temperature', unit: '°C', number: 12.9, flag: null, code: null, observedAt: timestamp, quality: 'stale' },
+        { metric: 'activePower', unit: 'W', number: 200, flag: null, code: null, observedAt: timestamp, quality: 'stale' },
+      ],
+    }],
   })
   try {
     view()
     expect(await screen.findByRole('heading', { name: 'Test relay' })).toBeInTheDocument()
     expect(screen.getByText('Offline')).toBeInTheDocument()
     expect(screen.getByText('On · Last known')).toBeInTheDocument()
-    expect(screen.getAllByText('Unavailable')).toHaveLength(2)
+    expect(screen.getByText('12.9 °C · Last known')).toBeInTheDocument()
+    expect(screen.getByText('200 W · Last known')).toBeInTheDocument()
+    expect(screen.getByText('Energy today').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(screen.getByText('Cumulative energy').nextElementSibling).toHaveTextContent('Unavailable')
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   } finally { status.mockRestore() }
 })

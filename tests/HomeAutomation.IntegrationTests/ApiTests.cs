@@ -127,6 +127,50 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     }
 
     [Fact]
+    public async Task EwelinkMeasurementsReturnOnlyForDevicesInTheRequestedProperty()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var store = new EwelinkStoreFixture
+        {
+            Rows = [Row("visible", 1, 12.9), Row("another-property", 99, 41), Row("unassigned", null, 42)]
+        };
+        await store.SaveTokensAsync("operator", [1], default);
+        using var configured = host.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<EwelinkOptions>();
+            services.AddSingleton(new EwelinkOptions
+            {
+                AppId = "fixture", AppSecret = "fixture", OperatorEmail = "operator@example.test",
+                RedirectUri = "https://example.test/api/v1/ewelink/callback"
+            });
+            services.RemoveAll<IEwelinkStore>();
+            services.AddSingleton<IEwelinkStore>(store);
+            services.Remove(services.Single(item => item.ServiceType == typeof(IHostedService) &&
+                item.ImplementationType == typeof(EwelinkWorker)));
+        }));
+        using var client = configured.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Test-User", "viewer");
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/v1/ewelink/99")).StatusCode);
+        using var payload = JsonDocument.Parse(await client.GetStringAsync("/api/v1/ewelink/1"));
+        Assert.Empty(payload.RootElement.GetProperty("unassigned").EnumerateArray());
+        var device = Assert.Single(payload.RootElement.GetProperty("devices").EnumerateArray());
+        Assert.Equal("visible", device.GetProperty("id").GetString());
+        var measurements = device.GetProperty("measurements").EnumerateArray()
+            .ToDictionary(item => item.GetProperty("metric").GetString()!);
+        Assert.Equal(12.9, measurements["temperature"].GetProperty("number").GetDouble());
+        Assert.Equal("fresh", measurements["temperature"].GetProperty("quality").GetString());
+        Assert.Equal("stale", measurements["humidity"].GetProperty("quality").GetString());
+
+        EwelinkRow Row(string id, long? property, double temperature) => new(id, id, property, null,
+            JsonSerializer.Serialize(new EwelinkDevice(id, id, "Fixture", "", false, Connectivity.Online, now, false, null, null,
+                new Dictionary<Metric, EwelinkMeasurement>
+                {
+                    [Metric.Temperature] = new(temperature, now),
+                    [Metric.Humidity] = new(100, now.AddHours(-2), false)
+                })));
+    }
+
+    [Fact]
     public async Task DaikinEndpointsKeepTheExistingSessionAndPropertyBoundary()
     {
         using var guest = host.CreateClient();
@@ -365,6 +409,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         public string? Owner { get; private set; }
         public byte[]? Envelope { get; private set; }
         public int TokenWrites { get; private set; }
+        public IReadOnlyList<EwelinkRow> Rows { get; init; } = [];
         public Task<bool> SchemaReadyAsync(CancellationToken ct) => Task.FromResult(true);
         public Task<EwelinkAccount?> AccountAsync(CancellationToken ct) => Task.FromResult(
             Owner is null ? null : new EwelinkAccount(Owner, Envelope, "connected", null, null));
@@ -377,8 +422,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         }
         public Task ReportAsync(string owner, string status, DateTimeOffset? success, DateTimeOffset next, CancellationToken ct) =>
             Task.CompletedTask;
-        public Task<IReadOnlyList<EwelinkRow>> DevicesAsync(string owner, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<EwelinkRow>>([]);
+        public Task<IReadOnlyList<EwelinkRow>> DevicesAsync(string owner, CancellationToken ct) => Task.FromResult(Rows);
         public Task SaveAsync(string owner, EwelinkDevice device, CancellationToken ct) => throw new NotSupportedException();
         public Task AssignAsync(EwelinkRow row, string owner, long property, long? room, CancellationToken ct) =>
             throw new NotSupportedException();
