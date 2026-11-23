@@ -26,3 +26,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 22. 2026-11-23 · [Growatt — Power Flow Monitoring and Available Telemetry Audit](0022-growatt-power-flow-audit.md)
 23. 2026-11-23 · [eWeLink OAuth — Diagnose HTTP 401 on Callback](0023-ewelink-oauth-callback-401.md)
 24. 2026-11-23 · [eWeLink OAuth — Automatic Backend Completion and Token Exchange Diagnostics](0024-ewelink-automatic-oauth-completion.md)
+25. 2026-11-23 · [Hotfix — eWeLink OAuth Token Persistence SQL Error](0025-ewelink-token-persistence-sql-hotfix.md)

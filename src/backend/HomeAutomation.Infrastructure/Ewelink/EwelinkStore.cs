@@ -41,8 +41,9 @@ internal sealed class EwelinkStore(Database database, Migrations migrations) : I
         var status = envelope is null ? "disconnected" : "connected";
         await db.ExecuteAsync(Query("""
             INSERT INTO ewelink_account(id,owner_id,token_envelope,status) VALUES(1,@owner,@envelope,@status) AS incoming
-            ON DUPLICATE KEY UPDATE token_envelope=IF(owner_id=@owner,incoming.token_envelope,token_envelope),
-                status=IF(owner_id=@owner,incoming.status,status)
+            ON DUPLICATE KEY UPDATE
+                token_envelope=IF(ewelink_account.owner_id=@owner,incoming.token_envelope,ewelink_account.token_envelope),
+                status=IF(ewelink_account.owner_id=@owner,incoming.status,ewelink_account.status)
             """, ct, new { owner, envelope, status }));
     }
 
