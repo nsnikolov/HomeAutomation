@@ -5,6 +5,7 @@ using HomeAutomation.Application;
 using HomeAutomation.Domain;
 using HomeAutomation.Infrastructure.Growatt;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 
 namespace HomeAutomation.UnitTests;
 
@@ -109,9 +110,9 @@ public sealed class GrowattCloudTests
             return Json("""
                 {"code":0,"data":{"storage":[
                   {"serialNum":"fixture-S","time":"2026-11-21 13:56:00","ppv":900,"vpv1":111.8,"vGrid":229,"capacity":90,"vBat":51.3,
-                   "outPutPower":"187.5","pAcCharge":0,"lost":true,"errorCode":3},
+                   "outPutPower":"187.5","pAcCharge":0,"pAcInPut":"126.4","pBat":80.5,"lost":true,"errorCode":3},
                   {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","ppv":"840","vpv":102,"vpv1":"109.4","vGrid":230,"freqGrid":50,
-                   "outPutPower":303,"outPutVolt":241,"loadPercent":20.3,"pAcCharge":46,
+                   "outPutPower":303,"outPutVolt":241,"loadPercent":20.3,"pAcCharge":46,"pAcInPut":118.8,"pBat":"-51.25",
                    "capacity":49,"vBat":52.7,"warnCode":4,"faultCode":6,"lost":false,
                    "spf5000StatusText":"Battery Discharging"}
                 ]}}
@@ -147,19 +148,60 @@ public sealed class GrowattCloudTests
         Assert.Equal("V", Telemetry.Unit(Metric.Pv1Voltage));
         var (_, batch) = new GrowattMapper(options, clock).Map(snapshot);
         Assert.Empty(batch.Installation);
-        VerifyInverterPower(Assert.Single(batch.Devices, device => device.ExternalId == options.SlaveId), 187.5, 0);
-        VerifyInverterPower(Assert.Single(batch.Devices, device => device.ExternalId == options.MasterId), 303, 46);
+        VerifyInverterPower(Assert.Single(batch.Devices, device => device.ExternalId == options.SlaveId), 187.5, 0, 126.4, -80.5);
+        VerifyInverterPower(Assert.Single(batch.Devices, device => device.ExternalId == options.MasterId), 303, 46, 118.8, 51.25);
+        var shared = Assert.Single(batch.Devices, device => device.ExternalId == GrowattMapper.SharedBatteryId);
+        Assert.DoesNotContain(Assert.Single(shared.Endpoints).Samples, sample => sample.Metric == Metric.BatteryPower);
         Assert.Equal(Connectivity.Offline, slave.Connectivity);
         Assert.Equal("3", slave.FaultCode);
         Assert.Empty(slave.SharedBatteryReadings);
 
-        static void VerifyInverterPower(DeviceObservation device, double output, double charging)
+        static void VerifyInverterPower(DeviceObservation device, double output, double charging, double input, double battery)
         {
             var samples = Assert.Single(device.Endpoints).Samples;
             Assert.Equal(output, Assert.Single(samples, sample => sample.Metric == Metric.ActivePower).Number);
             Assert.Equal(charging, Assert.Single(samples, sample => sample.Metric == Metric.AcChargingPower).Number);
-            Assert.DoesNotContain(samples, sample => sample.Metric is Metric.GridImportPower or Metric.BatteryPower or Metric.HouseholdPower);
+            Assert.Equal(input, Assert.Single(samples, sample => sample.Metric == Metric.AcInputPower).Number);
+            Assert.Equal(battery, Assert.Single(samples, sample => sample.Metric == Metric.BatteryPower).Number);
+            Assert.DoesNotContain(samples, sample => sample.Metric is Metric.GridImportPower or Metric.HouseholdPower);
         }
+    }
+
+    [Fact]
+    public async Task NighttimeZerosAreReadingsAndDiagnosticsOmitIdentifiersAndValues()
+    {
+        using var handler = new CloudHandler((request, _) => Task.FromResult(
+            request.RequestUri!.AbsolutePath.EndsWith("queryDeviceList", StringComparison.Ordinal) ? Json(DevicePage) : Json("""
+                {"code":0,"data":{"storage":[
+                  {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","vpv":0,"ppv":0,"pAcInPut":0,"pBat":0,"ipv":0},
+                  {"serialNum":"fixture-S","time":"2026-11-21 13:57:00","vpv":127.65,"pAcInPut":-1,"pBat":"--","pCharge":50,"pDischarge":0}
+                ]}}
+                """)));
+        using var http = CreateHttp(handler);
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var options = CloudOptions();
+        var clock = new FixedClock();
+        var logger = new CaptureLogger();
+        var source = new GrowattCloudSource(new GrowattCloudClient(http, options, clock), options, cache, clock, logger);
+
+        await source.ReadAsync(default);
+        Assert.Empty(logger.Messages);
+        options.TelemetryDiagnostics = true;
+        var snapshot = await source.ReadAsync(default);
+        var master = Assert.Single(snapshot.Inverters, device => device.ExternalId == options.MasterId);
+        Assert.Equal(4, master.InverterReadings.Count);
+        Assert.All(master.InverterReadings, item => Assert.Equal(0d, item.Number));
+        var slave = Assert.Single(snapshot.Inverters, device => device.ExternalId == options.SlaveId);
+        Assert.Equal(Metric.PvVoltage, Assert.Single(slave.InverterReadings).Metric);
+        Assert.Equal(2, logger.Messages.Count);
+        Assert.Contains("pAcInPut=Number/True", logger.Messages[0], StringComparison.Ordinal);
+        Assert.Contains("pBat=String/False", logger.Messages[1], StringComparison.Ordinal);
+        Assert.All(logger.Messages, message =>
+        {
+            Assert.DoesNotContain("fixture-", message, StringComparison.Ordinal);
+            Assert.DoesNotContain(HeaderMarker, message, StringComparison.Ordinal);
+            Assert.DoesNotContain("127.65", message, StringComparison.Ordinal);
+        });
     }
 
     [Fact]
@@ -230,6 +272,15 @@ public sealed class GrowattCloudTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             CancellationToken cancellationToken) => send(request, cancellationToken);
+    }
+
+    private sealed class CaptureLogger : ILogger<GrowattCloudSource>
+    {
+        public List<string> Messages { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Add(formatter(state, exception));
     }
 
     private sealed class FixedClock : TimeProvider

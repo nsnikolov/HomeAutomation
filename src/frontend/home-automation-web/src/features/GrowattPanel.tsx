@@ -23,7 +23,7 @@ const inverterMetricLabels = {
 
 const inverterPower = [
   { metric: 'activePower', label: 'Load/output power' },
-  { metric: 'gridImportPower', label: 'Grid import power' },
+  { metric: 'acInputPower', label: 'AC input power' },
   { metric: 'batteryPower', label: 'Battery charge/discharge' },
 ] as const
 
@@ -114,25 +114,25 @@ function GrowattDeviceCard({ device, timeZone }: { device: Device; timeZone: str
 
 function PvInput({ readings, name, showPv1 }: { readings: Reading[]; name?: string; showPv1: boolean }) {
   const pv1 = readings.find(isPv1Reading)
-  const voltage = readings.find(reading => reading.metric === 'pvVoltage')
+  const generalVoltage = readings.find(reading => reading.metric === 'pvVoltage')
+  const voltages = [pv1, generalVoltage]
+  const voltage = voltages.find(reading => reading?.quality === 'fresh' && reading.number !== null) ??
+    voltages.find(reading => reading?.quality === 'stale' && reading.number !== null)
   const power = readings.find(reading => reading.metric === 'pvPower')
-  const voltages = [pv1, voltage]
-  const voltagePresent = voltages.some(reading => reading?.quality === 'fresh' && (reading.number ?? 0) > 0)
+  const voltagePresent = voltage?.quality === 'fresh' && (voltage.number ?? 0) > 0
   const generating = power?.quality === 'fresh' && (power.number ?? 0) > 0
   const zeroPower = power?.quality === 'fresh' && power.number === 0
-  const stale = voltages.some(reading => reading?.quality === 'stale') || power?.quality === 'stale'
+  const stale = voltage?.quality === 'stale' || power?.quality === 'stale'
   const status = generating ? 'PV generating' : voltagePresent ? 'PV voltage present' :
     zeroPower ? 'No PV generation reported' : stale ? 'PV readings stale' :
-      voltages.some(reading => reading?.quality === 'fresh') ? 'PV power unavailable' : 'PV readings unavailable'
+      voltage?.quality === 'fresh' ? 'PV power unavailable' : 'PV readings unavailable'
 
   return <div className="growatt-reading-panel">
     <div className="growatt-pv-heading"><h4>{name ?? 'PV input'}</h4>
       <Badge className={generating ? 'tone-good' : stale && !voltagePresent && !zeroPower ? 'tone-warn' : 'tone-neutral'}>{status}</Badge>
     </div>
     <dl className="growatt-pv-readings">
-      {showPv1 && <div><dt>PV1 voltage</dt><dd><LiveReading reading={pv1} /></dd></div>}
-      <div><dt>Voltage</dt><dd><LiveReading reading={voltage} /></dd></div>
-      <div><dt>Current</dt><dd>Unavailable</dd></div>
+      <div><dt>{showPv1 ? 'PV1 voltage' : 'PV voltage'}</dt><dd><LiveReading reading={voltage} /></dd></div>
       <div><dt>PV input power</dt><dd><LiveReading reading={power} /></dd></div>
     </dl>
   </div>

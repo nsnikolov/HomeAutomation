@@ -3,11 +3,12 @@ using System.Text.Json;
 using HomeAutomation.Application;
 using HomeAutomation.Domain;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 
 namespace HomeAutomation.Infrastructure.Growatt;
 
 public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions options, IMemoryCache cache,
-    TimeProvider clock)
+    TimeProvider clock, ILogger<GrowattCloudSource>? logger = null)
     : IGrowattReadSource
 {
     private static readonly object VerifiedInventoryKey = new();
@@ -60,13 +61,29 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
             var inverter = new List<Sample>();
             AddNumber(inverter, Metric.PvPower, reading.Ppv, observedAt);
             AddNumber(inverter, Metric.PvVoltage, reading.Vpv, observedAt);
-            AddNumber(inverter, Metric.Pv1Voltage, OptionalVoltage(reading.Vpv1), observedAt);
+            var pv1 = OptionalNumber(reading.Vpv1);
+            AddNumber(inverter, Metric.Pv1Voltage, pv1, observedAt);
             AddNumber(inverter, Metric.GridVoltage, reading.VGrid, observedAt);
             AddNumber(inverter, Metric.GridFrequency, reading.FreqGrid, observedAt);
             AddNumber(inverter, Metric.ActivePower, reading.OutPutPower, observedAt);
             AddNumber(inverter, Metric.AcOutputVoltage, reading.OutPutVolt, observedAt);
             AddNumber(inverter, Metric.InverterLoadPercent, reading.LoadPercent, observedAt);
             AddNumber(inverter, Metric.AcChargingPower, reading.PAcCharge, observedAt);
+            var inputPower = OptionalNumber(reading.AcInputPower);
+            AddNumber(inverter, Metric.AcInputPower, inputPower, observedAt);
+            var batteryPower = OptionalNumber(reading.BatteryPower);
+            // SPF pBat is positive for discharge. The domain uses positive for charging.
+            if (batteryPower is { } watts)
+                inverter.Add(Sample.Numeric(Metric.BatteryPower, observedAt, watts == 0 ? 0 : -watts));
+            if (options.TelemetryDiagnostics)
+                logger?.LogInformation(
+                    "Growatt {Role} storage fields: vpv={PvVoltage}; vpv1={Pv1Kind}/{Pv1Mapped}; ppv={PvPower}; " +
+                    "ipv={PvCurrentKind}; iChargePV1={PvChargingCurrentKind}; pAcInPut={AcInputKind}/{AcInputMapped}; " +
+                    "pAcCharge={AcCharging}; pBat={BatteryKind}/{BatteryMapped}; pCharge={ChargeKind}; pDischarge={DischargeKind}.",
+                    serial == options.MasterId ? "Master" : "Slave", reading.Vpv.HasValue, reading.Vpv1.ValueKind, pv1 >= 0,
+                    reading.Ppv.HasValue, reading.PvCurrent.ValueKind, reading.Pv1ChargingCurrent.ValueKind,
+                    reading.AcInputPower.ValueKind, inputPower >= 0, reading.PAcCharge.HasValue, reading.BatteryPower.ValueKind,
+                    batteryPower.HasValue, reading.ChargePower.ValueKind, reading.DischargePower.ValueKind);
             if (reading.WarnCode is >= 0)
                 inverter.Add(Sample.Status(Metric.WarningStatus, observedAt, reading.WarnCode.Value.ToString(CultureInfo.InvariantCulture)));
             var mode = ValidMode(reading.Spf5000StatusText) ? reading.Spf5000StatusText : reading.StatusText;
@@ -94,12 +111,12 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
         return new GrowattSnapshot(inverters, []);
     }
 
-    private static double? OptionalVoltage(JsonElement field)
+    private static double? OptionalNumber(JsonElement field)
     {
         if (field.ValueKind == JsonValueKind.Number && field.TryGetDouble(out var number))
-            return number;
+            return double.IsFinite(number) ? number : null;
         if (field.ValueKind == JsonValueKind.String &&
-            double.TryParse(field.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number))
+            double.TryParse(field.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number) && double.IsFinite(number))
             return number;
         return null;
     }

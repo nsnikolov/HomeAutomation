@@ -16,6 +16,7 @@ export const metricLabels: Record<Metric, string> = {
   gridVoltage: 'Grid voltage', gridFrequency: 'Grid frequency', gridImportPower: 'Grid import',
   pvVoltage: 'PV voltage', pv1Voltage: 'PV1 voltage', warningStatus: 'Reported warning',
   acOutputVoltage: 'AC output voltage', inverterLoadPercent: 'Inverter load', acChargingPower: 'AC charging power',
+  acInputPower: 'AC input power',
   outdoorTemperature: 'Outdoor temperature', fanSpeed: 'Fan speed',
   leavingWaterTemperature: 'Leaving water', targetLeavingWaterTemperature: 'Water target',
   heatingControlMode: 'Heating control', waterSetpointMode: 'Water setpoint mode',

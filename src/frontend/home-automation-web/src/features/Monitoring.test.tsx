@@ -38,6 +38,8 @@ describe('Monitoring dashboard', () => {
     expect(screen.getByText(/Master online and Slave offline/)).toBeInTheDocument()
     expect(screen.getByText(/offline and has recently supplied readings/)).toBeInTheDocument()
     expect(screen.getByText('241 V')).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Growatt master' }))
+      .getByText('PV1 voltage').nextElementSibling).toHaveTextContent('Unavailable')
     expect(screen.getByRole('heading', { name: 'Recent Growatt alerts' })).toBeInTheDocument()
     expect(screen.queryByText('Outage')).not.toBeInTheDocument()
   })
@@ -56,11 +58,13 @@ describe('Monitoring dashboard', () => {
           endpoints: [{ id: 1, name: 'Main', capabilities: [], measurements: [
             reading('pv1Voltage', 'V', 109.4), reading('pvVoltage', 'V', 102), reading('pvPower', 'W', 800),
             reading('activePower', 'W', 303), reading('acChargingPower', 'W', 46), reading('gridVoltage', 'V', 230),
+            reading('acInputPower', 'W', 349), reading('batteryPower', 'W', 45),
           ] }] },
         { ...meter, id: 2, name: 'Growatt slave', kind: 'inverter',
           endpoints: [
             { id: 2, name: 'PV 1', capabilities: [], measurements: [
               reading('pvVoltage', 'V', 105), reading('activePower', 'W', 0, 'stale'),
+              reading('batteryPower', 'W', -35),
             ] },
             { id: 3, name: 'PV 2', capabilities: [], measurements: [reading('pvPower', 'W', 70, 'stale')] },
           ] },
@@ -74,12 +78,15 @@ describe('Monitoring dashboard', () => {
     expect(within(master).getByText('PV generating')).toBeInTheDocument()
     expect(within(master).getByText('PV input power').nextElementSibling).toHaveTextContent('800 W')
     expect(within(master).getByText('PV1 voltage').nextElementSibling).toHaveTextContent('109.4 V')
-    expect(within(slave).getByText('PV1 voltage').nextElementSibling).toHaveTextContent('Unavailable')
-    expect(within(slave).getByText('105 V')).toBeInTheDocument()
+    expect(within(slave).getByText('PV1 voltage').nextElementSibling).toHaveTextContent('105 V')
+    expect(within(master).queryByText('Voltage', { exact: true })).not.toBeInTheDocument()
+    expect(within(slave).queryByText('Current', { exact: true })).not.toBeInTheDocument()
     expect(within(master).getByText('Load/output power').nextElementSibling).toHaveTextContent('303 W')
     expect(within(master).getByText('AC charging power').nextElementSibling).toHaveTextContent('46 W')
-    expect(within(master).getByText('Grid import power').nextElementSibling).toHaveTextContent('Unavailable')
-    expect(within(master).getByText('Battery charge/discharge').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(within(master).getByText('AC input power').nextElementSibling).toHaveTextContent('349 W')
+    expect(within(slave).getByText('AC input power').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(within(master).getByText('Battery charge/discharge').nextElementSibling).toHaveTextContent('Charging · 45 W')
+    expect(within(slave).getByText('Battery charge/discharge').nextElementSibling).toHaveTextContent('Discharging · 35 W')
     expect(within(master).queryByText('Inverter output')).not.toBeInTheDocument()
     expect(within(slave).getByText('Load/output power').nextElementSibling).toHaveTextContent('0 W (stale)')
     expect(within(slave).getByText('PV voltage present')).toBeInTheDocument()
@@ -92,6 +99,28 @@ describe('Monitoring dashboard', () => {
     expect(update).toHaveBeenCalledWith({ group: 'assigned', ids: ['5', '2', '1'] })
     expect(screen.getByRole('button', { name: 'Reorder Growatt shared battery' })).toBeInTheDocument()
     expect(screen.getByText('Shared battery flow unavailable')).toBeInTheDocument()
+  })
+
+  it('keeps nighttime zeros on both inverters and prefers fresh PV voltage over stale PV1', () => {
+    const observedAt = '2026-11-23T20:00:00Z'
+    const reading = (metric: Reading['metric'], unit: string, number: number, quality: Reading['quality'] = 'fresh'): Reading =>
+      ({ metric, unit, observedAt, number, flag: null, code: null, quality })
+    render(<GrowattSummary timeZone={property.timeZone} result={{ status: 'running', lastSuccess: observedAt, data: {
+      installation: [], alerts: [], devices: ['master', 'slave'].map((role, index) => ({
+        ...meter, id: index + 1, name: `Growatt ${role}`, kind: 'inverter',
+        endpoints: [{ id: index + 1, name: 'Main', capabilities: [], measurements: [
+          reading('pv1Voltage', 'V', 110, 'stale'), reading('pvVoltage', 'V', 0), reading('pvPower', 'W', 0),
+          reading('batteryPower', 'W', 0),
+        ] }],
+      })),
+    } }} />)
+    for (const role of ['master', 'slave']) {
+      const inverter = within(screen.getByRole('region', { name: `Growatt ${role}` }))
+      expect(inverter.getByText('PV1 voltage').nextElementSibling).toHaveTextContent(/^0 V$/)
+      expect(inverter.getByText('PV input power').nextElementSibling).toHaveTextContent(/^0 W$/)
+      expect(inverter.getByText('No PV generation reported')).toBeInTheDocument()
+      expect(inverter.getByText('Battery charge/discharge').nextElementSibling).toHaveTextContent('Idle · 0 W')
+    }
   })
 
   it('shows current data, known faults, and unknown grid rather than an outage for stale readings', () => {

@@ -7,7 +7,7 @@ public enum Metric
     SwitchOn, TargetTemperature, OperatingMode, GridVoltage, GridFrequency, GridImportPower, PvVoltage, WarningStatus,
     AcOutputVoltage, InverterLoadPercent, AcChargingPower, OutdoorTemperature, FanSpeed,
     LeavingWaterTemperature, TargetLeavingWaterTemperature, HeatingControlMode, WaterSetpointMode,
-    HeatingWarning, HeatingEmergency, Pv1Voltage
+    HeatingWarning, HeatingEmergency, Pv1Voltage, AcInputPower
 }
 
 public static class Telemetry
@@ -15,7 +15,7 @@ public static class Telemetry
     public static string? Unit(Metric metric) => metric switch
     {
         Metric.PvPower or Metric.HouseholdPower or Metric.BatteryPower or Metric.ActivePower or Metric.GridImportPower => "W",
-        Metric.AcChargingPower => "W",
+        Metric.AcChargingPower or Metric.AcInputPower => "W",
         Metric.Voltage or Metric.GridVoltage or Metric.PvVoltage or Metric.Pv1Voltage => "V",
         Metric.AcOutputVoltage => "V",
         Metric.GridFrequency => "Hz",
@@ -63,7 +63,7 @@ public sealed record Sample
             (metric is Metric.BatterySoc or Metric.Humidity && (value < 0 || value > 100)) ||
             (metric is Metric.PvPower or Metric.HouseholdPower or Metric.Energy or Metric.Voltage or Metric.Current
                 or Metric.GridVoltage or Metric.PvVoltage or Metric.Pv1Voltage or Metric.GridImportPower or Metric.GridFrequency
-                or Metric.AcOutputVoltage or Metric.InverterLoadPercent or Metric.AcChargingPower && value < 0))
+                or Metric.AcOutputVoltage or Metric.InverterLoadPercent or Metric.AcChargingPower or Metric.AcInputPower && value < 0))
         {
             throw new ArgumentOutOfRangeException(nameof(value), "Invalid value for the metric.");
         }

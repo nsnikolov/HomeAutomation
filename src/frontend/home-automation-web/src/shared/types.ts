@@ -4,7 +4,7 @@ export type Metric =
   | 'voltage' | 'current' | 'activePower' | 'energy' | 'temperature'
   | 'humidity' | 'switchOn' | 'targetTemperature' | 'operatingMode'
   | 'gridVoltage' | 'gridFrequency' | 'gridImportPower' | 'pvVoltage' | 'pv1Voltage' | 'warningStatus'
-  | 'acOutputVoltage' | 'inverterLoadPercent' | 'acChargingPower'
+  | 'acOutputVoltage' | 'inverterLoadPercent' | 'acChargingPower' | 'acInputPower'
   | 'outdoorTemperature' | 'fanSpeed'
   | 'leavingWaterTemperature' | 'targetLeavingWaterTemperature' | 'heatingControlMode' | 'waterSetpointMode'
   | 'heatingWarning' | 'heatingEmergency'

@@ -14,6 +14,7 @@ public sealed class GrowattOptions
     public int TimeoutSeconds { get; set; } = 15;
     public bool SumIndependentPv { get; set; }
     public bool MasterReportsWholeSiteLoad { get; set; }
+    public bool TelemetryDiagnostics { get; set; }
 
     public bool HasCloudToken() => ApiToken is { Length: > 0 and <= 512 } &&
         ApiToken.All(character => character is >= '!' and <= '~');
