@@ -17,13 +17,18 @@ const messages: Record<string, string> = {
 }
 
 const inverterMetricLabels = {
-  activePower: 'Inverter output',
   gridFrequency: 'AC input frequency',
   gridVoltage: 'AC input voltage',
 }
 
+const inverterPower = [
+  { metric: 'activePower', label: 'Load/output power' },
+  { metric: 'gridImportPower', label: 'Grid import power' },
+  { metric: 'batteryPower', label: 'Battery charge/discharge' },
+] as const
+
 function deviceMetricLabel(metric: Reading['metric']) {
-  return metric === 'activePower' || metric === 'gridFrequency' || metric === 'gridVoltage'
+  return metric === 'gridFrequency' || metric === 'gridVoltage'
     ? inverterMetricLabels[metric] : metricLabels[metric]
 }
 
@@ -80,7 +85,7 @@ function GrowattDeviceCard({ device, timeZone }: { device: Device; timeZone: str
   const pvInputs = device.endpoints.filter(endpoint => endpoint.measurements.some(isPvReading))
   const pv1Endpoint = pvInputs.find(endpoint => endpoint.measurements.some(isPv1Reading)) ?? pvInputs[0]
   const details = device.endpoints.flatMap(endpoint => endpoint.measurements
-    .filter(reading => !inverter || !isPvReading(reading)).map(reading =>
+    .filter(reading => !inverter || (!isPvReading(reading) && !inverterPower.some(item => item.metric === reading.metric))).map(reading =>
       <div key={`${endpoint.id}:${reading.metric}`}><dt>{deviceMetricLabel(reading.metric)}</dt><dd><LiveReading reading={reading} /></dd></div>))
 
   return <Card className={inverter ? 'device-card growatt-device' : 'device-card growatt-device growatt-auxiliary'}
@@ -96,6 +101,13 @@ function GrowattDeviceCard({ device, timeZone }: { device: Device; timeZone: str
       <PvInput key={endpoint.id} readings={endpoint.measurements}
         showPv1={endpoint === pv1Endpoint} name={pvInputs.length > 1 ? endpoint.name : undefined} />)
       : <PvInput readings={[]} showPv1 />)}
+    {inverter && <div className="growatt-reading-panel">
+      <div className="growatt-pv-heading"><h4>AC and battery power</h4></div>
+      <dl className="growatt-pv-readings">
+        {inverterPower.map(({ metric, label }) =>
+          <div key={metric}><dt>{label}</dt><dd><LiveReading reading={observations.find(reading => reading.metric === metric)} /></dd></div>)}
+      </dl>
+    </div>}
     {!!details.length && <dl className="device-readings">{details}</dl>}
   </Card>
 }
@@ -113,7 +125,7 @@ function PvInput({ readings, name, showPv1 }: { readings: Reading[]; name?: stri
     zeroPower ? 'No PV generation reported' : stale ? 'PV readings stale' :
       voltages.some(reading => reading?.quality === 'fresh') ? 'PV power unavailable' : 'PV readings unavailable'
 
-  return <div className="growatt-pv-input">
+  return <div className="growatt-reading-panel">
     <div className="growatt-pv-heading"><h4>{name ?? 'PV input'}</h4>
       <Badge className={generating ? 'tone-good' : stale && !voltagePresent && !zeroPower ? 'tone-warn' : 'tone-neutral'}>{status}</Badge>
     </div>
@@ -121,7 +133,7 @@ function PvInput({ readings, name, showPv1 }: { readings: Reading[]; name?: stri
       {showPv1 && <div><dt>PV1 voltage</dt><dd><LiveReading reading={pv1} /></dd></div>}
       <div><dt>Voltage</dt><dd><LiveReading reading={voltage} /></dd></div>
       <div><dt>Current</dt><dd>Unavailable</dd></div>
-      <div><dt>Power</dt><dd><LiveReading reading={power} /></dd></div>
+      <div><dt>PV input power</dt><dd><LiveReading reading={power} /></dd></div>
     </dl>
   </div>
 }

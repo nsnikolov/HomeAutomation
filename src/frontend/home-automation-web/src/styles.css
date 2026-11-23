@@ -122,7 +122,7 @@ h3 { font-size: .98rem; font-weight: 650; }
 }
 .growatt-device { padding: 12px; }
 .growatt-device .device-card-top { gap: 8px; margin-bottom: 5px; }
-.growatt-pv-input { margin-top: 9px; padding: 8px 10px; background: #eff5f8; border-radius: 8px; }
+.growatt-reading-panel { margin-top: 9px; padding: 8px 10px; background: #eff5f8; border-radius: 8px; }
 .growatt-pv-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
 .growatt-pv-heading h4 { font-size: .85rem; font-weight: 650; }
 .growatt-pv-readings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 78px), 1fr)); gap: 4px 8px; margin-top: 6px; }

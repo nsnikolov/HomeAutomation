@@ -55,10 +55,13 @@ describe('Monitoring dashboard', () => {
         { ...meter, id: 1, name: 'Growatt master', kind: 'inverter',
           endpoints: [{ id: 1, name: 'Main', capabilities: [], measurements: [
             reading('pv1Voltage', 'V', 109.4), reading('pvVoltage', 'V', 102), reading('pvPower', 'W', 800),
+            reading('activePower', 'W', 303), reading('acChargingPower', 'W', 46), reading('gridVoltage', 'V', 230),
           ] }] },
         { ...meter, id: 2, name: 'Growatt slave', kind: 'inverter',
           endpoints: [
-            { id: 2, name: 'PV 1', capabilities: [], measurements: [reading('pvVoltage', 'V', 105)] },
+            { id: 2, name: 'PV 1', capabilities: [], measurements: [
+              reading('pvVoltage', 'V', 105), reading('activePower', 'W', 0, 'stale'),
+            ] },
             { id: 3, name: 'PV 2', capabilities: [], measurements: [reading('pvPower', 'W', 70, 'stale')] },
           ] },
         { ...meter, name: 'Growatt shared battery', kind: 'battery' },
@@ -69,10 +72,16 @@ describe('Monitoring dashboard', () => {
     expect(slave.compareDocumentPosition(master) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(master.closest('.growatt-inverters')).toContainElement(slave)
     expect(within(master).getByText('PV generating')).toBeInTheDocument()
-    expect(within(master).getByText('800 W')).toBeInTheDocument()
+    expect(within(master).getByText('PV input power').nextElementSibling).toHaveTextContent('800 W')
     expect(within(master).getByText('PV1 voltage').nextElementSibling).toHaveTextContent('109.4 V')
     expect(within(slave).getByText('PV1 voltage').nextElementSibling).toHaveTextContent('Unavailable')
     expect(within(slave).getByText('105 V')).toBeInTheDocument()
+    expect(within(master).getByText('Load/output power').nextElementSibling).toHaveTextContent('303 W')
+    expect(within(master).getByText('AC charging power').nextElementSibling).toHaveTextContent('46 W')
+    expect(within(master).getByText('Grid import power').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(within(master).getByText('Battery charge/discharge').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(within(master).queryByText('Inverter output')).not.toBeInTheDocument()
+    expect(within(slave).getByText('Load/output power').nextElementSibling).toHaveTextContent('0 W (stale)')
     expect(within(slave).getByText('PV voltage present')).toBeInTheDocument()
     expect(within(slave).getByText('PV readings stale')).toBeInTheDocument()
     expect(within(slave).getByText('70 W (stale)')).toBeInTheDocument()

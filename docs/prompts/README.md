@@ -23,3 +23,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 19. 2026-11-22 · [Milestone 5B — Historical Charts and Dashboard UX](0019-history-and-dashboard-ux.md)
 20. 2026-11-23 · [Growatt UI — Side-by-Side Inverters and PV Monitoring](0020-growatt-inverter-pv-layout.md)
 21. 2026-11-23 · [Growatt — Display PV1 Voltage](0021-growatt-pv1-voltage.md)
+22. 2026-11-23 · [Growatt — Power Flow Monitoring and Available Telemetry Audit](0022-growatt-power-flow-audit.md)

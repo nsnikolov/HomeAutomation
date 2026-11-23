@@ -109,7 +109,7 @@ public sealed class GrowattCloudTests
             return Json("""
                 {"code":0,"data":{"storage":[
                   {"serialNum":"fixture-S","time":"2026-11-21 13:56:00","ppv":900,"vpv1":111.8,"vGrid":229,"capacity":90,"vBat":51.3,
-                   "lost":true,"errorCode":3},
+                   "outPutPower":"187.5","pAcCharge":0,"lost":true,"errorCode":3},
                   {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","ppv":"840","vpv":102,"vpv1":"109.4","vGrid":230,"freqGrid":50,
                    "outPutPower":303,"outPutVolt":241,"loadPercent":20.3,"pAcCharge":46,
                    "capacity":49,"vBat":52.7,"warnCode":4,"faultCode":6,"lost":false,
@@ -145,10 +145,21 @@ public sealed class GrowattCloudTests
         var slave = Assert.Single(snapshot.Inverters, inverter => inverter.ExternalId == options.SlaveId);
         Assert.Equal(111.8, Assert.Single(slave.InverterReadings, reading => reading.Metric == Metric.Pv1Voltage).Number);
         Assert.Equal("V", Telemetry.Unit(Metric.Pv1Voltage));
-        _ = new GrowattMapper(options, clock).Map(snapshot);
+        var (_, batch) = new GrowattMapper(options, clock).Map(snapshot);
+        Assert.Empty(batch.Installation);
+        VerifyInverterPower(Assert.Single(batch.Devices, device => device.ExternalId == options.SlaveId), 187.5, 0);
+        VerifyInverterPower(Assert.Single(batch.Devices, device => device.ExternalId == options.MasterId), 303, 46);
         Assert.Equal(Connectivity.Offline, slave.Connectivity);
         Assert.Equal("3", slave.FaultCode);
         Assert.Empty(slave.SharedBatteryReadings);
+
+        static void VerifyInverterPower(DeviceObservation device, double output, double charging)
+        {
+            var samples = Assert.Single(device.Endpoints).Samples;
+            Assert.Equal(output, Assert.Single(samples, sample => sample.Metric == Metric.ActivePower).Number);
+            Assert.Equal(charging, Assert.Single(samples, sample => sample.Metric == Metric.AcChargingPower).Number);
+            Assert.DoesNotContain(samples, sample => sample.Metric is Metric.GridImportPower or Metric.BatteryPower or Metric.HouseholdPower);
+        }
     }
 
     [Fact]
