@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using HomeAutomation.Application;
 using HomeAutomation.Domain;
 using Microsoft.Extensions.Caching.Memory;
@@ -59,6 +60,7 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
             var inverter = new List<Sample>();
             AddNumber(inverter, Metric.PvPower, reading.Ppv, observedAt);
             AddNumber(inverter, Metric.PvVoltage, reading.Vpv, observedAt);
+            AddNumber(inverter, Metric.Pv1Voltage, OptionalVoltage(reading.Vpv1), observedAt);
             AddNumber(inverter, Metric.GridVoltage, reading.VGrid, observedAt);
             AddNumber(inverter, Metric.GridFrequency, reading.FreqGrid, observedAt);
             AddNumber(inverter, Metric.ActivePower, reading.OutPutPower, observedAt);
@@ -90,6 +92,16 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
         }
         if (inverters.Count == 0) throw new GrowattReadException(GrowattFailure.Unavailable);
         return new GrowattSnapshot(inverters, []);
+    }
+
+    private static double? OptionalVoltage(JsonElement field)
+    {
+        if (field.ValueKind == JsonValueKind.Number && field.TryGetDouble(out var number))
+            return number;
+        if (field.ValueKind == JsonValueKind.String &&
+            double.TryParse(field.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number))
+            return number;
+        return null;
     }
 
     private static bool ValidMode(string? mode) => mode is { Length: > 0 and <= 32 } &&

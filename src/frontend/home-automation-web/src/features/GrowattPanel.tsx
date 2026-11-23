@@ -69,7 +69,8 @@ export function GrowattSummary({ result, timeZone, message, preferences }: {
   </Card>
 }
 
-const isPvReading = (reading: Reading) => reading.metric === 'pvVoltage' || reading.metric === 'pvPower'
+const isPv1Reading = (reading: Reading) => reading.metric === 'pv1Voltage'
+const isPvReading = (reading: Reading) => isPv1Reading(reading) || reading.metric === 'pvVoltage' || reading.metric === 'pvPower'
 
 function GrowattDeviceCard({ device, timeZone }: { device: Device; timeZone: string }) {
   const inverter = device.kind === 'inverter'
@@ -77,6 +78,7 @@ function GrowattDeviceCard({ device, timeZone }: { device: Device; timeZone: str
   const latest = observations.map(reading => reading.observedAt).filter(at => at !== null)
     .sort((a, b) => Date.parse(b) - Date.parse(a))[0]
   const pvInputs = device.endpoints.filter(endpoint => endpoint.measurements.some(isPvReading))
+  const pv1Endpoint = pvInputs.find(endpoint => endpoint.measurements.some(isPv1Reading)) ?? pvInputs[0]
   const details = device.endpoints.flatMap(endpoint => endpoint.measurements
     .filter(reading => !inverter || !isPvReading(reading)).map(reading =>
       <div key={`${endpoint.id}:${reading.metric}`}><dt>{deviceMetricLabel(reading.metric)}</dt><dd><LiveReading reading={reading} /></dd></div>))
@@ -91,28 +93,32 @@ function GrowattDeviceCard({ device, timeZone }: { device: Device; timeZone: str
     {device.kind === 'battery' && !observations.some(reading => reading.metric === 'batteryPower' && reading.quality === 'fresh') &&
       <p>Shared battery flow unavailable</p>}
     {inverter && (pvInputs.length ? pvInputs.map(endpoint =>
-      <PvInput key={endpoint.id} readings={endpoint.measurements} name={pvInputs.length > 1 ? endpoint.name : undefined} />)
-      : <PvInput readings={[]} />)}
+      <PvInput key={endpoint.id} readings={endpoint.measurements}
+        showPv1={endpoint === pv1Endpoint} name={pvInputs.length > 1 ? endpoint.name : undefined} />)
+      : <PvInput readings={[]} showPv1 />)}
     {!!details.length && <dl className="device-readings">{details}</dl>}
   </Card>
 }
 
-function PvInput({ readings, name }: { readings: Reading[]; name?: string }) {
+function PvInput({ readings, name, showPv1 }: { readings: Reading[]; name?: string; showPv1: boolean }) {
+  const pv1 = readings.find(isPv1Reading)
   const voltage = readings.find(reading => reading.metric === 'pvVoltage')
   const power = readings.find(reading => reading.metric === 'pvPower')
-  const voltagePresent = voltage?.quality === 'fresh' && (voltage.number ?? 0) > 0
+  const voltages = [pv1, voltage]
+  const voltagePresent = voltages.some(reading => reading?.quality === 'fresh' && (reading.number ?? 0) > 0)
   const generating = power?.quality === 'fresh' && (power.number ?? 0) > 0
   const zeroPower = power?.quality === 'fresh' && power.number === 0
-  const stale = voltage?.quality === 'stale' || power?.quality === 'stale'
+  const stale = voltages.some(reading => reading?.quality === 'stale') || power?.quality === 'stale'
   const status = generating ? 'PV generating' : voltagePresent ? 'PV voltage present' :
     zeroPower ? 'No PV generation reported' : stale ? 'PV readings stale' :
-      voltage?.quality === 'fresh' ? 'PV power unavailable' : 'PV readings unavailable'
+      voltages.some(reading => reading?.quality === 'fresh') ? 'PV power unavailable' : 'PV readings unavailable'
 
   return <div className="growatt-pv-input">
     <div className="growatt-pv-heading"><h4>{name ?? 'PV input'}</h4>
       <Badge className={generating ? 'tone-good' : stale && !voltagePresent && !zeroPower ? 'tone-warn' : 'tone-neutral'}>{status}</Badge>
     </div>
     <dl className="growatt-pv-readings">
+      {showPv1 && <div><dt>PV1 voltage</dt><dd><LiveReading reading={pv1} /></dd></div>}
       <div><dt>Voltage</dt><dd><LiveReading reading={voltage} /></dd></div>
       <div><dt>Current</dt><dd>Unavailable</dd></div>
       <div><dt>Power</dt><dd><LiveReading reading={power} /></dd></div>

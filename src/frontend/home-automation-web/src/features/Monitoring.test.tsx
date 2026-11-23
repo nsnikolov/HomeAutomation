@@ -53,7 +53,9 @@ describe('Monitoring dashboard', () => {
       installation: [reading('pvPower', 'W', 800)], alerts: [],
       devices: [
         { ...meter, id: 1, name: 'Growatt master', kind: 'inverter',
-          endpoints: [{ id: 1, name: 'Main', capabilities: [], measurements: [reading('pvVoltage', 'V', 102), reading('pvPower', 'W', 800)] }] },
+          endpoints: [{ id: 1, name: 'Main', capabilities: [], measurements: [
+            reading('pv1Voltage', 'V', 109.4), reading('pvVoltage', 'V', 102), reading('pvPower', 'W', 800),
+          ] }] },
         { ...meter, id: 2, name: 'Growatt slave', kind: 'inverter',
           endpoints: [
             { id: 2, name: 'PV 1', capabilities: [], measurements: [reading('pvVoltage', 'V', 105)] },
@@ -68,6 +70,9 @@ describe('Monitoring dashboard', () => {
     expect(master.closest('.growatt-inverters')).toContainElement(slave)
     expect(within(master).getByText('PV generating')).toBeInTheDocument()
     expect(within(master).getByText('800 W')).toBeInTheDocument()
+    expect(within(master).getByText('PV1 voltage').nextElementSibling).toHaveTextContent('109.4 V')
+    expect(within(slave).getByText('PV1 voltage').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(within(slave).getByText('105 V')).toBeInTheDocument()
     expect(within(slave).getByText('PV voltage present')).toBeInTheDocument()
     expect(within(slave).getByText('PV readings stale')).toBeInTheDocument()
     expect(within(slave).getByText('70 W (stale)')).toBeInTheDocument()

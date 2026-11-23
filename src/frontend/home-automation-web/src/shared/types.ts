@@ -3,7 +3,7 @@ export type Metric =
   | 'pvPower' | 'householdPower' | 'gridAvailable' | 'batterySoc' | 'batteryPower'
   | 'voltage' | 'current' | 'activePower' | 'energy' | 'temperature'
   | 'humidity' | 'switchOn' | 'targetTemperature' | 'operatingMode'
-  | 'gridVoltage' | 'gridFrequency' | 'gridImportPower' | 'pvVoltage' | 'warningStatus'
+  | 'gridVoltage' | 'gridFrequency' | 'gridImportPower' | 'pvVoltage' | 'pv1Voltage' | 'warningStatus'
   | 'acOutputVoltage' | 'inverterLoadPercent' | 'acChargingPower'
   | 'outdoorTemperature' | 'fanSpeed'
   | 'leavingWaterTemperature' | 'targetLeavingWaterTemperature' | 'heatingControlMode' | 'waterSetpointMode'

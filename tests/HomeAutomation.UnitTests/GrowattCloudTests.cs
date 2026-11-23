@@ -108,9 +108,9 @@ public sealed class GrowattCloudTests
             Assert.Equal("deviceType=storage&deviceSn=fixture-M%2Cfixture-S", await request.Content!.ReadAsStringAsync(ct));
             return Json("""
                 {"code":0,"data":{"storage":[
-                  {"serialNum":"fixture-S","time":"2026-11-21 13:56:00","ppv":900,"vGrid":229,"capacity":90,"vBat":51.3,
+                  {"serialNum":"fixture-S","time":"2026-11-21 13:56:00","ppv":900,"vpv1":111.8,"vGrid":229,"capacity":90,"vBat":51.3,
                    "lost":true,"errorCode":3},
-                  {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","ppv":"840","vpv":102,"vGrid":230,"freqGrid":50,
+                  {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","ppv":"840","vpv":102,"vpv1":"109.4","vGrid":230,"freqGrid":50,
                    "outPutPower":303,"outPutVolt":241,"loadPercent":20.3,"pAcCharge":46,
                    "capacity":49,"vBat":52.7,"warnCode":4,"faultCode":6,"lost":false,
                    "spf5000StatusText":"Battery Discharging"}
@@ -133,6 +133,8 @@ public sealed class GrowattCloudTests
         Assert.Equal(Connectivity.Online, master.Connectivity);
         Assert.Equal(49, Assert.Single(master.SharedBatteryReadings, reading => reading.Metric == Metric.BatterySoc).Number);
         Assert.Equal(840, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.PvPower).Number);
+        Assert.Equal(102, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.PvVoltage).Number);
+        Assert.Equal(109.4, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.Pv1Voltage).Number);
         Assert.Equal(303, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.ActivePower).Number);
         Assert.Equal(241, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.AcOutputVoltage).Number);
         Assert.Equal(20.3, Assert.Single(master.InverterReadings, reading => reading.Metric == Metric.InverterLoadPercent).Number);
@@ -141,6 +143,9 @@ public sealed class GrowattCloudTests
         Assert.Equal("6", master.FaultCode);
         Assert.DoesNotContain(master.InverterReadings, reading => reading.Metric == Metric.GridAvailable);
         var slave = Assert.Single(snapshot.Inverters, inverter => inverter.ExternalId == options.SlaveId);
+        Assert.Equal(111.8, Assert.Single(slave.InverterReadings, reading => reading.Metric == Metric.Pv1Voltage).Number);
+        Assert.Equal("V", Telemetry.Unit(Metric.Pv1Voltage));
+        _ = new GrowattMapper(options, clock).Map(snapshot);
         Assert.Equal(Connectivity.Offline, slave.Connectivity);
         Assert.Equal("3", slave.FaultCode);
         Assert.Empty(slave.SharedBatteryReadings);
@@ -165,15 +170,18 @@ public sealed class GrowattCloudTests
         Assert.Equal(GrowattFailure.Authorization, failure.Failure);
     }
 
-    [Fact]
-    public async Task MissingValuesAndAnAmbiguousSourceTimestampDoNotCreateObservations()
+    [Theory]
+    [InlineData("")]
+    [InlineData(",\"vpv1\":null")]
+    [InlineData(",\"vpv1\":\"--\"")]
+    public async Task MissingValuesAndAnAmbiguousSourceTimestampDoNotCreateObservations(string pv1Field)
     {
         using var handler = new CloudHandler((request, _) => Task.FromResult(
-            request.RequestUri!.AbsolutePath.EndsWith("queryDeviceList", StringComparison.Ordinal) ? Json(DevicePage) : Json("""
+            request.RequestUri!.AbsolutePath.EndsWith("queryDeviceList", StringComparison.Ordinal) ? Json(DevicePage) : Json($$"""
                 {"code":0,"data":{"storage":[
                   {"serialNum":"fixture-S","time":"2026-10-25 03:15:00","ppv":900},
-                  {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","vpv":105,"capacity":0,"vBat":0}
-                ]}}
+                  {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","vpv":105,"capacity":0,"vBat":0{{pv1Field}}}
+                ]} }
                 """)));
         using var http = CreateHttp(handler);
         using var cache = new MemoryCache(new MemoryCacheOptions());

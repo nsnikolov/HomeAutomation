@@ -124,6 +124,7 @@ public sealed class GrowattCloudClient(HttpClient http, GrowattOptions options, 
         public string? Time { get; init; }
         public double? Ppv { get; init; }
         public double? Vpv { get; init; }
+        public JsonElement Vpv1 { get; init; }
         public double? VGrid { get; init; }
         public double? FreqGrid { get; init; }
         public double? OutPutPower { get; init; }

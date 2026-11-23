@@ -14,7 +14,7 @@ export const metricLabels: Record<Metric, string> = {
   activePower: 'Active power', energy: 'Energy counter', temperature: 'Temperature', humidity: 'Relative humidity',
   switchOn: 'Switch state', targetTemperature: 'Target temperature', operatingMode: 'Operating mode',
   gridVoltage: 'Grid voltage', gridFrequency: 'Grid frequency', gridImportPower: 'Grid import',
-  pvVoltage: 'PV voltage', warningStatus: 'Reported warning',
+  pvVoltage: 'PV voltage', pv1Voltage: 'PV1 voltage', warningStatus: 'Reported warning',
   acOutputVoltage: 'AC output voltage', inverterLoadPercent: 'Inverter load', acChargingPower: 'AC charging power',
   outdoorTemperature: 'Outdoor temperature', fanSpeed: 'Fan speed',
   leavingWaterTemperature: 'Leaving water', targetLeavingWaterTemperature: 'Water target',
