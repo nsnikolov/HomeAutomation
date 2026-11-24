@@ -1,4 +1,5 @@
 import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePageKey, DevicePreferences, EwelinkRelayOutcome, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, SensorHistory, SensorPeriod, TuyaState } from './types'
+import type { DashboardGroup, DashboardSnapshot, DashboardSource } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code?: string) {
@@ -37,7 +38,7 @@ async function providerAction<T>(provider: 'daikin' | 'ewelink' | 'tuya', id: nu
   })
 }
 
-async function replacePreference(path: string, body: object) {
+async function putWithCsrf(path: string, body: object) {
   const { token } = await request<{ token: string }>('/session/csrf')
   return request<void>(path, {
     method: 'PUT', headers: { 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -58,6 +59,10 @@ export const api = {
   properties: (signal?: AbortSignal) => request<Property[]>('/properties', { signal }),
   rooms: (id: number, signal?: AbortSignal) => request<Room[]>(`/properties/${id}/rooms`, { signal }),
   state: (id: number, signal?: AbortSignal) => request<PropertyState>(`/properties/${id}/state`, { signal }),
+  dashboard: (id: number, signal?: AbortSignal) => request<DashboardSnapshot>(`/properties/${id}/dashboard`, { signal }),
+  dashboardSources: (id: number, signal?: AbortSignal) => request<DashboardSource[]>(`/properties/${id}/dashboard/sources`, { signal }),
+  saveDashboard: (id: number, revision: string, groups: DashboardGroup[]) =>
+    putWithCsrf(`/properties/${id}/dashboard`, { revision, groups }),
   growatt: (id: number, signal?: AbortSignal) => request<GrowattState>(`/properties/${id}/growatt`, { signal }),
   daikin: (id: number, signal?: AbortSignal) => request<DaikinState>(`/daikin/${id}`, { signal }),
   connectDaikin: (id: number) => providerAction<{ authorizationUrl: string }>('daikin', id, 'connect'),
@@ -91,9 +96,9 @@ export const api = {
   devicePreferences: (id: number, page: DevicePageKey, signal?: AbortSignal) =>
     request<DevicePreferences>(`/properties/${id}/device-preferences/${page}`, { signal }),
   orderDevices: (id: number, page: DevicePageKey, group: string, ids: string[]) =>
-    replacePreference(`/properties/${id}/device-preferences/${page}/order`, { group, ids }),
+    putWithCsrf(`/properties/${id}/device-preferences/${page}/order`, { group, ids }),
   setTuyaVisibility: (id: number, device: string, hidden: boolean) =>
-    replacePreference(`/properties/${id}/device-preferences/tuya/visibility/${device}`, { hidden }),
+    putWithCsrf(`/properties/${id}/device-preferences/tuya/visibility/${device}`, { hidden }),
   refreshTuya: (id: number) => providerAction<void>('tuya', id, 'refresh'),
   assignTuya: (id: number, device: string, roomId: number | null) =>
     providerAction<void>('tuya', id, `devices/${device}/assign`, { roomId }),

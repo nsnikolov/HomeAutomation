@@ -37,10 +37,11 @@ public sealed class DaikinService
     private readonly IMonitoringReader permissions;
     private readonly TimeProvider clock;
     private readonly ILogger<DaikinService> logger;
+    private readonly IMonitoringDashboardNotifier dashboard;
 
     internal DaikinService(DaikinOptions options, DaikinStore store, DaikinClient client, DaikinSecrets secrets,
         DaikinGate gate, DaikinConfirmationSchedule confirmation, TelemetryWriter telemetry, IMonitoringReader permissions,
-        TimeProvider clock, ILogger<DaikinService> logger)
+        TimeProvider clock, ILogger<DaikinService> logger, IMonitoringDashboardNotifier dashboard)
     {
         this.options = options;
         this.store = store;
@@ -52,6 +53,7 @@ public sealed class DaikinService
         this.permissions = permissions;
         this.clock = clock;
         this.logger = logger;
+        this.dashboard = dashboard;
     }
 
     public static void Register(IServiceCollection services)
@@ -71,7 +73,7 @@ public sealed class DaikinService
             provider.GetRequiredService<DaikinClient>(), provider.GetRequiredService<DaikinSecrets>(), provider.GetRequiredService<DaikinGate>(),
             provider.GetRequiredService<DaikinConfirmationSchedule>(), provider.GetRequiredService<TelemetryWriter>(),
             provider.GetRequiredService<IMonitoringReader>(), provider.GetRequiredService<TimeProvider>(),
-            provider.GetRequiredService<ILogger<DaikinService>>()));
+            provider.GetRequiredService<ILogger<DaikinService>>(), provider.GetRequiredService<IMonitoringDashboardNotifier>()));
     }
 
     public string AuthorizationUrl(string state, string? challenge) => client.Authorize(state, challenge);
@@ -156,6 +158,7 @@ public sealed class DaikinService
             if (!await store.AssignAsync(user, device, property, room, ct)) return false;
             var row = (await store.DevicesAsync(user, ct)).Single(item => item.Id == device);
             if (row.Device is { } current) await StoreTelemetryAsync(property, room, current, ct);
+            await dashboard.ChangedAsync(property, ct);
             return true;
         }
         finally { gate.Release(); }
@@ -365,6 +368,8 @@ public sealed class DaikinService
             }
         }
         await store.RecordStatusAsync("connected", null, ct);
+        foreach (var property in bindings.Values.Select(row => row.PropertyId).OfType<long>().Distinct())
+            await dashboard.ChangedAsync(property, ct);
     }
 
     private Task StoreTelemetryAsync(long property, long? room, DaikinDevice device, CancellationToken ct)

@@ -29,9 +29,11 @@ public sealed class TuyaService
     private readonly SensorHistoryReader history;
     private readonly IMonitoringReader permissions;
     private readonly TimeProvider clock;
+    private readonly IMonitoringDashboardNotifier dashboard;
 
     internal TuyaService(TuyaOptions options, TuyaSession session, TuyaClient client, TuyaStore store, Migrations migrations,
-        TelemetryWriter writer, SensorHistoryReader history, IMonitoringReader permissions, TimeProvider clock)
+        TelemetryWriter writer, SensorHistoryReader history, IMonitoringReader permissions, TimeProvider clock,
+        IMonitoringDashboardNotifier dashboard)
     {
         this.options = options;
         this.session = session;
@@ -42,6 +44,7 @@ public sealed class TuyaService
         this.history = history;
         this.permissions = permissions;
         this.clock = clock;
+        this.dashboard = dashboard;
     }
 
     public static void Register(IServiceCollection services)
@@ -58,7 +61,8 @@ public sealed class TuyaService
         services.AddScoped(provider => new TuyaService(provider.GetRequiredService<TuyaOptions>(), provider.GetRequiredService<TuyaSession>(),
             provider.GetRequiredService<TuyaClient>(), provider.GetRequiredService<TuyaStore>(), provider.GetRequiredService<Migrations>(),
             provider.GetRequiredService<TelemetryWriter>(), provider.GetRequiredService<SensorHistoryReader>(),
-            provider.GetRequiredService<IMonitoringReader>(), provider.GetRequiredService<TimeProvider>()));
+            provider.GetRequiredService<IMonitoringReader>(), provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<IMonitoringDashboardNotifier>()));
         services.AddHostedService<TuyaWorker>();
     }
 
@@ -123,6 +127,7 @@ public sealed class TuyaService
             if (row is null) throw new TuyaFailure("notFound");
             await store.AssignAsync(row.Id, property, room, ct);
             await IngestAsync(row.Device, property, room, ct, includeLastKnown: true);
+            await dashboard.ChangedAsync(property, ct);
         }
         finally { session.Release(); }
     }
@@ -215,6 +220,8 @@ public sealed class TuyaService
             }
             var finished = clock.GetUtcNow();
             await store.ReportAsync(partial ? "partial" : "connected", finished, finished.AddMinutes(options.PollMinutes), diagnostic, ct);
+            foreach (var property in rows.Values.Select(row => row.PropertyId).OfType<long>().Distinct())
+                await dashboard.ChangedAsync(property, ct);
         }
         catch (TuyaFailure error)
         {

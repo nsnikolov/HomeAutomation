@@ -100,7 +100,9 @@ function PropertyView({ property, properties, email }: { property: Property; pro
   const daikinView = useMatch('/properties/:propertyId/daikin') !== null
   const ewelinkView = useMatch('/properties/:propertyId/ewelink') !== null
   const tuyaView = useMatch('/properties/:propertyId/tuya') !== null
-  const simulatorView = !growattView && !daikinView && !ewelinkView && !tuyaView
+  const devicesView = useMatch('/properties/:propertyId/devices') !== null
+  const energyView = useMatch('/properties/:propertyId/energy') !== null
+  const simulatorView = devicesView || energyView
   const live = useLiveUpdates(property.id)
   const snapshot = useQuery({
     queryKey: ['property', property.id, 'state'],
@@ -109,7 +111,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
     refetchInterval: live ? 30000 : 10000,
   })
   const health = useQuery({
-    queryKey: ['health'], queryFn: ({ signal }) => api.health(signal), enabled: simulatorView, refetchInterval: 15000,
+    queryKey: ['health'], queryFn: ({ signal }) => api.health(signal), enabled: energyView, refetchInterval: 15000,
   })
   const [offlineNotice, setOfflineNotice] = useState(false)
   const root = `/properties/${property.id}`
@@ -134,7 +136,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
         </div>
         <div className="topbar-status">
           <span className="sample-label">{growattView ? 'Growatt Cloud' : daikinView ? 'Daikin ONECTA'
-            : ewelinkView ? 'eWeLink Cloud' : tuyaView ? 'Tuya Cloud' : 'Simulated data'}</span>
+            : ewelinkView ? 'eWeLink Cloud' : tuyaView ? 'Tuya Cloud' : simulatorView ? 'Simulated data' : 'Property monitoring'}</span>
           <button className="live-toggle" type="button" aria-expanded={offlineNotice} onClick={() => setOfflineNotice(!offlineNotice)}>
             <Badge className={live ? 'tone-good' : 'tone-neutral'}><i />{live ? 'Live updates' : 'Auto refresh'}</Badge>
           </button>
@@ -146,7 +148,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
       <main className="content">
         {simulatorView && snapshot.isError && <div className="notice" role="alert">The property feed could not be refreshed. <Button variant="outline" onClick={() => void snapshot.refetch()}>Retry</Button></div>}
         <Routes>
-          <Route index element={<Dashboard property={property} state={snapshot.data} health={health.data} loading={snapshot.isPending} />} />
+          <Route index element={<Dashboard property={property} live={live} />} />
           <Route path="growatt" element={<GrowattPanel property={property} />} />
           <Route path="daikin" element={<DaikinPanel property={property} />} />
           <Route path="ewelink" element={<EwelinkPanel property={property} />} />

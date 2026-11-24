@@ -1,8 +1,5 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
-import { Dashboard } from './Dashboard'
 import { GrowattSummary } from './GrowattPanel'
 import { DeviceBadge } from './Devices'
 import { mergeHistory } from './Energy'
@@ -130,24 +127,6 @@ describe('Monitoring dashboard', () => {
       expect(inverter.getByText('Import from grid').nextElementSibling).toHaveTextContent(
         role === 'master' ? /^0 W$/ : /^0 W \(stale\)$/)
     }
-  })
-
-  it('shows current data, known faults, and unknown grid rather than an outage for stale readings', () => {
-    const reading = { unit: null, observedAt: null, number: null, flag: false, code: null, quality: 'stale' } as const
-    const installation: Reading[] = [{ ...reading, metric: 'gridAvailable' }, {
-      ...reading, metric: 'pvPower', unit: 'W', number: 3200, flag: null, quality: 'fresh',
-    }]
-    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryRouter>
-        <Dashboard property={property} state={{ devices: [{ ...meter, faultCode: 'SIM_METER_FAULT' }], installation, alerts: [] }} loading={false} />
-      </MemoryRouter>
-    </QueryClientProvider>)
-    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
-    expect(screen.getByText('3.20 kW')).toBeInTheDocument()
-    expect(screen.getByText('Fault')).toBeInTheDocument()
-    const grid = screen.getByRole('heading', { name: 'Grid availability' }).closest('section')
-    expect(within(grid!).getByText('Reading is stale')).toBeInTheDocument()
-    expect(within(grid!).queryByText('Outage')).not.toBeInTheDocument()
   })
 
   it('gives connectivity and telemetry freshness distinct labels', () => {

@@ -62,6 +62,8 @@ builder.Services.AddSingleton<Migrations>();
 builder.Services.AddSingleton<IObservationProvider, SimulatorProvider>();
 builder.Services.AddScoped<TelemetryWriter>();
 builder.Services.AddScoped<DeviceViewPreferences>();
+builder.Services.AddScoped<IMonitoringDashboard, MonitoringDashboardStore>();
+builder.Services.AddSingleton<IMonitoringDashboardNotifier, MonitoringDashboardNotifier>();
 builder.Services.AddScoped<ITelemetryWriter>(services => services.GetRequiredService<TelemetryWriter>());
 builder.Services.AddScoped<IMonitoringReader, MonitoringReader>();
 builder.Services.AddScoped<IGrowattTelemetryStore>(services => services.GetRequiredService<TelemetryWriter>());

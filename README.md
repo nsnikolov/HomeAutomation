@@ -1,6 +1,6 @@
 # Home Automation
 
-Milestone 1 is a read-only monitoring application for a simulated countryside house. It monitors two parallel Growatt inverters, a shared battery, a Daikin air conditioner, a Sonoff metering switch, and a room sensor. ASP.NET Core serves the React dashboard and runs the simulator independently of connected browsers.
+Home Automation provides a configurable, read-only dashboard for property monitoring, with separate pages for Growatt, Daikin ONECTA, eWeLink, and Smart Life / Tuya. ASP.NET Core serves the React application and can run a simulator for local development independently of connected browsers.
 
 ## Develop on Windows without Docker
 
@@ -93,15 +93,23 @@ docker compose up -d --build
 docker compose ps -a
 ```
 
-3. Open http://localhost:8080 and sign in with your viewer account. Give the simulator up to one poll interval to populate the dashboard.
+3. Open http://localhost:8080 and sign in with your viewer account. A new property opens with an empty Dashboard. The Devices page shows the simulator once it has completed a poll.
 
 Compose binds the app and MySQL to loopback. A one-shot service applies the embedded, version-controlled SQL scripts using the migration account and provisions the viewer account. The app starts with a separate DML-only database account. The DB volume and application key volume persist across routine stops. The supplied deployment is for local monitoring.
 
 Use `docker compose logs migrate app` to inspect startup and `docker compose down` to stop. MySQL initialization creates the database users on the first start of a volume. Changing the bootstrap password in `.env` does not reset an existing account. For a new viewer, set a different email and rerun `docker compose run --rm migrate`.
 
+## Configurable monitoring dashboard
+
+Apply migration `011_monitoring_dashboard.sql` with the migration account using `dotnet run --project src/backend/HomeAutomation.Api -- --migrate`. Restart the API and reload the frontend. The runtime account uses its existing schema-scoped DML privileges. Each property has a shared layout. Its members can read it, and members with the `Operator`, `Admin`, or `Owner` property role can save it. A bootstrapped `Viewer` account stays read-only. Ask the property administrator to grant the intended account an editor role through the property's membership record.
+
+Select the property, open **Dashboard**, and choose **Configure dashboard**. Add a group, add a widget, and select assigned devices and measurements. Preview changes before saving. A widget can link to the provider page or, for a simulated source, the simulator device detail. The dashboard remains read-only even when the destination offers device controls.
+
+Readings come from saved Growatt, Daikin ONECTA, eWeLink and Smart Life / Tuya data. Simulator readings appear only when selected and are labeled. Each reading is green for less than five minutes, blue from five minutes to under one hour, and gray from one hour onward. The tooltip or detailed view shows the recorded timestamp and provenance. Missing or inaccessible sources display an em dash while retaining the binding. Groups and widgets with more than two responsive rows have independent **Show all** and **Collapse** controls.
+
 ## Growatt read-only monitoring
 
-Sign in and choose **Live Growatt** in the property sidebar to open real readings. **Dashboard** opens the simulator. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.
+Sign in and choose **Live Growatt** in the property sidebar to open the inverter detail page. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.
 
 ## Daikin ONECTA
 

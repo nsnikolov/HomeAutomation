@@ -58,6 +58,10 @@ export function useLiveUpdates(propertyId: number) {
     connection.on('stateChanged', (event: { propertyId: number }) => {
       if (event.propertyId === propertyId) invalidate()
     })
+    const invalidateDashboard = () => client.invalidateQueries({ queryKey: ['property', propertyId, 'dashboard'], exact: true })
+    connection.on('dashboardChanged', (event: { propertyId: number }) => {
+      if (event.propertyId === propertyId) void invalidateDashboard()
+    })
     const traceEwelink = () => {
       if (disposed || new URLSearchParams(window.location.search).get('ewelinkDiagnostics') !== '1') return false
       ewelinkTraceTimer ??= setTimeout(() => {
@@ -78,7 +82,7 @@ export function useLiveUpdates(propertyId: number) {
         ewelinkDirty = false
         ewelinkFetching = true
         const queryKey = ['property', propertyId, 'ewelink']
-        void client.invalidateQueries({ queryKey, exact: true })
+        void Promise.all([client.invalidateQueries({ queryKey, exact: true }), invalidateDashboard()])
           .finally(() => {
             if (traceEwelink()) {
               const state = client.getQueryState(queryKey)
@@ -114,6 +118,7 @@ export function useLiveUpdates(propertyId: number) {
       clearTimeout(ewelinkTraceTimer)
       connection.off('stateChanged')
       connection.off('ewelinkChanged')
+      connection.off('dashboardChanged')
       void connection.stop().catch(() => undefined)
     }
   }, [client, propertyId])

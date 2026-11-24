@@ -58,6 +58,41 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     }
 
     [Fact]
+    public async Task DashboardRequiresPropertyMembershipEditorPermissionsAndCsrf()
+    {
+        const string path = "/api/v1/properties/1/dashboard";
+        using var anonymous = host.CreateClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync(path)).StatusCode);
+        using var viewer = AuthenticatedClient();
+        Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/v1/properties/2/dashboard")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.GetAsync(path + "/sources")).StatusCode);
+        var empty = await viewer.GetFromJsonAsync<DashboardSnapshot>(path);
+        Assert.NotNull(empty);
+        Assert.False(empty.CanEdit);
+        Assert.Empty(empty.Groups);
+        var viewerCsrf = await viewer.GetFromJsonAsync<JsonElement>("/api/v1/session/csrf");
+        viewer.DefaultRequestHeaders.Add("X-CSRF-TOKEN", viewerCsrf.GetProperty("token").GetString());
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PutAsJsonAsync(path, new DashboardUpdate(empty.Revision, []))).StatusCode);
+
+        using var editor = host.CreateClient();
+        editor.DefaultRequestHeaders.Add("X-Test-User", "dashboard-editor");
+        var editable = await editor.GetFromJsonAsync<DashboardSnapshot>(path);
+        Assert.True(editable!.CanEdit);
+        var csrf = await editor.GetFromJsonAsync<JsonElement>("/api/v1/session/csrf");
+        var token = csrf.GetProperty("token").GetString();
+        var dashboard = new DashboardUpdate(editable.Revision, []);
+        Assert.Equal(HttpStatusCode.BadRequest, (await editor.PutAsJsonAsync(path, dashboard)).StatusCode);
+        editor.DefaultRequestHeaders.Add("X-CSRF-TOKEN", token);
+        Assert.Equal(HttpStatusCode.NoContent, (await editor.PutAsJsonAsync(path, dashboard)).StatusCode);
+
+        var value = new DashboardValue(Guid.NewGuid().ToString("D"), "ewelink:fixture:SwitchOn", null);
+        var widget = new DashboardWidget(Guid.NewGuid().ToString("D"), "Fixture", "compact", "https://example.test/", [value]);
+        var group = new DashboardGroup(Guid.NewGuid().ToString("D"), "Fixture group", false, true, [widget]);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await editor.PutAsJsonAsync(path, dashboard with { Groups = [group] })).StatusCode);
+    }
+
+    [Fact]
     public async Task EwelinkSignalRNotificationReachesOnlySubscribedProperty()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -774,6 +809,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             {
                 services.RemoveAll<IMonitoringReader>();
                 services.AddSingleton<IMonitoringReader, FixtureReader>();
+                services.RemoveAll<IMonitoringDashboard>();
+                services.AddSingleton<IMonitoringDashboard, DashboardFixture>();
                 services.RemoveAll<TuyaOptions>();
                 services.AddSingleton(new TuyaOptions());
                 services.RemoveAll<EwelinkOptions>();
@@ -808,7 +845,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         public Task<IReadOnlyList<PropertySummary>> PropertiesAsync(string userId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PropertySummary>>([new PropertySummary(1, "Fixture", "Europe/Sofia")]);
         public Task<bool> CanReadAsync(string userId, long propertyId, CancellationToken cancellationToken) =>
-            Task.FromResult(userId == "viewer" && propertyId == 1);
+            Task.FromResult(userId is "viewer" or "dashboard-editor" && propertyId == 1);
         public Task<IReadOnlyList<RoomSummary>> RoomsAsync(long propertyId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<RoomSummary>>([new RoomSummary(2, "Utility")]);
         public Task<PropertyState> StateAsync(long propertyId, CancellationToken cancellationToken) =>
@@ -818,5 +855,16 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         public Task<IReadOnlyList<HistoryPoint>> HistoryAsync(long propertyId, long? endpointId, Metric metric,
             DateTimeOffset from, DateTimeOffset to, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<HistoryPoint>>([]);
+    }
+
+    private sealed class DashboardFixture : IMonitoringDashboard
+    {
+        public Task<bool> SchemaReadyAsync(CancellationToken ct) => Task.FromResult(true);
+        public Task<DashboardSnapshot> ReadAsync(long property, string user, CancellationToken ct) =>
+            Task.FromResult(new DashboardSnapshot(new string('0', 64), user == "dashboard-editor", [], []));
+        public Task<IReadOnlyList<DashboardSource>?> CatalogAsync(long property, string user, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<DashboardSource>?>(user == "dashboard-editor" ? [] : null);
+        public Task<DashboardSaveResult> ReplaceAsync(long property, string user, DashboardUpdate update, CancellationToken ct) =>
+            Task.FromResult(user == "dashboard-editor" ? DashboardSaveResult.Saved : DashboardSaveResult.Forbidden);
     }
 }

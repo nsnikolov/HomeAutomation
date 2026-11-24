@@ -76,7 +76,7 @@ public sealed class Migrations(Database database)
     }
 
     public async Task<bool> VerifyAsync(CancellationToken cancellationToken, bool includeDaikin = false, bool includeEwelink = false,
-        bool includeTuya = false, bool includePreferences = false)
+        bool includeTuya = false, bool includePreferences = false, bool includeDashboard = false)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
         try
@@ -90,6 +90,7 @@ public sealed class Migrations(Database database)
                 (includeEwelink || !name.EndsWith(".009_ewelink_relay_preferences.sql", StringComparison.Ordinal)) &&
                 !name.EndsWith(EwelinkReceiveTimeMigration, StringComparison.Ordinal) &&
                 (includeTuya || !name.EndsWith(".005_tuya_cloud.sql", StringComparison.Ordinal)) &&
+                (includeDashboard || !name.EndsWith(".011_monitoring_dashboard.sql", StringComparison.Ordinal)) &&
                 (includePreferences || !name.EndsWith(".006_device_view_preferences.sql", StringComparison.Ordinal)))
                 .All(installed.Contains);
         }

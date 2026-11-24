@@ -64,6 +64,7 @@ internal static class MonitoringEndpoints
                 : Results.NotFound());
         property.MapGet("/telemetry", HistoryAsync);
         property.MapDevicePreferences();
+        property.MapDashboard();
     }
 
     private static async Task<IResult> HistoryAsync(long propertyId, long? endpointId, string metric, DateTimeOffset? from,

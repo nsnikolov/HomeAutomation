@@ -113,3 +113,16 @@ export type DaikinState = {
   status: string; lastSuccess: string | null; manage: boolean; writes: boolean
   devices: DaikinDevice[]; unassigned: DaikinDevice[]
 }
+export type DashboardValue = { id: string; sourceKey: string; label: string | null }
+export type DashboardWidget = { id: string; title: string; mode: 'compact' | 'detailed'; navigationSource: string | null; values: DashboardValue[] }
+export type DashboardGroup = { id: string; title: string; hidden: boolean; collapsed: boolean; widgets: DashboardWidget[] }
+export type DashboardReading = {
+  number: number | null; flag: boolean | null; code: string | null; observedAt: string
+  provenance: 'provider' | 'serverReceived' | 'simulated'
+}
+export type DashboardSource = {
+  key: string; provider: 'growatt' | 'daikin' | 'ewelink' | 'tuya' | 'simulator'
+  deviceId: string; deviceName: string; channel: string | null; metric: Metric; unit: string | null
+  route: string; reading: DashboardReading | null
+}
+export type DashboardSnapshot = { revision: string; canEdit: boolean; groups: DashboardGroup[]; sources: DashboardSource[] }
