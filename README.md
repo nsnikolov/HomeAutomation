@@ -107,6 +107,26 @@ Select the property, open **Dashboard**, and choose **Configure dashboard**. Add
 
 Readings come from saved Growatt, Daikin ONECTA, eWeLink and Smart Life / Tuya data. Simulator readings appear only when selected and are labeled. Each reading is green for less than five minutes, blue from five minutes to under one hour, and gray from one hour onward. The tooltip or detailed view shows the recorded timestamp and provenance. Missing or inaccessible sources display an em dash while retaining the binding. Groups and widgets with more than two responsive rows have independent **Show all** and **Collapse** controls.
 
+### Assign the initial owner of Countryside House
+
+Migration 002 seeded Countryside House before a local account existed. The separate `--bootstrap-user` operation granted Viewer access. To assign ownership to the sole Viewer of the seeded property, first confirm that the backend database settings point to the intended Home Automation database. Then, from the repository root in a separate PowerShell session, enter the sole member's exact sign-in email and run the explicit administrative command.
+
+```powershell
+$env:PropertyAdmin__AccountEmail = Read-Host 'Sole member sign-in email'
+try {
+    dotnet run --project src/backend/HomeAutomation.Api -- --promote-initial-owner
+    if ($LASTEXITCODE -ne 0) { throw 'Ownership promotion did not complete.' }
+} finally {
+    Remove-Item Env:PropertyAdmin__AccountEmail
+}
+```
+
+The command checks that property 1 is the seeded `countryside` property and that the confirmed account is its sole Viewer. It updates that one membership. Running it again for the same sole Owner is safe. The command needs permission to read the property and account and update the property membership. Reload the dashboard after success to see **Configure dashboard**.
+
+### Create a new property with an owner
+
+Use `dotnet run --project src/backend/HomeAutomation.Api -- --create-property` in a separate administrative session. Set `PropertyAdmin__AccountEmail` to the existing creator account's sign-in email, `PropertyAdmin__SiteKey` to a unique lowercase key such as `city-home`, `PropertyAdmin__Name` to the display name, and `PropertyAdmin__TimeZone` to an IANA zone such as `Europe/Sofia`. The command inserts the property and its creator's Owner membership in one transaction. An existing site key causes the command to fail before any membership changes.
+
 ## Growatt read-only monitoring
 
 Sign in and choose **Live Growatt** in the property sidebar to open the inverter detail page. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.

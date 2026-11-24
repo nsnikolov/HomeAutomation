@@ -22,7 +22,16 @@ using MySqlConnector;
 var migrate = args.Contains("--migrate", StringComparer.Ordinal);
 var bootstrap = args.Contains("--bootstrap-user", StringComparer.Ordinal);
 var discoverGrowatt = args.Contains("--discover-growatt", StringComparer.Ordinal);
-var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not ("--migrate" or "--bootstrap-user" or "--discover-growatt")).ToArray());
+var createProperty = args.Contains("--create-property", StringComparer.Ordinal);
+var promoteInitialOwner = args.Contains("--promote-initial-owner", StringComparer.Ordinal);
+if ((createProperty || promoteInitialOwner) && (migrate || bootstrap || discoverGrowatt || (createProperty && promoteInitialOwner)))
+{
+    Console.Error.WriteLine("Run a property administration command by itself.");
+    Environment.ExitCode = 1;
+    return;
+}
+var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not
+    ("--migrate" or "--bootstrap-user" or "--discover-growatt" or "--create-property" or "--promote-initial-owner")).ToArray());
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 builder.Services.AddProblemDetails();
@@ -116,6 +125,7 @@ builder.Services.AddSingleton(services =>
 });
 TuyaService.Register(builder.Services);
 builder.Services.AddScoped<IdentityStore>();
+builder.Services.AddSingleton<PropertyAdministration>();
 builder.Services.AddIdentityCore<LocalUser>(options =>
 {
     options.Password.RequiredLength = 14;
@@ -183,13 +193,14 @@ if (discoverGrowatt)
     return;
 }
 
-if (migrate || bootstrap)
+if (migrate || bootstrap || createProperty || promoteInitialOwner)
 {
     using var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
     try
     {
         if (migrate) await app.Services.GetRequiredService<Migrations>().ApplyAsync(operation.Token);
         if (bootstrap) await SessionEndpoints.BootstrapAsync(app.Services, app.Configuration, operation.Token);
+        if (createProperty || promoteInitialOwner) await PropertyAdminCommands.RunAsync(app, createProperty, operation.Token);
     }
     catch (MySqlException error)
     {
