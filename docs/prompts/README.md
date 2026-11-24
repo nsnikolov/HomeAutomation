@@ -48,3 +48,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 44. 2026-11-24 · [Dashboard — Fix Freshness Thresholds and Add Compact/Detailed Toggle](0044-dashboard-freshness-and-view-toggle.md)
 45. 2026-11-24 · [Dashboard — Fix Actual Freshness Colors and Improve Expand/Collapse Controls](0045-dashboard-colors-and-expansion.md)
 46. 2026-11-24 · [HomeAutomation — Improve Freshness Colors and Add Widget-Level View Toggle](0046-dashboard-widget-view-and-colors.md)
+47. 2026-11-24 · [HomeAutomation — Compact Widget Header Icons and Brighter Green](0047-dashboard-widget-icons-and-brighter-green.md)

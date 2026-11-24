@@ -216,16 +216,16 @@ h3 { font-size: .98rem; font-weight: 650; }
 }
 .monitor-linked { cursor: pointer; }
 .monitor-linked:hover { border-color: #a5c6be; }
-.monitor-widget-header { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-bottom: 5px; }
-.monitor-widget-header h3 { flex: 1 1 56px; min-width: 0; overflow-wrap: anywhere; }
-.monitor-widget-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
-.monitor-widget-link { display: grid; place-items: center; width: 26px; height: 28px; color: #214e59; border-radius: 5px; }
-.monitor-widget-link:hover { background: #e5ecef; }
+.monitor-widget-header { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
+.monitor-widget-header h3 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.monitor-widget-actions { display: flex; flex: none; align-items: center; gap: 4px; margin-left: auto; }
+.monitor-widget-icon { display: grid; place-items: center; width: 30px; height: 30px; color: #214e59; border-radius: 5px; }
+.monitor-widget-icon:hover, .monitor-widget-icon:focus-visible { background: #e5ecef; }
 .monitor-measure { border-radius: 5px; padding: 4px 6px; background: #f4f4f4; color: #525252; overflow-wrap: anywhere; }
 .monitor-measure-label, .monitor-measure-detail { display: block; color: #525252; font-size: .74rem; line-height: 1.35; }
 .monitor-measure strong { display: inline-block; font-size: .92rem; font-variant-numeric: tabular-nums; }
 .monitor-detailed .monitor-measure-detail { margin-top: 4px; }
-.monitor-measure .monitor-age-fresh { color: #007f36; }
+.monitor-measure .monitor-age-fresh { color: #00a344; }
 .monitor-measure .monitor-age-aging { color: #006aca; }
 .monitor-measure .monitor-age-old { color: #666666; }
 .monitor-measure .monitor-age-missing { color: #595959; }
@@ -237,8 +237,6 @@ h3 { font-size: .98rem; font-weight: 650; }
 .monitor-view-toggle button { color: #344b60; border-radius: 5px; padding: 5px 9px; min-height: 30px; font-size: .82rem; font-weight: 650; }
 .monitor-view-toggle button:hover { background: #fff; }
 .monitor-view-toggle button[aria-pressed="true"] { color: #fff; background: #225c53; }
-.monitor-widget-actions .monitor-view-toggle { padding: 2px; }
-.monitor-widget-actions .monitor-view-toggle button { padding: 3px 5px; min-height: 24px; font-size: .71rem; }
 .monitor-expand { margin-top: 5px; padding: 4px 5px; border-radius: 4px; font-size: .77rem; font-weight: 650; color: #185b57; }
 .monitor-expand:hover { text-decoration: underline; }
 .monitor-empty { max-width: 560px; padding: 18px; }

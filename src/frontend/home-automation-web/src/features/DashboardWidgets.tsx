@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowUpRight, ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ChevronRight, Rows2, Rows3 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import type { DashboardGroup, DashboardReading, DashboardSource, DashboardValue, DashboardWidget, Property } from '../shared/types'
 import { metricLabels } from './Devices'
@@ -165,6 +165,10 @@ export function MonitoringWidget({ widget, sources, property, now, preview = fal
   const [local, setLocal] = useState<{ mode: DashboardWidget['mode']; generation?: number }>()
   const localMode = local?.generation === presentation?.generation ? local?.mode : undefined
   const mode = localMode ?? presentation?.mode ?? widget.mode
+  const nextMode = mode === 'compact' ? 'detailed' : 'compact'
+  const ViewIcon = mode === 'compact' ? Rows3 : Rows2
+  const viewLabel = `Show ${nextMode} view for ${widget.title}`
+  const navigationLabel = `Open ${widget.title}`
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(undefined,
     { dateStyle: 'full', timeStyle: 'long', timeZone: property.timeZone }), [property.timeZone])
   const target = widget.navigationSource && sources.get(widget.navigationSource)
@@ -180,10 +184,12 @@ export function MonitoringWidget({ widget, sources, property, now, preview = fal
     <div className="monitor-widget-header">
       <h3>{widget.title}</h3>
       {!preview && <div className="monitor-widget-actions">
-        <DashboardViewToggle label={`${widget.title} display mode`} selected={mode}
-          onSelect={mode => setLocal({ mode, generation: presentation?.generation })} />
-        {route && <Link className="monitor-widget-link" to={route} aria-label={`Open ${widget.title}`}>
-          <ArrowUpRight size={14} aria-hidden />
+        <button type="button" className="monitor-widget-icon" aria-label={viewLabel} title={viewLabel}
+          onClick={() => setLocal({ mode: nextMode, generation: presentation?.generation })}>
+          <ViewIcon size={16} aria-hidden />
+        </button>
+        {route && <Link className="monitor-widget-icon" to={route} aria-label={navigationLabel} title={navigationLabel}>
+          <ArrowUpRight size={16} aria-hidden />
         </Link>}
       </div>}
     </div>

@@ -121,9 +121,19 @@ describe('configurable dashboard', () => {
     expect(screen.queryByRole('button', { name: /on|off|switch/i })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Expand Electrical' }))
     expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
-    fireEvent.click(within(screen.getByRole('group', { name: 'Widget 1 display mode' })).getByRole('button', { name: 'Detailed' }))
+    const view = screen.getByRole('button', { name: 'Show detailed view for Widget 1' })
+    expect(view).toHaveAttribute('title', 'Show detailed view for Widget 1')
+    expect(view.querySelector('.lucide-rows-3')).toHaveAttribute('width', '16')
+    fireEvent.click(view)
+    const compactView = screen.getByRole('button', { name: 'Show compact view for Widget 1' })
+    expect(compactView).toBe(view)
+    expect(compactView).toHaveAttribute('title', 'Show compact view for Widget 1')
+    expect(compactView.querySelector('.lucide-rows-2')).toHaveAttribute('width', '16')
     expect(screen.queryByRole('heading', { name: 'Provider detail' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('link', { name: 'Open Widget 1' }))
+    const navigation = screen.getByRole('link', { name: 'Open Widget 1' })
+    expect(navigation).toHaveAttribute('title', 'Open Widget 1')
+    expect(navigation.querySelector('.lucide-arrow-up-right')).toHaveAttribute('width', '16')
+    fireEvent.click(navigation)
     expect(screen.getByRole('heading', { name: 'Provider detail' })).toBeInTheDocument()
   })
 
@@ -178,7 +188,7 @@ describe('configurable dashboard', () => {
     fireEvent.click(detailed)
     expect(acWidget).toHaveClass('monitor-detailed')
     expect(detailed).toHaveAttribute('aria-pressed', 'true')
-    expect(getComputedStyle(within(acWidget).getByText('21 °C')).color).toBe('rgb(0, 127, 54)')
+    expect(getComputedStyle(within(acWidget).getByText('21 °C')).color).toBe('rgb(0, 163, 68)')
     expect(getComputedStyle(within(acWidget).getByText('22 °C')).color).toBe('rgb(0, 106, 202)')
     expect(getComputedStyle(old).color).toBe('rgb(102, 102, 102)')
     expect(getComputedStyle(sensorWidget.querySelector('.monitor-measure-label')!).color).toBe('rgb(82, 82, 82)')
@@ -240,7 +250,7 @@ describe('configurable dashboard', () => {
     render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
     const global = within(await screen.findByRole('group', { name: 'Dashboard display mode' }))
     const widgetButton = (index: number, mode: 'Compact' | 'Detailed') =>
-      within(screen.getByRole('group', { name: `Widget ${index} display mode` })).getByRole('button', { name: mode })
+      screen.getByRole('button', { name: `Show ${mode.toLowerCase()} view for Widget ${index}` })
     const modes = (expected: string[]) => expected.forEach((mode, index) => {
       expect(screen.getByRole('heading', { name: `Widget ${index + 1}` }).closest('article')).toHaveClass(`monitor-${mode}`)
     })
@@ -249,7 +259,7 @@ describe('configurable dashboard', () => {
     modes(['detailed', 'compact', 'compact'])
     fireEvent.click(widgetButton(3, 'Detailed'))
     modes(['detailed', 'compact', 'detailed'])
-    expect(widgetButton(3, 'Detailed')).toHaveAttribute('aria-pressed', 'true')
+    expect(widgetButton(3, 'Compact').querySelector('.lucide-rows-2')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toHaveAttribute('aria-expanded', 'true')
     act(() => { client.setQueryData(['property', property.id, 'dashboard'], {
       ...snapshot, sources: [{ ...source, reading: { ...reading(42, 0), observedAt: new Date(Date.now() - 1000).toISOString() } }],
@@ -259,6 +269,7 @@ describe('configurable dashboard', () => {
 
     fireEvent.click(global.getByRole('button', { name: 'Compact' }))
     modes(['compact', 'compact', 'compact'])
+    expect(widgetButton(1, 'Detailed').querySelector('.lucide-rows-3')).toBeInTheDocument()
     fireEvent.click(widgetButton(2, 'Detailed'))
     modes(['compact', 'detailed', 'compact'])
     expect(screen.getByRole('button', { name: 'Expand Electrical' })).toHaveAttribute('aria-expanded', 'false')
