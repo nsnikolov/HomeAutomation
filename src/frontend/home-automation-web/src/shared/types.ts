@@ -5,6 +5,7 @@ export type Metric =
   | 'humidity' | 'switchOn' | 'targetTemperature' | 'operatingMode'
   | 'gridVoltage' | 'gridFrequency' | 'gridImportPower' | 'pvVoltage' | 'pv1Voltage' | 'warningStatus'
   | 'acOutputVoltage' | 'inverterLoadPercent' | 'acChargingPower' | 'acInputPower'
+  | 'pvEnergyToday' | 'outputEnergyToday' | 'batteryDischargedEnergyToday'
   | 'outdoorTemperature' | 'fanSpeed'
   | 'leavingWaterTemperature' | 'targetLeavingWaterTemperature' | 'heatingControlMode' | 'waterSetpointMode'
   | 'heatingWarning' | 'heatingEmergency'

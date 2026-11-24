@@ -7,7 +7,8 @@ public enum Metric
     SwitchOn, TargetTemperature, OperatingMode, GridVoltage, GridFrequency, GridImportPower, PvVoltage, WarningStatus,
     AcOutputVoltage, InverterLoadPercent, AcChargingPower, OutdoorTemperature, FanSpeed,
     LeavingWaterTemperature, TargetLeavingWaterTemperature, HeatingControlMode, WaterSetpointMode,
-    HeatingWarning, HeatingEmergency, Pv1Voltage, AcInputPower
+    HeatingWarning, HeatingEmergency, Pv1Voltage, AcInputPower,
+    PvEnergyToday, OutputEnergyToday, BatteryDischargedEnergyToday
 }
 
 public static class Telemetry
@@ -20,13 +21,22 @@ public static class Telemetry
         Metric.AcOutputVoltage => "V",
         Metric.GridFrequency => "Hz",
         Metric.Current => "A",
-        Metric.Energy => "kWh",
+        Metric.Energy or Metric.PvEnergyToday or Metric.OutputEnergyToday or Metric.BatteryDischargedEnergyToday => "kWh",
         Metric.BatterySoc or Metric.Humidity or Metric.InverterLoadPercent => "%",
         Metric.Temperature or Metric.TargetTemperature or Metric.OutdoorTemperature or
             Metric.LeavingWaterTemperature or Metric.TargetLeavingWaterTemperature => "°C",
         Metric.FanSpeed => "step",
         _ => null
     };
+
+    public static bool IsDailyEnergyCounter(Metric metric) =>
+        metric is Metric.PvEnergyToday or Metric.OutputEnergyToday or Metric.BatteryDischargedEnergyToday;
+
+    public static ReadingQuality DailyEnergyQuality(DateTimeOffset? observedAt, DateTimeOffset now,
+        TimeSpan maximumAge, TimeZoneInfo timeZone) =>
+        observedAt is { } at && TimeZoneInfo.ConvertTime(at, timeZone).Date == TimeZoneInfo.ConvertTime(now, timeZone).Date
+            ? Quality(observedAt, now, maximumAge)
+            : ReadingQuality.Missing;
 
     public static ReadingQuality Quality(DateTimeOffset? observedAt, DateTimeOffset now, TimeSpan maximumAge) =>
         observedAt switch
@@ -61,9 +71,10 @@ public sealed record Sample
     {
         if (Telemetry.Unit(metric) is null || !double.IsFinite(value) ||
             (metric is Metric.BatterySoc or Metric.Humidity && (value < 0 || value > 100)) ||
-            (metric is Metric.PvPower or Metric.HouseholdPower or Metric.Energy or Metric.Voltage or Metric.Current
+            (value < 0 && (Telemetry.IsDailyEnergyCounter(metric) ||
+                metric is Metric.PvPower or Metric.HouseholdPower or Metric.Energy or Metric.Voltage or Metric.Current
                 or Metric.GridVoltage or Metric.PvVoltage or Metric.Pv1Voltage or Metric.GridImportPower or Metric.GridFrequency
-                or Metric.AcOutputVoltage or Metric.InverterLoadPercent or Metric.AcChargingPower or Metric.AcInputPower && value < 0))
+                or Metric.AcOutputVoltage or Metric.InverterLoadPercent or Metric.AcChargingPower or Metric.AcInputPower)))
         {
             throw new ArgumentOutOfRangeException(nameof(value), "Invalid value for the metric.");
         }

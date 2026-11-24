@@ -86,16 +86,23 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
             // SPF pBat is positive for discharge. The domain uses positive for charging.
             if (batteryPower is { } watts)
                 inverter.Add(Sample.Numeric(Metric.BatteryPower, observedAt, watts == 0 ? 0 : -watts));
+            AddNumber(inverter, Metric.PvEnergyToday, OptionalNumber(reading.PvEnergyToday), observedAt);
+            AddNumber(inverter, Metric.OutputEnergyToday, OptionalNumber(reading.OutputEnergyToday), observedAt);
+            AddNumber(inverter, Metric.BatteryDischargedEnergyToday, OptionalNumber(reading.BatteryDischargedEnergyToday), observedAt);
             if (options.TelemetryDiagnostics)
                 logger?.LogInformation(
                     "Growatt {Role} latest storage fields at {ObservedAt}. vpv={PvVoltage}, vpv1={Pv1Kind}/{Pv1Mapped}, ppv={PvPower}, " +
                     "ipv={PvCurrentKind}, iChargePV1={PvChargingCurrentKind}, pAcInPut={AcInputKind}/{AcInputState}, " +
-                    "pAcCharge={AcCharging}, pBat={BatteryKind}/{BatteryState}, pCharge={ChargeKind}, pDischarge={DischargeKind}.",
+                    "pAcCharge={AcCharging}, pBat={BatteryKind}/{BatteryState}, pCharge={ChargeKind}, pDischarge={DischargeKind}, " +
+                    "daily energy mapped: epvToday={Pv}, eopDischrToday={Output}, eBatDisChargeToday={BatteryDischarge}.",
                     serial == options.MasterId ? "Master" : "Slave", observedAt, reading.Vpv.HasValue, reading.Vpv1.ValueKind, pv1 >= 0,
                     reading.Ppv.HasValue, reading.PvCurrent.ValueKind, reading.Pv1ChargingCurrent.ValueKind,
                     reading.AcInputPower.ValueKind, Describe(reading.AcInputPower, inputPower >= 0 ? inputPower : null),
                     reading.PAcCharge.HasValue, reading.BatteryPower.ValueKind, Describe(reading.BatteryPower, batteryPower),
-                    reading.ChargePower.ValueKind, reading.DischargePower.ValueKind);
+                    reading.ChargePower.ValueKind, reading.DischargePower.ValueKind,
+                    inverter.Exists(sample => sample.Metric == Metric.PvEnergyToday),
+                    inverter.Exists(sample => sample.Metric == Metric.OutputEnergyToday),
+                    inverter.Exists(sample => sample.Metric == Metric.BatteryDischargedEnergyToday));
             if (reading.WarnCode is >= 0)
                 inverter.Add(Sample.Status(Metric.WarningStatus, observedAt, reading.WarnCode.Value.ToString(CultureInfo.InvariantCulture)));
             var mode = ValidMode(reading.Spf5000StatusText) ? reading.Spf5000StatusText : reading.StatusText;

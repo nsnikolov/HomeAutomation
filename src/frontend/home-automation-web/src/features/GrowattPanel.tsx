@@ -23,9 +23,12 @@ const inverterMetricLabels = {
 
 const inverterPower = [
   { metric: 'activePower', label: 'Load/output power' },
-  { metric: 'acInputPower', label: 'AC input power' },
+  { metric: 'acInputPower', label: metricLabels.acInputPower },
   { metric: 'batteryPower', label: 'Battery charge/discharge' },
 ] as const
+
+const dailyEnergyMetrics = ['pvEnergyToday', 'outputEnergyToday', 'batteryDischargedEnergyToday'] as const
+const isDailyEnergy = (reading: Reading) => dailyEnergyMetrics.some(metric => metric === reading.metric)
 
 function deviceMetricLabel(metric: Reading['metric']) {
   return metric === 'gridFrequency' || metric === 'gridVoltage'
@@ -80,12 +83,13 @@ const isPvReading = (reading: Reading) => isPv1Reading(reading) || reading.metri
 function GrowattDeviceCard({ device, timeZone }: { device: Device; timeZone: string }) {
   const inverter = device.kind === 'inverter'
   const observations = device.endpoints.flatMap(endpoint => endpoint.measurements)
+  const dailyEnergy = observations.filter(isDailyEnergy)
   const latest = observations.map(reading => reading.observedAt).filter(at => at !== null)
     .sort((a, b) => Date.parse(b) - Date.parse(a))[0]
   const pvInputs = device.endpoints.filter(endpoint => endpoint.measurements.some(isPvReading))
   const pv1Endpoint = pvInputs.find(endpoint => endpoint.measurements.some(isPv1Reading)) ?? pvInputs[0]
   const details = device.endpoints.flatMap(endpoint => endpoint.measurements
-    .filter(reading => !inverter || (!isPvReading(reading) && !inverterPower.some(item => item.metric === reading.metric))).map(reading =>
+    .filter(reading => !inverter || (!isPvReading(reading) && !isDailyEnergy(reading) && !inverterPower.some(item => item.metric === reading.metric))).map(reading =>
       <div key={`${endpoint.id}:${reading.metric}`}><dt>{deviceMetricLabel(reading.metric)}</dt><dd><LiveReading reading={reading} /></dd></div>))
 
   return <Card className={inverter ? 'device-card growatt-device' : 'device-card growatt-device growatt-auxiliary'}
@@ -105,7 +109,16 @@ function GrowattDeviceCard({ device, timeZone }: { device: Device; timeZone: str
       <div className="growatt-pv-heading"><h4>AC and battery power</h4></div>
       <dl className="growatt-pv-readings">
         {inverterPower.map(({ metric, label }) =>
-          <div key={metric}><dt>{label}</dt><dd><LiveReading reading={observations.find(reading => reading.metric === metric)} /></dd></div>)}
+          <div key={metric}><dt title={metric === 'acInputPower' ? 'Measured at this inverter’s AC input after the transfer switch' : undefined}>{label}</dt><dd><LiveReading reading={observations.find(reading => reading.metric === metric)} /></dd></div>)}
+      </dl>
+    </div>}
+    {inverter && dailyEnergy.length > 0 && <div className="growatt-reading-panel">
+      <div className="growatt-pv-heading"><h4>Energy today</h4></div>
+      <dl className="growatt-pv-readings">
+        {dailyEnergyMetrics.map(metric => {
+          const reading = dailyEnergy.find(item => item.metric === metric)
+          return reading && <div key={metric}><dt>{metricLabels[metric]}</dt><dd><LiveReading reading={reading} /></dd></div>
+        })}
       </dl>
     </div>}
     {!!details.length && <dl className="device-readings">{details}</dl>}

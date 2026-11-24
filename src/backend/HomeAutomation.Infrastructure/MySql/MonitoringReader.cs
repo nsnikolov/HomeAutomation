@@ -102,6 +102,7 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             new DeviceAlert(row.DeviceId, row.DeviceName, row.Code, Utc(row.OccurredAt))).ToArray();
         var now = timeProvider.GetUtcNow();
         var freshness = TimeSpan.FromSeconds(provider == "growatt" ? growatt.FreshnessSeconds : simulator.FreshnessSeconds);
+        var growattTimeZone = provider == "growatt" ? TimeZoneInfo.FindSystemTimeZoneById(growatt.TimeZone) : null;
 
         return new PropertyState(devices.Select(device =>
         {
@@ -123,6 +124,13 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
         {
             var metric = Enum.Parse<Metric>(row.Metric);
             var observedAt = Utc(row.ObservedAt);
+            if (growattTimeZone is not null && Telemetry.IsDailyEnergyCounter(metric))
+            {
+                var quality = Telemetry.DailyEnergyQuality(observedAt, now, freshness, growattTimeZone);
+                return quality == ReadingQuality.Missing
+                    ? new MetricReading(metric, Telemetry.Unit(metric), null, null, null, null, quality)
+                    : new MetricReading(metric, Telemetry.Unit(metric), observedAt, row.Number, null, null, quality);
+            }
             return new MetricReading(metric, Telemetry.Unit(metric), observedAt, row.Number, row.Flag, row.Code,
                 Telemetry.Quality(observedAt, now, freshness));
         }

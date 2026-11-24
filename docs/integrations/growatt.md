@@ -93,3 +93,21 @@ A separate read-only `queryDevicesHistoricalData` call returned the same source 
 ## Low-battery shutdown and uneven recovery
 
 For a suspected outage, examine the timestamps for falling SOC, any reported warnings or faults, and the last observation from each inverter. During recovery, the live view highlights when Growatt reports Master online and Slave offline. Existing telemetry and device alerts keep their timestamps. This pattern can guide a local inspection of the Slave after grid restoration. Confirmation of the full sequence requires independent grid or ATS readings and a documented low-battery indicator. The dashboard has read-only monitoring.
+
+## Daily energy on the SPF 5000 ES
+
+The Growatt page shows **Energy today** under each inverter when the scheduled V4 storage response supplies one of the counters below. The values are native kWh counters. Zero is valid. Each card shows its own inverter's readings, and the shared battery and Solar Installation cards have no daily total.
+
+| Growatt field | Daily measurement | Treatment |
+| --- | --- | --- |
+| `epvToday` | PV generation | Shown per inverter. |
+| `eopDischrToday` | Energy delivered through the inverter output | Shown as **Load/output energy** per inverter. |
+| `eBatDisChargeToday` | Battery discharge through the inverter | Shown per inverter. |
+| `eChargeToday`, `eacChargeToday` | Generic charging or AC charging energy | No verified SPF counter for total battery charging from all sources. AC charging only covers one source. |
+| `eToUserToday`, `eacDisChargeToday` | Grid-to-user or AC bypass/load energy | No verified SPF counter for all AC input energy. Bypass energy covers a different flow. |
+
+The V4 storage example includes the three mapped fields. The SPF register documentation distinguishes inverter-output, AC charging, AC bypass and battery discharge energy. The **Import from grid** power label refers to the particular inverter's AC input after the transfer switch. It measures instantaneous watts, and source attribution still depends on the switch. [Growatt V4 storage latest fields](https://www.showdoc.com.cn/2540838290984246/11292918042831939) · [Growatt SPF register documentation](https://static.frigolit.net/files/Growatt_SPF5000_Modbus_Protocol_v0.14_2020-10-16.pdf#page=18)
+
+The existing MySQL telemetry tables store observations by property, device endpoint, metric and provider timestamp. The configured Growatt time zone determines the local date, which is `Europe/Sofia` for this installation. The monitoring API shows the latest counter within the current local day and applies the existing freshness window. Prior-day readings remain in storage and are excluded from today's values at midnight. The normal poll fills in the new day's values as they arrive. This uses the existing scheduled request, storage deduplication and backoff.
+
+On November 24, 2026, a normal `queryLastData` poll supplied all three counters for both installed inverters. The monitoring reader returned six fresh kWh values from MySQL, with no daily counters on the installation or shared battery.

@@ -136,6 +136,9 @@ public sealed class GrowattCloudClient(HttpClient http, GrowattOptions options, 
         public double? PAcCharge { get; init; }
         [JsonPropertyName("pAcInPut")] public JsonElement AcInputPower { get; init; }
         [JsonPropertyName("pBat")] public JsonElement BatteryPower { get; init; }
+        [JsonPropertyName("epvToday")] public JsonElement PvEnergyToday { get; init; }
+        [JsonPropertyName("eopDischrToday")] public JsonElement OutputEnergyToday { get; init; }
+        [JsonPropertyName("eBatDisChargeToday")] public JsonElement BatteryDischargedEnergyToday { get; init; }
         [JsonPropertyName("pCharge")] public JsonElement ChargePower { get; init; }
         [JsonPropertyName("pDischarge")] public JsonElement DischargePower { get; init; }
         [JsonPropertyName("ipv")] public JsonElement PvCurrent { get; init; }

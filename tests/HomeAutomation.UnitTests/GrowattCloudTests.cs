@@ -136,11 +136,12 @@ public sealed class GrowattCloudTests
             return Json("""
                 {"code":0,"data":{"storage":[
                   {"serialNum":"fixture-S","time":"2026-11-21 13:56:00","ppv":900,"vpv1":111.8,"vGrid":229,"capacity":90,"vBat":51.3,
-                   "outPutPower":"187.5","pAcCharge":0,"pAcInPut":"126.4","pBat":80.5,"lost":true,"errorCode":3},
+                   "outPutPower":"187.5","pAcCharge":0,"pAcInPut":"126.4","pBat":80.5,"lost":true,"errorCode":3,
+                   "epvToday":0,"eopDischrToday":null,"eBatDisChargeToday":-1},
                   {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","ppv":"840","vpv":102,"vpv1":"109.4","vGrid":230,"freqGrid":50,
                    "outPutPower":303,"outPutVolt":241,"loadPercent":20.3,"pAcCharge":46,"pAcInPut":118.8,"pBat":"-51.25",
                    "capacity":49,"vBat":52.7,"warnCode":4,"faultCode":6,"lost":false,
-                   "spf5000StatusText":"Battery Discharging"}
+                   "spf5000StatusText":"Battery Discharging","epvToday":"3.4","eopDischrToday":4.5,"eBatDisChargeToday":"1.7"}
                 ]}}
                 """);
         });
@@ -178,9 +179,25 @@ public sealed class GrowattCloudTests
         VerifyInverterPower(Assert.Single(batch.Devices, device => device.ExternalId == options.MasterId), 303, 46, 118.8, 51.25);
         var shared = Assert.Single(batch.Devices, device => device.ExternalId == GrowattMapper.SharedBatteryId);
         Assert.DoesNotContain(Assert.Single(shared.Endpoints).Samples, sample => sample.Metric == Metric.BatteryPower);
+        Assert.DoesNotContain(Assert.Single(shared.Endpoints).Samples, sample => Telemetry.IsDailyEnergyCounter(sample.Metric));
+        VerifyEnergy(Assert.Single(slave.InverterReadings, IsDailyEnergy), Metric.PvEnergyToday, 0, slave.ObservedAt);
+        Assert.Collection(master.InverterReadings.Where(IsDailyEnergy),
+            reading => VerifyEnergy(reading, Metric.PvEnergyToday, 3.4, master.ObservedAt),
+            reading => VerifyEnergy(reading, Metric.OutputEnergyToday, 4.5, master.ObservedAt),
+            reading => VerifyEnergy(reading, Metric.BatteryDischargedEnergyToday, 1.7, master.ObservedAt));
         Assert.Equal(Connectivity.Offline, slave.Connectivity);
         Assert.Equal("3", slave.FaultCode);
         Assert.Empty(slave.SharedBatteryReadings);
+
+        static bool IsDailyEnergy(Sample sample) => Telemetry.IsDailyEnergyCounter(sample.Metric);
+
+        static void VerifyEnergy(Sample sample, Metric metric, double number, DateTimeOffset observedAt)
+        {
+            Assert.Equal(metric, sample.Metric);
+            Assert.Equal(number, sample.Number);
+            Assert.Equal("kWh", Telemetry.Unit(metric));
+            Assert.Equal(observedAt, sample.ObservedAt);
+        }
 
         static void VerifyInverterPower(DeviceObservation device, double output, double charging, double input, double battery)
         {
@@ -191,6 +208,22 @@ public sealed class GrowattCloudTests
             Assert.Equal(battery, Assert.Single(samples, sample => sample.Metric == Metric.BatteryPower).Number);
             Assert.DoesNotContain(samples, sample => sample.Metric is Metric.GridImportPower or Metric.HouseholdPower);
         }
+    }
+
+    [Theory]
+    [InlineData(1, 22)]
+    [InlineData(7, 21)]
+    public void DailyEnergyRollsOverAtSofiaMidnightInWinterAndSummer(int month, int midnightUtcHour)
+    {
+        var midnight = new DateTimeOffset(2026, month, 15, midnightUtcHour, 0, 0, TimeSpan.Zero);
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Sofia");
+        var maxAge = TimeSpan.FromMinutes(15);
+        var lastReading = midnight.AddMinutes(-1);
+
+        Assert.Equal(ReadingQuality.Fresh, Telemetry.DailyEnergyQuality(lastReading, lastReading, maxAge, zone));
+        Assert.Equal(ReadingQuality.Missing, Telemetry.DailyEnergyQuality(lastReading, midnight, maxAge, zone));
+        Assert.Equal(ReadingQuality.Fresh, Telemetry.DailyEnergyQuality(midnight, midnight, maxAge, zone));
+        Assert.Equal(ReadingQuality.Stale, Telemetry.DailyEnergyQuality(midnight, midnight.AddMinutes(16), maxAge, zone));
     }
 
     [Fact]

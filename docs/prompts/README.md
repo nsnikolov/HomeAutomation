@@ -40,3 +40,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 36. 2026-11-23 · [Investigate missing Daikin target temperature controls for dx23 devices](0036-daikin-dx23-target-controls.md)
 37. 2026-11-23 · [Growatt SPF 5000 ES — Fix PV Display and Missing Power Metrics](0037-growatt-pv-and-power-metrics.md)
 38. 2026-11-23 · [Diagnose Missing Growatt AC Input and Battery Power](0038-growatt-latest-power-diagnosis.md)
+39. 2026-11-24 · [HomeAutomation — Growatt Daily Energy Statistics (MVP)](0039-growatt-daily-energy.md)

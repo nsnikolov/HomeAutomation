@@ -59,12 +59,14 @@ describe('Monitoring dashboard', () => {
             reading('pv1Voltage', 'V', 109.4), reading('pvVoltage', 'V', 102), reading('pvPower', 'W', 800),
             reading('activePower', 'W', 303), reading('acChargingPower', 'W', 46), reading('gridVoltage', 'V', 230),
             reading('acInputPower', 'W', 349), reading('batteryPower', 'W', 45),
+            reading('pvEnergyToday', 'kWh', 3.2), reading('outputEnergyToday', 'kWh', 4.3, 'stale'),
           ] }] },
         { ...meter, id: 2, name: 'Growatt slave', kind: 'inverter',
           endpoints: [
             { id: 2, name: 'PV 1', capabilities: [], measurements: [
               reading('pvVoltage', 'V', 105), reading('activePower', 'W', 0, 'stale'),
               reading('batteryPower', 'W', -35),
+              reading('pvEnergyToday', 'kWh', 0),
             ] },
             { id: 3, name: 'PV 2', capabilities: [], measurements: [reading('pvPower', 'W', 70, 'stale')] },
           ] },
@@ -83,8 +85,13 @@ describe('Monitoring dashboard', () => {
     expect(within(slave).queryByText('Current', { exact: true })).not.toBeInTheDocument()
     expect(within(master).getByText('Load/output power').nextElementSibling).toHaveTextContent('303 W')
     expect(within(master).getByText('AC charging power').nextElementSibling).toHaveTextContent('46 W')
-    expect(within(master).getByText('AC input power').nextElementSibling).toHaveTextContent('349 W')
-    expect(within(slave).getByText('AC input power').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(within(master).getByText('Import from grid').nextElementSibling).toHaveTextContent('349 W')
+    expect(within(slave).getByText('Import from grid').nextElementSibling).toHaveTextContent('Unavailable')
+    expect(screen.getAllByRole('heading', { name: 'Energy today' })).toHaveLength(2)
+    expect(within(master).getByText('PV generation', { exact: true }).nextElementSibling).toHaveTextContent('3.2 kWh')
+    expect(within(master).getByText('Load/output energy').nextElementSibling).toHaveTextContent('4.3 kWh (stale)')
+    expect(within(slave).getByText('PV generation', { exact: true }).nextElementSibling).toHaveTextContent('0 kWh')
+    expect(within(slave).queryByText('Load/output energy')).not.toBeInTheDocument()
     expect(within(master).getByText('Battery charge/discharge').nextElementSibling).toHaveTextContent('Charging · 45 W')
     expect(within(slave).getByText('Battery charge/discharge').nextElementSibling).toHaveTextContent('Discharging · 35 W')
     expect(within(master).queryByText('Inverter output')).not.toBeInTheDocument()
@@ -120,7 +127,7 @@ describe('Monitoring dashboard', () => {
       expect(inverter.getByText('PV input power').nextElementSibling).toHaveTextContent(/^0 W$/)
       expect(inverter.getByText('No PV generation reported')).toBeInTheDocument()
       expect(inverter.getByText('Battery charge/discharge').nextElementSibling).toHaveTextContent('Idle · 0 W')
-      expect(inverter.getByText('AC input power').nextElementSibling).toHaveTextContent(
+      expect(inverter.getByText('Import from grid').nextElementSibling).toHaveTextContent(
         role === 'master' ? /^0 W$/ : /^0 W \(stale\)$/)
     }
   })
