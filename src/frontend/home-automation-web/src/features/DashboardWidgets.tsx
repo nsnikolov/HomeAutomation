@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ChevronRight } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import type { DashboardGroup, DashboardReading, DashboardSource, DashboardValue, DashboardWidget, Property } from '../shared/types'
 import { metricLabels } from './Devices'
@@ -14,6 +14,8 @@ const freshnessLabels = {
 }
 const provenanceLabels = { provider: 'Provider observation', serverReceived: 'Server received', simulated: 'Simulated observation' }
 const numeric = new Intl.NumberFormat(undefined, { maximumFractionDigits: 20 })
+
+export type DashboardPresentation = { mode: DashboardWidget['mode']; generation: number }
 
 function observationTime(reading: DashboardReading | null | undefined) {
   if (!reading || typeof reading.observedAt !== 'string') return null
@@ -67,13 +69,16 @@ export function useDashboardTime(sources: readonly DashboardSource[]) {
   return now
 }
 
-export function TwoRowGrid({ items, label, kind, initiallyCollapsed = true }: {
+function PreviewGrid({ items, label, kind, initiallyCollapsed = true, presentation, heading }: {
   items: { id: string; content: ReactNode }[]; label: string; kind: 'widgets' | 'values'; initiallyCollapsed?: boolean
+  presentation?: DashboardPresentation; heading?: ReactNode
 }) {
   const id = useId()
   const grid = useRef<HTMLDivElement>(null)
+  const group = kind === 'widgets'
+  const previewRows = group ? 1 : 2
   const [limit, setLimit] = useState<{ count: number; height: number } | null>(null)
-  const [override, setOverride] = useState<boolean>()
+  const [override, setOverride] = useState<{ expanded: boolean; generation: number | undefined }>()
   const itemKeys = items.map(item => item.id).join('|')
   useLayoutEffect(() => {
     const element = grid.current!
@@ -85,7 +90,7 @@ export function TwoRowGrid({ items, label, kind, initiallyCollapsed = true }: {
       for (const [index, child] of Array.from(element.children).entries()) {
         const item = child as HTMLElement
         if (item.offsetTop !== lastTop) { row++; lastTop = item.offsetTop }
-        if (row > 2) {
+        if (row > previewRows) {
           setLimit(previous => previous?.count === index && previous.height === height ? previous : { count: index, height })
           return
         }
@@ -98,11 +103,20 @@ export function TwoRowGrid({ items, label, kind, initiallyCollapsed = true }: {
     observer?.observe(element)
     Array.from(element.children).forEach(item => observer?.observe(item))
     return () => observer?.disconnect()
-  }, [itemKeys])
+  }, [itemKeys, previewRows])
 
-  const expanded = override ?? !initiallyCollapsed
+  const localExpanded = override?.generation === presentation?.generation ? override?.expanded : undefined
+  const expanded = localExpanded ?? (presentation ? presentation.mode === 'detailed' : !initiallyCollapsed)
+  const toggle = () => setOverride({ expanded: !expanded, generation: presentation?.generation })
   const cropped = !expanded && limit !== null
   return <>
+    {group && <div className="monitor-group-heading">
+      {heading}
+      <button type="button" className="monitor-group-toggle" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${label}`}
+        aria-controls={id} aria-expanded={expanded} onClick={toggle}>
+        {expanded ? <ChevronDown size={17} aria-hidden /> : <ChevronRight size={17} aria-hidden />}
+      </button>
+    </div>}
     <div id={id} className={cropped ? 'monitor-cropped' : undefined} style={cropped ? { maxHeight: limit.height } : undefined}>
       <div ref={grid} className={`monitor-grid monitor-grid-${kind}`}>
         {items.map((item, index) =>
@@ -110,34 +124,34 @@ export function TwoRowGrid({ items, label, kind, initiallyCollapsed = true }: {
             aria-hidden={cropped && index >= limit.count || undefined}
             data-overflow={cropped && index >= limit.count ? 'true' : undefined}>{item.content}</div>)}
       </div>
+      {group && items.length === 0 && <p className="muted">This group has no widgets.</p>}
     </div>
-    {limit && <button type="button" className="monitor-expand" aria-label={`${expanded ? 'Collapse' : 'Show all'} ${label}`}
-      aria-controls={id} aria-expanded={expanded} onClick={() => setOverride(!expanded)}>{expanded ? 'Collapse' : 'Show all'}</button>}
+    {!group && limit && <button type="button" className="monitor-expand" aria-label={`${expanded ? 'Collapse' : 'Show all'} ${label}`}
+      aria-controls={id} aria-expanded={expanded} onClick={toggle}>{expanded ? 'Collapse' : 'Show all'}</button>}
   </>
 }
 
-export function DashboardGroups({ groups, sources, property, now, viewMode }: {
+export function DashboardGroups({ groups, sources, property, now, presentation }: {
   groups: DashboardGroup[]; sources: Map<string, DashboardSource>; property: Property; now: number
-  viewMode?: DashboardWidget['mode']
+  presentation?: DashboardPresentation
 }) {
   return <div className="monitor-groups">
     {groups.filter(group => !group.hidden).map(group => <section key={group.id} className="monitor-group" aria-labelledby={`group-${group.id}`}>
-      <h2 id={`group-${group.id}`}>{group.title}</h2>
-      {group.widgets.length === 0 ? <p className="muted">This group has no widgets.</p> :
-        <TwoRowGrid label={group.title} kind="widgets" initiallyCollapsed={group.collapsed}
-          items={group.widgets.map(widget => ({ id: widget.id, content:
-            <MonitoringWidget widget={widget} sources={sources} property={property} now={now} viewMode={viewMode} />,
-          }))} />}
+      <PreviewGrid label={group.title} kind="widgets" initiallyCollapsed={group.collapsed} presentation={presentation}
+        heading={<h2 id={`group-${group.id}`}>{group.title}</h2>}
+        items={group.widgets.map(widget => ({ id: widget.id, content:
+          <MonitoringWidget widget={widget} sources={sources} property={property} now={now} presentation={presentation} />,
+        }))} />
     </section>)}
   </div>
 }
 
-export function MonitoringWidget({ widget, sources, property, now, preview = false, viewMode }: {
+export function MonitoringWidget({ widget, sources, property, now, preview = false, presentation }: {
   widget: DashboardWidget; sources: Map<string, DashboardSource>; property: Property; now: number; preview?: boolean
-  viewMode?: DashboardWidget['mode']
+  presentation?: DashboardPresentation
 }) {
   const navigate = useNavigate()
-  const mode = viewMode ?? widget.mode
+  const mode = presentation?.mode ?? widget.mode
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(undefined,
     { dateStyle: 'full', timeStyle: 'long', timeZone: property.timeZone }), [property.timeZone])
   const target = widget.navigationSource && sources.get(widget.navigationSource)
@@ -151,7 +165,7 @@ export function MonitoringWidget({ widget, sources, property, now, preview = fal
       if (event.target instanceof Element && !event.target.closest('a,button') && !window.getSelection()?.toString()) void navigate(route)
     } : undefined}>
     <h3>{route ? <Link to={route}>{widget.title}<ArrowUpRight size={14} aria-hidden /></Link> : widget.title}</h3>
-    <TwoRowGrid label={widget.title} kind="values" items={widget.values.map(value => ({
+    <PreviewGrid label={widget.title} kind="values" presentation={presentation} items={widget.values.map(value => ({
       id: value.id, content: <Measurement value={value} source={sources.get(value.sourceKey)} now={now}
         dateFormat={dateFormat} detailed={mode === 'detailed'} />,
     }))} />

@@ -46,3 +46,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 42. 2026-11-24 · [HomeAutomation — Fix Initial Property Ownership](0042-fix-initial-property-ownership.md)
 43. 2026-11-24 · [Fix Dashboard Configuration Save — HTTP 500](0043-dashboard-save-http-500.md)
 44. 2026-11-24 · [Dashboard — Fix Freshness Thresholds and Add Compact/Detailed Toggle](0044-dashboard-freshness-and-view-toggle.md)
+45. 2026-11-24 · [Dashboard — Fix Actual Freshness Colors and Improve Expand/Collapse Controls](0045-dashboard-colors-and-expansion.md)

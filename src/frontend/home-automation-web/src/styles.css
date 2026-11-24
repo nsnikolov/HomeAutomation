@@ -198,7 +198,12 @@ h3 { font-size: .98rem; font-weight: 650; }
 }
 .monitor-groups, .monitor-editor, .monitor-editor-fields { display: grid; gap: 18px; }
 .monitor-group { min-width: 0; }
-.monitor-group > h2 { color: #30485d; margin-bottom: 8px; }
+.monitor-group-heading { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.monitor-group-heading h2 { color: #30485d; overflow-wrap: anywhere; }
+.monitor-group-toggle {
+  display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 5px; color: #30485d;
+}
+.monitor-group-toggle:hover { background: #e5ecef; }
 .monitor-grid { position: relative; display: grid; align-items: start; gap: 8px; }
 .monitor-grid-widgets { grid-template-columns: repeat(auto-fill, minmax(min(100%, 252px), 1fr)); }
 .monitor-grid-values { grid-template-columns: repeat(auto-fit, minmax(min(100%, 105px), 1fr)); gap: 5px; }
@@ -215,14 +220,14 @@ h3 { font-size: .98rem; font-weight: 650; }
 .monitor-widget h3 a { display: flex; align-items: center; justify-content: space-between; gap: 7px; color: #214e59; }
 .monitor-widget h3 a:hover { text-decoration: underline; }
 .monitor-widget h3 a svg { flex: none; }
-.monitor-measure { border-radius: 5px; padding: 4px 6px; background: #f3f6f8; overflow-wrap: anywhere; }
-.monitor-measure-label, .monitor-measure-detail { display: block; color: #47596c; font-size: .74rem; line-height: 1.35; }
+.monitor-measure { border-radius: 5px; padding: 4px 6px; background: #f4f4f4; color: #525252; overflow-wrap: anywhere; }
+.monitor-measure-label, .monitor-measure-detail { display: block; color: #525252; font-size: .74rem; line-height: 1.35; }
 .monitor-measure strong { display: inline-block; font-size: .92rem; font-variant-numeric: tabular-nums; }
 .monitor-detailed .monitor-measure-detail { margin-top: 4px; }
-.monitor-age-fresh { color: #08624a; }
-.monitor-age-aging { color: #245b99; }
-.monitor-age-old { color: #5b5b5b; }
-.monitor-age-missing { color: #526071; }
+.monitor-measure .monitor-age-fresh { color: #08624a; }
+.monitor-measure .monitor-age-aging { color: #245b99; }
+.monitor-measure .monitor-age-old { color: #4a4a4a; }
+.monitor-measure .monitor-age-missing { color: #595959; }
 .monitor-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .monitor-view-toggle {
   display: inline-flex; align-items: center; gap: 2px; padding: 3px;

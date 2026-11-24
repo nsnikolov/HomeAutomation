@@ -2,16 +2,16 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Settings2 } from 'lucide-react'
 import { api, ApiError } from '../shared/api'
-import type { DashboardSource, DashboardWidget, Property } from '../shared/types'
+import type { DashboardSource, Property } from '../shared/types'
 import { Button, Card } from '../shared/ui'
 import { DashboardEditor, dashboardKey } from './DashboardEditor'
-import { DashboardGroups, useDashboardTime } from './DashboardWidgets'
+import { DashboardGroups, useDashboardTime, type DashboardPresentation } from './DashboardWidgets'
 
 const emptySources: DashboardSource[] = []
 
 export function Dashboard({ property, live }: { property: Property; live: boolean }) {
   const [editing, setEditing] = useState(false)
-  const [viewMode, setViewMode] = useState<DashboardWidget['mode']>()
+  const [presentation, setPresentation] = useState<DashboardPresentation>()
   const query = useQuery({
     queryKey: dashboardKey(property.id),
     queryFn: ({ signal }) => api.dashboard(property.id, signal),
@@ -27,9 +27,10 @@ export function Dashboard({ property, live }: { property: Property; live: boolea
       <h1>Dashboard</h1>
       {hasGroups && !editing && <div className="monitor-header-actions">
         <div className="monitor-view-toggle" role="group" aria-label="Dashboard display mode"
-          title="Select a mode for all widgets. Select it again to restore the saved modes.">
+          title="Compact collapses all groups and widgets. Detailed expands them.">
           {(['compact', 'detailed'] as const).map(mode => <button key={mode} type="button"
-            aria-pressed={viewMode === mode} onClick={() => setViewMode(current => current === mode ? undefined : mode)}>
+            aria-pressed={presentation?.mode === mode}
+            onClick={() => setPresentation(current => ({ mode, generation: (current?.generation ?? 0) + 1 }))}>
             {mode === 'compact' ? 'Compact' : 'Detailed'}
           </button>)}
         </div>
@@ -45,7 +46,7 @@ export function Dashboard({ property, live }: { property: Property; live: boolea
       {' '}<Button type="button" variant="outline" onClick={() => void query.refetch()}>Retry</Button>
     </p>}
     {snapshot && (editing && snapshot.canEdit ? <DashboardEditor property={property} snapshot={snapshot} done={() => setEditing(false)} />
-      : hasGroups ? <DashboardGroups groups={snapshot.groups} sources={sources} property={property} now={now} viewMode={viewMode} />
+      : hasGroups ? <DashboardGroups groups={snapshot.groups} sources={sources} property={property} now={now} presentation={presentation} />
       : <Card className="monitor-empty">
         <h2>No monitoring widgets yet</h2>
         <p>{snapshot.canEdit ? 'Create a group and choose measurements from devices assigned to this property.'

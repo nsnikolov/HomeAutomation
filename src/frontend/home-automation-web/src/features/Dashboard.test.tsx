@@ -1,9 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError } from '../shared/api'
-import type { DashboardGroup, DashboardReading, DashboardSnapshot, DashboardSource, DashboardWidget } from '../shared/types'
+import type { DashboardGroup, DashboardReading, DashboardSnapshot, DashboardSource } from '../shared/types'
 import { Dashboard } from './Dashboard'
 import { DashboardGroups, dashboardFreshness, useDashboardTime } from './DashboardWidgets'
 
@@ -31,6 +32,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
+
+function mockGridPositions(columns: () => number) {
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockReturnValue({ length: 1 } as DOMRectList)
+  vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
+    return Math.floor(Array.from(this.parentElement?.children ?? []).indexOf(this) / columns()) * 50
+  })
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(44)
+}
 
 describe('configurable dashboard', () => {
   it('uses the exact color boundaries and treats zero and textual readings as valid', () => {
@@ -69,17 +78,15 @@ describe('configurable dashboard', () => {
       observe() {}
       disconnect() { observers.delete(this.callback) }
     })
-    vi.spyOn(HTMLElement.prototype, 'getClientRects').mockReturnValue({ length: 1 } as DOMRectList)
-    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
-      return Math.floor(Array.from(this.parentElement?.children ?? []).indexOf(this) / columns) * 50
-    })
-    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(44)
-    const view = (sample: DashboardSource, viewMode?: DashboardWidget['mode']) => <MemoryRouter>
-      <DashboardGroups groups={groups} sources={new Map([[sample.key, sample]])} property={property} now={now} viewMode={viewMode} />
+    mockGridPositions(() => columns)
+    const view = (sample: DashboardSource) => <MemoryRouter>
+      <DashboardGroups groups={groups} sources={new Map([[sample.key, sample]])} property={property} now={now} />
     </MemoryRouter>
     const { rerender } = render(view(source))
     expect(screen.queryByRole('heading', { name: 'Widget 5' })).not.toBeInTheDocument()
-    const groupControl = screen.getByRole('button', { name: 'Show all Electrical' })
+    const groupControl = screen.getByRole('button', { name: 'Expand Electrical' })
+    expect(screen.getByRole('heading', { name: 'Electrical' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Widget 3' })).not.toBeInTheDocument()
     const first = screen.getByRole('heading', { name: 'Widget 1' }).closest('article')!
     expect(within(first).getAllByText('0 W')[0]).toHaveClass('monitor-age-aging')
     expect(within(first).getByText('—')).toHaveAttribute('title', expect.stringContaining('no longer available'))
@@ -90,15 +97,16 @@ describe('configurable dashboard', () => {
     expect(groupControl).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(groupControl)
     expect(screen.getByRole('heading', { name: 'Widget 5' })).toBeInTheDocument()
-    rerender(view({ ...source, reading: reading(42, 100) }, 'detailed'))
+    rerender(view({ ...source, reading: reading(42, 100) }))
     expect(within(first).getAllByText('42 W')[0]).toHaveClass('monitor-age-fresh')
-    expect(first).toHaveClass('monitor-detailed')
     expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
     expect(within(first).getByRole('button', { name: 'Collapse Widget 1' })).toBeInTheDocument()
     act(() => { columns = 3; observers.forEach(callback => callback()) })
-    expect(screen.queryByRole('button', { name: 'Collapse Electrical' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
+    expect(within(first).queryByRole('button', { name: 'Collapse Widget 1' })).not.toBeInTheDocument()
     act(() => { columns = 1; observers.forEach(callback => callback()) })
     expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
+    expect(within(first).getByRole('button', { name: 'Collapse Widget 1' })).toBeInTheDocument()
   })
 
   it('only navigates to the configured internal provider page', () => {
@@ -111,6 +119,9 @@ describe('configurable dashboard', () => {
       </Routes>
     </MemoryRouter>)
     expect(screen.queryByRole('button', { name: /on|off|switch/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Electrical' }))
+    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Provider detail' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('link', { name: 'Widget 1' }))
     expect(screen.getByRole('heading', { name: 'Provider detail' })).toBeInTheDocument()
   })
@@ -127,7 +138,7 @@ describe('configurable dashboard', () => {
     expect(catalog).not.toHaveBeenCalled()
   })
 
-  it('overrides widget modes in monitoring view and keeps each reading’s color and provenance', async () => {
+  it('computes neutral stale text in both dashboard modes using the production stylesheet', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(now)
     const daikin = { ...source, key: 'daikin:ac:Temperature', provider: 'daikin', deviceName: 'Kitchen AC', metric: 'temperature',
       unit: '°C', reading: reading(21, 5 * 60000 - 1) } satisfies DashboardSource
@@ -144,7 +155,10 @@ describe('configurable dashboard', () => {
     const load = vi.spyOn(api, 'dashboard').mockResolvedValue(snapshot)
     const catalog = vi.spyOn(api, 'dashboardSources')
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+    const browserStyles = readFileSync('src/styles.css', 'utf8')
+      .replace(/^@import "tailwindcss";/m, '').replace(/@theme inline\s*\{[^}]*\}/, '')
+    render(<QueryClientProvider client={client}><MemoryRouter><style>{browserStyles}</style>
+      <Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
 
     const compact = await screen.findByRole('button', { name: 'Compact' })
     const detailed = screen.getByRole('button', { name: 'Detailed' })
@@ -156,21 +170,61 @@ describe('configurable dashboard', () => {
     expect(screen.queryByRole('button', { name: 'Configure dashboard' })).not.toBeInTheDocument()
     fireEvent.click(compact)
     expect(sensorWidget).toHaveClass('monitor-compact')
+    const old = within(sensorWidget).getByText('0 °C')
+    expect(getComputedStyle(old).color).toBe('rgb(74, 74, 74)')
+    expect(getComputedStyle(old.closest('.monitor-measure')!).backgroundColor).toBe('rgb(244, 244, 244)')
     fireEvent.click(detailed)
     expect(acWidget).toHaveClass('monitor-detailed')
     expect(detailed).toHaveAttribute('aria-pressed', 'true')
-    expect(within(acWidget).getByText('21 °C')).toHaveClass('monitor-age-fresh')
-    expect(within(acWidget).getByText('22 °C')).toHaveClass('monitor-age-aging')
-    const old = within(sensorWidget).getByText('0 °C')
-    expect(old).toHaveClass('monitor-age-old')
+    expect(getComputedStyle(within(acWidget).getByText('21 °C')).color).toBe('rgb(8, 98, 74)')
+    expect(getComputedStyle(within(acWidget).getByText('22 °C')).color).toBe('rgb(36, 91, 153)')
+    expect(getComputedStyle(old).color).toBe('rgb(74, 74, 74)')
+    expect(getComputedStyle(sensorWidget.querySelector('.monitor-measure-label')!).color).toBe('rgb(82, 82, 82)')
+    expect(getComputedStyle(sensorWidget.querySelector('.monitor-measure-detail')!).color).toBe('rgb(82, 82, 82)')
     expect(old).toHaveAttribute('title', expect.stringContaining('2026-11-24T09:00:00+02:00'))
     expect(sensorWidget.querySelector('.monitor-measure-detail')).toHaveTextContent('Smart Life / Tuya · Kitchen thermometer')
     expect(sensorWidget.querySelector('.monitor-measure-detail')).toHaveTextContent('Provider observation')
     fireEvent.click(detailed)
-    expect(acWidget).toHaveClass('monitor-compact')
+    expect(acWidget).toHaveClass('monitor-detailed')
     expect(sensorWidget).toHaveClass('monitor-detailed')
     expect(load).toHaveBeenCalledTimes(1)
     expect(catalog).not.toHaveBeenCalled()
+  })
+
+  it('reapplies global expansion and allows independent group and widget overrides between actions', async () => {
+    mockGridPositions(() => 1)
+    const second = { ...groups[0], id: 'climate', title: 'Climate',
+      widgets: groups[0].widgets.map((widget, index) => ({ ...widget, id: `climate-${index}`, title: `Climate widget ${index + 1}` })) }
+    const load = vi.spyOn(api, 'dashboard').mockResolvedValue({ canEdit: false, revision: 'fixture', sources: [source], groups: [...groups, second] })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+
+    const compact = await screen.findByRole('button', { name: 'Compact' })
+    const detailed = screen.getByRole('button', { name: 'Detailed' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Electrical' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show all Widget 1' }))
+    expect(screen.getByRole('button', { name: 'Expand Climate' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: 'Show all Climate widget 1' })).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(detailed)
+    expect(screen.getByRole('button', { name: 'Collapse Climate' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: 'Collapse Climate widget 1' })).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Climate widget 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Climate' }))
+    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: 'Collapse Widget 1' })).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(detailed)
+    expect(screen.getByRole('button', { name: 'Collapse Climate widget 1' })).toHaveAttribute('aria-expanded', 'true')
+
+    fireEvent.click(compact)
+    expect(screen.getByRole('button', { name: 'Expand Electrical' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: 'Expand Climate' })).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Climate' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show all Climate widget 1' }))
+    fireEvent.click(compact)
+    expect(screen.getByRole('button', { name: 'Expand Climate' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: 'Show all Climate widget 1' })).toHaveAttribute('aria-expanded', 'false')
+    expect(load).toHaveBeenCalledTimes(1)
   })
 
   it('creates, previews and saves a property layout from assigned sources', async () => {
