@@ -44,3 +44,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 40. 2026-11-24 · [HomeAutomation — Milestone 5A: Configurable Multi-Property Monitoring Dashboard](0040-configurable-monitoring-dashboard.md)
 41. 2026-11-24 · [Investigate missing Configure dashboard action](0041-dashboard-configure-permissions.md)
 42. 2026-11-24 · [HomeAutomation — Fix Initial Property Ownership](0042-fix-initial-property-ownership.md)
+43. 2026-11-24 · [Fix Dashboard Configuration Save — HTTP 500](0043-dashboard-save-http-500.md)

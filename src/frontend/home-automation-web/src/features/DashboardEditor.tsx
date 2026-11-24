@@ -54,9 +54,11 @@ export function DashboardEditor({ property, snapshot, done }: { property: Proper
       setValidation('A dashboard can contain up to 512 measurements.')
     } else saving.mutate()
   }
-  const saveError = saving.error instanceof ApiError && saving.error.status === 409
+  const error = saving.error instanceof ApiError ? saving.error : undefined
+  const saveError = error?.status === 409
     ? 'Someone changed this dashboard. Cancel and reopen the editor to load the latest layout.'
-    : saving.error instanceof ApiError && saving.error.status === 400
+    : error?.detail ? `${error.detail} Your edits are still open.`
+    : error?.status === 400
       ? 'Check your titles and measurements. An assigned source may have changed since you opened the editor.'
       : 'The dashboard could not be saved. Your edits are still open.'
 

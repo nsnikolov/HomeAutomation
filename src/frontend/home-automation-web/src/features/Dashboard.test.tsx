@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../shared/api'
+import { api, ApiError } from '../shared/api'
 import type { DashboardGroup, DashboardReading, DashboardSnapshot, DashboardSource } from '../shared/types'
 import { Dashboard } from './Dashboard'
 import { DashboardGroups, dashboardFreshness, useDashboardTime } from './DashboardWidgets'
@@ -128,7 +128,7 @@ describe('configurable dashboard', () => {
     vi.spyOn(api, 'dashboardSources').mockResolvedValue([source])
     const save = vi.spyOn(api, 'saveDashboard').mockImplementation(async (_, __, saved) => {
       snapshot = { ...snapshot, groups: saved, sources: [source] }
-    })
+    }).mockRejectedValueOnce(new ApiError(503, undefined, 'Ask a database administrator to check storage permissions.'))
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
     fireEvent.click(await screen.findByRole('button', { name: 'Configure dashboard' }))
@@ -146,6 +146,11 @@ describe('configurable dashboard', () => {
     expect(screen.getByText('0 W')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Heater monitor' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ask a database administrator to check storage permissions. Your edits are still open.')
+    expect(screen.getByLabelText('Group title')).toHaveValue('Utilities')
+    expect(screen.getByLabelText('Widget title')).toHaveValue('Heater monitor')
+    expect(screen.getByLabelText('Measurement', { exact: true })).toHaveValue(source.key)
+    fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }))
     expect(await screen.findByRole('link', { name: 'Heater monitor' })).toHaveAttribute('href', source.route)
     expect(save).toHaveBeenCalledWith(3, 'initial', [expect.objectContaining({
       title: 'Utilities', widgets: [expect.objectContaining({ mode: 'detailed', navigationSource: source.key })],
@@ -155,6 +160,6 @@ describe('configurable dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }))
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Dashboard editor' })).not.toBeInTheDocument())
     expect(screen.getByText('Metered load')).toBeInTheDocument()
-    expect(save).toHaveBeenCalledTimes(2)
+    expect(save).toHaveBeenCalledTimes(3)
   })
 })

@@ -101,7 +101,15 @@ Use `docker compose logs migrate app` to inspect startup and `docker compose dow
 
 ## Configurable monitoring dashboard
 
-Apply migration `011_monitoring_dashboard.sql` with the migration account using `dotnet run --project src/backend/HomeAutomation.Api -- --migrate`. Restart the API and reload the frontend. The runtime account uses its existing schema-scoped DML privileges. Each property has a shared layout. Its members can read it, and members with the `Operator`, `Admin`, or `Owner` property role can save it. A bootstrapped `Viewer` account stays read-only. Ask the property administrator to grant the intended account an editor role through the property's membership record.
+Apply migration `011_monitoring_dashboard.sql` with the migration account using `dotnet run --project src/backend/HomeAutomation.Api -- --migrate`. Each property has a shared layout. Its members can read it, and members with the `Operator`, `Admin`, or `Owner` property role can save it. A bootstrapped `Viewer` account stays read-only. Ask the property administrator to grant the intended account an editor role through the property's membership record.
+
+The runtime account needs `DELETE` on `dashboard_groups` so a save can replace a property's layout in one transaction. After applying migration 011, run `SELECT CURRENT_USER();` through a runtime connection to verify the exact MySQL account and host. Then have the database administrator apply the table-specific grant, using that account and the configured schema. The Windows setup example uses the following grant.
+
+```sql
+GRANT DELETE ON homeautomation.dashboard_groups TO 'home_runtime'@'127.0.0.1';
+```
+
+InnoDB cascades removal to the matching widgets and values. The grant is scoped to the group table, and application membership checks still govern who can edit each property. If a save failed for missing storage permissions, apply the grant and retry **Save dashboard** in the open editor.
 
 Select the property, open **Dashboard**, and choose **Configure dashboard**. Add a group, add a widget, and select assigned devices and measurements. Preview changes before saving. A widget can link to the provider page or, for a simulated source, the simulator device detail. The dashboard remains read-only even when the destination offers device controls.
 

@@ -9,3 +9,6 @@ GRANT CREATE, REFERENCES, SELECT, INSERT, UPDATE ON homeautomation.* TO 'home_mi
 
 CREATE USER 'home_runtime'@'127.0.0.1' IDENTIFIED BY RANDOM PASSWORD;
 GRANT SELECT, INSERT, UPDATE ON homeautomation.* TO 'home_runtime'@'127.0.0.1';
+
+-- After migration 011 creates dashboard_groups, apply this table-specific grant as the database administrator.
+-- GRANT DELETE ON homeautomation.dashboard_groups TO 'home_runtime'@'127.0.0.1';

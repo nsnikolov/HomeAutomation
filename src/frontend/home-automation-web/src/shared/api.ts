@@ -2,7 +2,7 @@ import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePage
 import type { DashboardGroup, DashboardSnapshot, DashboardSource } from './types'
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, public readonly code?: string) {
+  constructor(public readonly status: number, public readonly code?: string, public readonly detail?: string) {
     super(`Request failed (${status})`)
   }
 }
@@ -14,9 +14,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     credentials: 'same-origin',
   })
   if (!response.ok) {
-    const error: { status?: unknown } | null = path.startsWith('/daikin/') || path.startsWith('/ewelink/') || path.startsWith('/tuya/')
+    const dashboardSave = options.method === 'PUT' && /^\/properties\/\d+\/dashboard$/.test(path)
+    const error: { status?: unknown; detail?: unknown } | null = dashboardSave ||
+      path.startsWith('/daikin/') || path.startsWith('/ewelink/') || path.startsWith('/tuya/')
       ? await response.json().catch(() => null) : null
-    throw new ApiError(response.status, typeof error?.status === 'string' ? error.status : undefined)
+    throw new ApiError(response.status, typeof error?.status === 'string' ? error.status : undefined,
+      dashboardSave && (response.status === 400 || response.status === 503) && typeof error?.detail === 'string'
+        ? error.detail : undefined)
   }
   return response.status === 204 ? undefined as T : await response.json() as T
 }

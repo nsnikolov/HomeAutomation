@@ -5,9 +5,11 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
+using Dapper;
 using HomeAutomation.Application;
 using HomeAutomation.Api;
 using HomeAutomation.Domain;
+using HomeAutomation.Infrastructure.Daikin;
 using HomeAutomation.Infrastructure.Ewelink;
 using HomeAutomation.Infrastructure.MySql;
 using HomeAutomation.Infrastructure.Tuya;
@@ -25,6 +27,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using MySqlConnector;
 
 namespace HomeAutomation.IntegrationTests;
 
@@ -88,8 +91,118 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         var value = new DashboardValue(Guid.NewGuid().ToString("D"), "ewelink:fixture:SwitchOn", null);
         var widget = new DashboardWidget(Guid.NewGuid().ToString("D"), "Fixture", "compact", "https://example.test/", [value]);
         var group = new DashboardGroup(Guid.NewGuid().ToString("D"), "Fixture group", false, true, [widget]);
-        Assert.Equal(HttpStatusCode.BadRequest,
-            (await editor.PutAsJsonAsync(path, dashboard with { Groups = [group] })).StatusCode);
+        var invalid = await editor.PutAsJsonAsync(path, dashboard with { Groups = [group] });
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        var problem = await invalid.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("navigation destination", problem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [DashboardSaveMySqlFact]
+    public async Task DashboardSaveUsesTheScopedRuntimeGrantForBulgarianMultiProviderWidgets()
+    {
+        const string path = "/api/v1/properties/1/dashboard";
+        const string schema = "homeautomation_dashboard_save_test";
+        var adminConnection = new MySqlConnectionStringBuilder(Environment.GetEnvironmentVariable("HOMEAUTOMATION_DASHBOARD_SAVE_TEST_MYSQL")!);
+        var runtimeConnection = new MySqlConnectionStringBuilder(Environment.GetEnvironmentVariable("HOMEAUTOMATION_DASHBOARD_SAVE_TEST_RUNTIME")!);
+        foreach (var connection in new[] { adminConnection, runtimeConnection })
+        {
+            Assert.Equal(schema, connection.Database);
+            Assert.Contains(connection.Server, new[] { "127.0.0.1", "localhost" });
+        }
+        Assert.Equal(adminConnection.Port, runtimeConnection.Port);
+        Assert.Equal("dashboard_save_runtime", runtimeConnection.UserID);
+        var admin = new Database(adminConnection.ConnectionString);
+        await new Migrations(admin).ApplyAsync(default);
+        await using var db = await admin.OpenAsync(default);
+        await db.ExecuteAsync("""
+            INSERT INTO identity_users(id,email,normalized_email,password_hash,security_stamp,concurrency_stamp)
+            VALUES('dashboard-editor','editor@example.test','EDITOR@EXAMPLE.TEST','fixture','fixture','fixture');
+            INSERT INTO property_memberships(property_id,user_id,role_code) VALUES(1,'dashboard-editor','Owner');
+            """);
+        var at = new DateTimeOffset(2026, 11, 24, 12, 0, 0, TimeSpan.Zero);
+        var daikin = new DaikinStore(admin, TimeProvider.System, new DaikinOptions());
+        var kitchen = new DaikinDevice("fixture", "kitchen", "Kitchen AC", "dx4", Connectivity.Online, at, at,
+            null, null, 22, null, null, null, null, null, DaikinMapping.ReadOnlyControls, null);
+        await daikin.ClaimAsync("dashboard-editor", default);
+        await daikin.SaveSnapshotAsync("dashboard-editor", kitchen, default);
+        var daikinRow = Assert.Single(await daikin.DevicesAsync("dashboard-editor", default));
+        Assert.True(await daikin.AssignAsync("dashboard-editor", daikinRow.Id, 1, null, default));
+
+        var tuyaOptions = new TuyaOptions
+        {
+            DataCenter = "central-europe", AccessId = "fixture-project", AccessSecret = "fixture-secret",
+            UserId = "fixture-user", OperatorEmail = "editor@example.test"
+        };
+        var tuya = new TuyaStore(admin, tuyaOptions);
+        await tuya.SaveAsync(new TuyaDevice("fixture-sensor", "Kitchen thermometer", "fixture", "Fixture", Connectivity.Online,
+            at, at, at, true, [new("temp", Metric.Temperature, Capability.TemperatureMeasurement, "C", 0, null, null)],
+            [new("temp", 21, null, at, true)]), default);
+        var tuyaRow = Assert.Single(await tuya.DevicesAsync(default));
+        await tuya.AssignAsync(tuyaRow.Id, 1, null, default);
+
+        var runtime = new Database(runtimeConnection.ConnectionString);
+        using var testHost = host.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IMonitoringDashboard>();
+            services.AddSingleton<IMonitoringDashboard>(new MonitoringDashboardStore(runtime, new Migrations(runtime), tuyaOptions));
+        }));
+        using var client = testHost.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Test-User", "dashboard-editor");
+        var csrf = await client.GetFromJsonAsync<JsonElement>("/api/v1/session/csrf");
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", csrf.GetProperty("token").GetString());
+        var snapshot = await client.GetFromJsonAsync<DashboardSnapshot>(path);
+        Assert.NotNull(snapshot);
+        Assert.True(snapshot.CanEdit);
+        var values = new[]
+        {
+            new DashboardValue(Id(), $"daikin:{daikinRow.Id}:Temperature", "Климатик"),
+            new DashboardValue(Id(), $"tuya:{tuyaRow.Id}:temp", "Термометър"),
+        };
+        var widget = new DashboardWidget(Id(), "Температура", "detailed", values[0].SourceKey, values);
+        var group = new DashboardGroup(Id(), "СТЪРГЕЛ", false, true, [widget]);
+        var update = new DashboardUpdate(snapshot.Revision, [group]);
+        var denied = await client.PutAsJsonAsync(path, update);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, denied.StatusCode);
+        using var problem = JsonDocument.Parse(await denied.Content.ReadAsStringAsync());
+        Assert.Equal("Dashboard storage permissions are incomplete.", problem.RootElement.GetProperty("title").GetString());
+        Assert.DoesNotContain("dashboard_save_runtime", problem.RootElement.GetRawText(), StringComparison.Ordinal);
+
+        await db.ExecuteAsync("GRANT DELETE ON homeautomation_dashboard_save_test.dashboard_groups TO 'dashboard_save_runtime'@'localhost'");
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsJsonAsync(path, update)).StatusCode);
+        var projection = await client.GetFromJsonAsync<JsonElement>(path);
+        Assert.Equal("СТЪРГЕЛ", projection.GetProperty("groups")[0].GetProperty("title").GetString());
+        var saved = projection.GetProperty("groups")[0].GetProperty("widgets")[0];
+        Assert.Equal("Температура", saved.GetProperty("title").GetString());
+        Assert.Equal(values.Select(value => value.SourceKey), saved.GetProperty("values").EnumerateArray()
+            .Select(value => value.GetProperty("sourceKey").GetString()));
+        Assert.Equal(new[] { "daikin", "tuya" }, projection.GetProperty("sources").EnumerateArray()
+            .Select(source => source.GetProperty("provider").GetString()));
+
+        var revision = projection.GetProperty("revision").GetString()!;
+        var invalid = widget with { Values = [new(Id(), "tuya:unknown:temp", null)], NavigationSource = null };
+        var bad = await client.PutAsJsonAsync(path, new DashboardUpdate(revision, [group with { Widgets = [invalid] }]));
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        var invalidSource = await bad.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("no longer available for this property", invalidSource.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsJsonAsync(path, new DashboardUpdate(revision, []))).StatusCode);
+        var cleared = await client.GetFromJsonAsync<DashboardSnapshot>(path);
+        Assert.Empty(cleared!.Groups);
+        await using var scoped = await runtime.OpenAsync(default);
+        var childDelete = await Assert.ThrowsAsync<MySqlException>(() =>
+            scoped.ExecuteAsync("DELETE FROM dashboard_widgets WHERE 1=0"));
+        Assert.Equal(MySqlErrorCode.TableAccessDenied, childDelete.ErrorCode);
+
+        static string Id() => Guid.NewGuid().ToString("D");
+    }
+
+    private sealed class DashboardSaveMySqlFact : FactAttribute
+    {
+        public DashboardSaveMySqlFact()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("HOMEAUTOMATION_DASHBOARD_SAVE_TEST_MYSQL")) ||
+                string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("HOMEAUTOMATION_DASHBOARD_SAVE_TEST_RUNTIME")))
+                Skip = "Set the admin and runtime connection strings for a fresh disposable dashboard save database.";
+        }
     }
 
     [Fact]
