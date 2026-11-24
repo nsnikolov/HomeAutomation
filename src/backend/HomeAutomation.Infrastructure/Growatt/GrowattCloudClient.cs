@@ -14,14 +14,14 @@ public sealed class GrowattCloudClient(HttpClient http, GrowattOptions options, 
     public async Task<int> CountPlantsAsync(CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "v1/plant/list?page=1&perpage=20");
-        var (result, retryAfter) = await SendAsync<PlantResult>(request, cancellationToken);
+        var (result, retryAfter, httpStatus) = await SendAsync<PlantResult>(request, GrowattOperation.PlantList, cancellationToken);
         if (result.ErrorCode != 0)
             throw new GrowattReadException(result.ErrorCode switch
             {
                 10008 or 10011 => GrowattFailure.Authorization,
                 10001 => GrowattFailure.Unavailable,
                 _ => GrowattFailure.InvalidData
-            }, retryAfter);
+            }, retryAfter, new(GrowattOperation.PlantList, httpStatus, result.ErrorCode));
 
         return result.Data is { Count: >= 0, Plants: not null } plants &&
             plants.Plants.Count == Math.Min(plants.Count.Value, 20) && plants.Plants.All(plant => plant is { Id: > 0 })
@@ -39,7 +39,7 @@ public sealed class GrowattCloudClient(HttpClient http, GrowattOptions options, 
         {
             using var request = Post("queryDeviceList", new KeyValuePair<string, string>("page",
                 page.ToString(CultureInfo.InvariantCulture)));
-            var result = await ReadV4Async<DevicePage>(request, cancellationToken);
+            var result = await ReadV4Async<DevicePage>(request, GrowattOperation.DeviceList, cancellationToken);
             if (result is not { Pages: >= 0, Count: >= 0, Data: not null } ||
                 (result.Count > 0 && result.Pages < page))
                 throw new GrowattReadException(GrowattFailure.InvalidData);
@@ -59,7 +59,7 @@ public sealed class GrowattCloudClient(HttpClient http, GrowattOptions options, 
     {
         using var request = Post("queryLastData", new("deviceType", "storage"),
             new("deviceSn", $"{options.MasterId},{options.SlaveId}"));
-        return await ReadV4Async<StorageData>(request, cancellationToken);
+        return await ReadV4Async<StorageData>(request, GrowattOperation.LatestStorage, cancellationToken);
     }
 
     private static HttpRequestMessage Post(string operation, params KeyValuePair<string, string>[] fields) =>
@@ -67,24 +67,26 @@ public sealed class GrowattCloudClient(HttpClient http, GrowattOptions options, 
 
     public void Dispose() => http.Dispose();
 
-    private async Task<T> ReadV4Async<T>(HttpRequestMessage request, CancellationToken cancellationToken) where T : class
+    private async Task<T> ReadV4Async<T>(HttpRequestMessage request, GrowattOperation operation,
+        CancellationToken cancellationToken) where T : class
     {
-        var (result, retryAfter) = await SendAsync<V4Response<T>>(request, cancellationToken);
-        return result.Code switch
+        var (result, retryAfter, httpStatus) = await SendAsync<V4Response<T>>(request, operation, cancellationToken);
+        if (result.Code == 0 && result.Data is not null) return result.Data;
+        var failure = result.Code switch
         {
-            0 when result.Data is not null => result.Data,
-            2 or 3 or 12 or 101 => throw new GrowattReadException(GrowattFailure.Authorization, retryAfter),
-            100 or 102 => throw new GrowattReadException(GrowattFailure.Throttled, retryAfter),
-            1 or 4 or 5 => throw new GrowattReadException(GrowattFailure.Unavailable, retryAfter),
-            _ => throw new GrowattReadException(GrowattFailure.InvalidData)
+            2 or 3 or 12 or 101 => GrowattFailure.Authorization,
+            100 or 102 => GrowattFailure.Throttled,
+            1 or 4 or 5 => GrowattFailure.Unavailable,
+            _ => GrowattFailure.InvalidData
         };
+        throw new GrowattReadException(failure, retryAfter, new(operation, httpStatus, result.Code));
     }
 
-    private async Task<(T Data, TimeSpan? RetryAfter)> SendAsync<T>(HttpRequestMessage request,
+    private async Task<(T Data, TimeSpan? RetryAfter, int HttpStatus)> SendAsync<T>(HttpRequestMessage request, GrowattOperation operation,
         CancellationToken cancellationToken) where T : class
     {
         if (!options.HasCloudToken())
-            throw new GrowattReadException(GrowattFailure.Authorization);
+            throw new GrowattReadException(GrowattFailure.Authorization, provider: new(operation));
 
         request.Headers.Add("token", options.ApiToken);
         using var response = await http.SendAsync(request, cancellationToken);
@@ -96,16 +98,17 @@ public sealed class GrowattCloudClient(HttpClient http, GrowattOptions options, 
                 HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => GrowattFailure.Authorization,
                 HttpStatusCode.TooManyRequests => GrowattFailure.Throttled,
                 _ => GrowattFailure.Unavailable
-            }, retryAfter);
+            }, retryAfter, new(operation, (int)response.StatusCode));
 
         try
         {
             var data = await response.Content.ReadFromJsonAsync<T>(Json, cancellationToken);
-            return (data ?? throw new GrowattReadException(GrowattFailure.InvalidData), retryAfter);
+            return (data ?? throw new GrowattReadException(GrowattFailure.InvalidData,
+                provider: new(operation, (int)response.StatusCode)), retryAfter, (int)response.StatusCode);
         }
         catch (JsonException)
         {
-            throw new GrowattReadException(GrowattFailure.InvalidData);
+            throw new GrowattReadException(GrowattFailure.InvalidData, provider: new(operation, (int)response.StatusCode));
         }
     }
 

@@ -57,7 +57,8 @@ internal sealed class GrowattWorker(IServiceScopeFactory scopes, GrowattOptions 
                     else
                     {
                         progress.Set(result.CircuitOpen ? "paused" : "degraded");
-                        logger.LogWarning("Growatt poll failed with {Failure}; next attempt after {Delay}.", result.Failure, delay);
+                        logger.LogWarning("Growatt poll failed with {Failure} for {Operation} (HTTP {HttpStatus}, provider code {ProviderCode}). Next attempt in {Delay}.",
+                            result.Failure, result.Provider?.Operation, result.Provider?.HttpStatus, result.Provider?.Code, delay);
                     }
                 }
                 else

@@ -49,11 +49,11 @@ public sealed class GrowattPoller(GrowattOptions options, GrowattMapper mapper, 
         }
         catch (GrowattReadException error) when (!stoppingToken.IsCancellationRequested)
         {
-            return Defer(error.Failure, error.RetryAfter);
+            return Defer(error.Failure, error.RetryAfter, error.Provider);
         }
     }
 
-    private GrowattPollResult Defer(GrowattFailure failure, TimeSpan? retryAfter = null)
+    private GrowattPollResult Defer(GrowattFailure failure, TimeSpan? retryAfter = null, GrowattProviderFailure? provider = null)
     {
         // A single delayed probe follows three consecutive failures.
         failures = Math.Min(failures + 1, 6);
@@ -62,8 +62,9 @@ public sealed class GrowattPoller(GrowattOptions options, GrowattMapper mapper, 
         var seconds = Math.Min(3600, baseSeconds * (1 << failures));
         if (circuitOpen) seconds = Math.Max(seconds, 900);
         var delay = TimeSpan.FromSeconds(seconds);
-        return new GrowattPollResult(null, retryAfter > delay ? retryAfter.Value : delay, failure, circuitOpen);
+        return new GrowattPollResult(null, retryAfter > delay ? retryAfter.Value : delay, failure, circuitOpen, provider);
     }
 }
 
-public sealed record GrowattPollResult(long? PropertyId, TimeSpan NextDelay, GrowattFailure? Failure, bool CircuitOpen);
+public sealed record GrowattPollResult(long? PropertyId, TimeSpan NextDelay, GrowattFailure? Failure, bool CircuitOpen,
+    GrowattProviderFailure? Provider = null);

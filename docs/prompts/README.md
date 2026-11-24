@@ -39,3 +39,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 35. 2026-11-23 · [Fix eWeLink WebSocket Electrical Timestamp Handling](0035-ewelink-electrical-timestamps.md)
 36. 2026-11-23 · [Investigate missing Daikin target temperature controls for dx23 devices](0036-daikin-dx23-target-controls.md)
 37. 2026-11-23 · [Growatt SPF 5000 ES — Fix PV Display and Missing Power Metrics](0037-growatt-pv-and-power-metrics.md)
+38. 2026-11-23 · [Diagnose Missing Growatt AC Input and Battery Power](0038-growatt-latest-power-diagnosis.md)

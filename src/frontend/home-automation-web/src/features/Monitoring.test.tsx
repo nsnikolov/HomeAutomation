@@ -110,7 +110,7 @@ describe('Monitoring dashboard', () => {
         ...meter, id: index + 1, name: `Growatt ${role}`, kind: 'inverter',
         endpoints: [{ id: index + 1, name: 'Main', capabilities: [], measurements: [
           reading('pv1Voltage', 'V', 110, 'stale'), reading('pvVoltage', 'V', 0), reading('pvPower', 'W', 0),
-          reading('batteryPower', 'W', 0),
+          reading('acInputPower', 'W', 0, index === 0 ? 'fresh' : 'stale'), reading('batteryPower', 'W', 0),
         ] }],
       })),
     } }} />)
@@ -120,6 +120,8 @@ describe('Monitoring dashboard', () => {
       expect(inverter.getByText('PV input power').nextElementSibling).toHaveTextContent(/^0 W$/)
       expect(inverter.getByText('No PV generation reported')).toBeInTheDocument()
       expect(inverter.getByText('Battery charge/discharge').nextElementSibling).toHaveTextContent('Idle · 0 W')
+      expect(inverter.getByText('AC input power').nextElementSibling).toHaveTextContent(
+        role === 'master' ? /^0 W$/ : /^0 W \(stale\)$/)
     }
   })
 

@@ -54,10 +54,21 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
             if (!DateTime.TryParseExact(reading.Time, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture,
                     DateTimeStyles.None, out var localTime) ||
                 zone.IsInvalidTime(localTime) || zone.IsAmbiguousTime(localTime))
+            {
+                if (options.TelemetryDiagnostics)
+                    logger?.LogInformation("Growatt {Role} latest storage observation skipped because its source time could not be resolved.",
+                        serial == options.MasterId ? "Master" : "Slave");
                 continue;
+            }
 
             var observedAt = new DateTimeOffset(localTime, zone.GetUtcOffset(localTime)).ToUniversalTime();
-            if (observedAt > receivedAt) continue;
+            if (observedAt > receivedAt)
+            {
+                if (options.TelemetryDiagnostics)
+                    logger?.LogInformation("Growatt {Role} latest storage observation skipped because its source time is in the future.",
+                        serial == options.MasterId ? "Master" : "Slave");
+                continue;
+            }
             var inverter = new List<Sample>();
             AddNumber(inverter, Metric.PvPower, reading.Ppv, observedAt);
             AddNumber(inverter, Metric.PvVoltage, reading.Vpv, observedAt);
@@ -77,13 +88,14 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
                 inverter.Add(Sample.Numeric(Metric.BatteryPower, observedAt, watts == 0 ? 0 : -watts));
             if (options.TelemetryDiagnostics)
                 logger?.LogInformation(
-                    "Growatt {Role} storage fields: vpv={PvVoltage}; vpv1={Pv1Kind}/{Pv1Mapped}; ppv={PvPower}; " +
-                    "ipv={PvCurrentKind}; iChargePV1={PvChargingCurrentKind}; pAcInPut={AcInputKind}/{AcInputMapped}; " +
-                    "pAcCharge={AcCharging}; pBat={BatteryKind}/{BatteryMapped}; pCharge={ChargeKind}; pDischarge={DischargeKind}.",
-                    serial == options.MasterId ? "Master" : "Slave", reading.Vpv.HasValue, reading.Vpv1.ValueKind, pv1 >= 0,
+                    "Growatt {Role} latest storage fields at {ObservedAt}. vpv={PvVoltage}, vpv1={Pv1Kind}/{Pv1Mapped}, ppv={PvPower}, " +
+                    "ipv={PvCurrentKind}, iChargePV1={PvChargingCurrentKind}, pAcInPut={AcInputKind}/{AcInputState}, " +
+                    "pAcCharge={AcCharging}, pBat={BatteryKind}/{BatteryState}, pCharge={ChargeKind}, pDischarge={DischargeKind}.",
+                    serial == options.MasterId ? "Master" : "Slave", observedAt, reading.Vpv.HasValue, reading.Vpv1.ValueKind, pv1 >= 0,
                     reading.Ppv.HasValue, reading.PvCurrent.ValueKind, reading.Pv1ChargingCurrent.ValueKind,
-                    reading.AcInputPower.ValueKind, inputPower >= 0, reading.PAcCharge.HasValue, reading.BatteryPower.ValueKind,
-                    batteryPower.HasValue, reading.ChargePower.ValueKind, reading.DischargePower.ValueKind);
+                    reading.AcInputPower.ValueKind, Describe(reading.AcInputPower, inputPower >= 0 ? inputPower : null),
+                    reading.PAcCharge.HasValue, reading.BatteryPower.ValueKind, Describe(reading.BatteryPower, batteryPower),
+                    reading.ChargePower.ValueKind, reading.DischargePower.ValueKind);
             if (reading.WarnCode is >= 0)
                 inverter.Add(Sample.Status(Metric.WarningStatus, observedAt, reading.WarnCode.Value.ToString(CultureInfo.InvariantCulture)));
             var mode = ValidMode(reading.Spf5000StatusText) ? reading.Spf5000StatusText : reading.StatusText;
@@ -120,6 +132,15 @@ public sealed class GrowattCloudSource(GrowattCloudClient client, GrowattOptions
             return number;
         return null;
     }
+
+    private static string Describe(JsonElement field, double? value) => field.ValueKind switch
+    {
+        JsonValueKind.Undefined => "absent",
+        JsonValueKind.Null => "null",
+        _ when value == 0 => "zero",
+        _ when value is not null => "mapped",
+        _ => "invalid"
+    };
 
     private static bool ValidMode(string? mode) => mode is { Length: > 0 and <= 32 } &&
         !string.IsNullOrWhiteSpace(mode) &&

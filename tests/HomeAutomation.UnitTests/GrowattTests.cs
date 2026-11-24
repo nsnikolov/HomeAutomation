@@ -96,7 +96,8 @@ public sealed class GrowattTests
         var store = new RecordingStore();
         var responses = new Queue<Func<GrowattSnapshot>>(
         [
-            () => throw new GrowattReadException(GrowattFailure.Throttled, TimeSpan.FromMinutes(45)),
+            () => throw new GrowattReadException(GrowattFailure.Throttled, TimeSpan.FromMinutes(45),
+                new(GrowattOperation.LatestStorage, 200, 102)),
             () => throw new TimeoutException(),
             () => throw new HttpRequestException(),
             () => new GrowattSnapshot([Report(options.MasterId, Now, 800, 46)], [])
@@ -106,6 +107,7 @@ public sealed class GrowattTests
         var throttled = await poller.PollAsync(source, store, default);
         Assert.Equal(TimeSpan.FromMinutes(45), throttled.NextDelay);
         Assert.Equal(GrowattFailure.Throttled, throttled.Failure);
+        Assert.Equal(new GrowattProviderFailure(GrowattOperation.LatestStorage, 200, 102), throttled.Provider);
         var timeout = await poller.PollAsync(source, store, default);
         Assert.Equal(GrowattFailure.Timeout, timeout.Failure);
         var disconnected = await poller.PollAsync(source, store, default);

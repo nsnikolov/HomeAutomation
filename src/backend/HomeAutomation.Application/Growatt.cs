@@ -22,11 +22,16 @@ public sealed record GrowattSnapshot(
     IReadOnlyList<Sample> InstallationReadings);
 
 public enum GrowattFailure { Timeout, Unavailable, Throttled, Authorization, InvalidData }
+public enum GrowattOperation { PlantList, DeviceList, LatestStorage }
 
-public sealed class GrowattReadException(GrowattFailure failure, TimeSpan? retryAfter = null) : Exception(failure.ToString())
+public sealed record GrowattProviderFailure(GrowattOperation Operation, int? HttpStatus = null, int? Code = null);
+
+public sealed class GrowattReadException(GrowattFailure failure, TimeSpan? retryAfter = null,
+    GrowattProviderFailure? provider = null) : Exception(failure.ToString())
 {
     public GrowattFailure Failure { get; } = failure;
     public TimeSpan? RetryAfter { get; } = retryAfter;
+    public GrowattProviderFailure? Provider { get; } = provider;
 }
 
 public interface IGrowattTelemetryStore

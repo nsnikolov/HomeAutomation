@@ -91,8 +91,34 @@ public sealed class GrowattCloudTests
         var failure = await Assert.ThrowsAsync<GrowattReadException>(() => client.CountStorageDevicesAsync(default));
         Assert.Equal(expected, failure.Failure);
         Assert.Equal(expected.ToString(), failure.Message);
+        Assert.Equal(GrowattOperation.DeviceList, failure.Provider?.Operation);
+        Assert.Equal(status, failure.Provider?.HttpStatus);
+        if (body == """{"code":102}""") Assert.Equal(102, failure.Provider?.Code);
         if (expected is GrowattFailure.Throttled or GrowattFailure.Unavailable)
             Assert.Equal(TimeSpan.FromMinutes(10), failure.RetryAfter);
+    }
+
+    [Fact]
+    public async Task LatestStorageThrottlePreservesEndpointCodeAndRetryDelay()
+    {
+        using var handler = new CloudHandler((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("queryDeviceList", StringComparison.Ordinal))
+                return Task.FromResult(Json(DevicePage));
+            var response = Json("""{"code":102,"message":"fixture provider text"}""");
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromMinutes(16));
+            return Task.FromResult(response);
+        });
+        using var http = CreateHttp(handler);
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var options = CloudOptions();
+        var clock = new FixedClock();
+        var source = new GrowattCloudSource(new GrowattCloudClient(http, options, clock), options, cache, clock);
+        var failure = await Assert.ThrowsAsync<GrowattReadException>(() => source.ReadAsync(default));
+        Assert.Equal(GrowattFailure.Throttled, failure.Failure);
+        Assert.Equal(new GrowattProviderFailure(GrowattOperation.LatestStorage, 200, 102), failure.Provider);
+        Assert.Equal(TimeSpan.FromMinutes(16), failure.RetryAfter);
+        Assert.DoesNotContain("fixture provider text", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -174,7 +200,7 @@ public sealed class GrowattCloudTests
             request.RequestUri!.AbsolutePath.EndsWith("queryDeviceList", StringComparison.Ordinal) ? Json(DevicePage) : Json("""
                 {"code":0,"data":{"storage":[
                   {"serialNum":"fixture-M","time":"2026-11-21 13:57:00","vpv":0,"ppv":0,"pAcInPut":0,"pBat":0,"ipv":0},
-                  {"serialNum":"fixture-S","time":"2026-11-21 13:57:00","vpv":127.65,"pAcInPut":-1,"pBat":"--","pCharge":50,"pDischarge":0}
+                  {"serialNum":"fixture-S","time":"2026-11-21 13:57:00","vpv":127.65,"pAcInPut":null,"pCharge":50,"pDischarge":0}
                 ]}}
                 """)));
         using var http = CreateHttp(handler);
@@ -194,8 +220,9 @@ public sealed class GrowattCloudTests
         var slave = Assert.Single(snapshot.Inverters, device => device.ExternalId == options.SlaveId);
         Assert.Equal(Metric.PvVoltage, Assert.Single(slave.InverterReadings).Metric);
         Assert.Equal(2, logger.Messages.Count);
-        Assert.Contains("pAcInPut=Number/True", logger.Messages[0], StringComparison.Ordinal);
-        Assert.Contains("pBat=String/False", logger.Messages[1], StringComparison.Ordinal);
+        Assert.Contains("pAcInPut=Number/zero", logger.Messages[0], StringComparison.Ordinal);
+        Assert.Contains("pAcInPut=Null/null", logger.Messages[1], StringComparison.Ordinal);
+        Assert.Contains("pBat=Undefined/absent", logger.Messages[1], StringComparison.Ordinal);
         Assert.All(logger.Messages, message =>
         {
             Assert.DoesNotContain("fixture-", message, StringComparison.Ordinal);
