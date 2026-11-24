@@ -42,3 +42,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 38. 2026-11-23 · [Diagnose Missing Growatt AC Input and Battery Power](0038-growatt-latest-power-diagnosis.md)
 39. 2026-11-24 · [HomeAutomation — Growatt Daily Energy Statistics (MVP)](0039-growatt-daily-energy.md)
 40. 2026-11-24 · [HomeAutomation — Milestone 5A: Configurable Multi-Property Monitoring Dashboard](0040-configurable-monitoring-dashboard.md)
+41. 2026-11-24 · [Investigate missing Configure dashboard action](0041-dashboard-configure-permissions.md)

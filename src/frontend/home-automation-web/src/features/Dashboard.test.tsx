@@ -110,6 +110,18 @@ describe('configurable dashboard', () => {
     expect(screen.getByRole('heading', { name: 'Provider detail' })).toBeInTheDocument()
   })
 
+  it('keeps an empty dashboard read-only when the API denies editing', async () => {
+    vi.spyOn(api, 'dashboard').mockResolvedValue({ groups: [], revision: 'initial', canEdit: false, sources: [] })
+    const catalog = vi.spyOn(api, 'dashboardSources')
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+
+    expect(await screen.findByRole('heading', { name: 'No monitoring widgets yet' })).toBeInTheDocument()
+    expect(screen.getByText('A property operator can configure this dashboard.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Configure dashboard' })).not.toBeInTheDocument()
+    expect(catalog).not.toHaveBeenCalled()
+  })
+
   it('creates, previews and saves a property layout from assigned sources', async () => {
     let snapshot: DashboardSnapshot = { groups: [], revision: 'initial', canEdit: true, sources: [] }
     vi.spyOn(api, 'dashboard').mockImplementation(async () => snapshot)

@@ -36,6 +36,8 @@ public sealed class DashboardMySqlTests
         var second = await Property("Second");
         var editor = await Member(first, "Operator");
         var viewer = await Member(first, "Viewer");
+        var admin = await Member(first, "Admin");
+        var owner = await Member(first, "Owner");
         var otherEditor = await Member(second, "Owner");
         var at = new DateTimeOffset(2026, 11, 24, 10, 30, 0, TimeSpan.Zero);
         var growatt = await WriteInverter(first, 0);
@@ -53,6 +55,14 @@ public sealed class DashboardMySqlTests
         var initial = await dashboard.ReadAsync(first, editor, default);
         Assert.True(initial.CanEdit);
         Assert.Empty(initial.Groups);
+        Assert.False((await dashboard.ReadAsync(first, viewer, default)).CanEdit);
+        foreach (var authorized in new[] { owner, admin, editor })
+        {
+            Assert.True((await dashboard.ReadAsync(first, authorized, default)).CanEdit);
+            Assert.NotNull(await dashboard.CatalogAsync(first, authorized, default));
+            Assert.Equal(DashboardSaveResult.Saved,
+                await dashboard.ReplaceAsync(first, authorized, new(initial.Revision, []), default));
+        }
         var relay = Assert.Single(firstCatalog, item => item.DeviceId == electrical && item.Metric == Metric.SwitchOn);
         var power = Assert.Single(firstCatalog, item => item.DeviceId == electrical && item.Metric == Metric.ActivePower);
         Assert.Equal("W", power.Unit);
