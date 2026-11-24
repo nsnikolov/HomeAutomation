@@ -113,7 +113,9 @@ InnoDB cascades removal to the matching widgets and values. The grant is scoped 
 
 Select the property, open **Dashboard**, and choose **Configure dashboard**. Add a group, add a widget, and select assigned devices and measurements. Preview changes before saving. A widget can link to the provider page or, for a simulated source, the simulator device detail. The dashboard remains read-only even when the destination offers device controls.
 
-Readings come from saved Growatt, Daikin ONECTA, eWeLink and Smart Life / Tuya data. Simulator readings appear only when selected and are labeled. Each reading is green for less than five minutes, blue from five minutes to under one hour, and gray from one hour onward. The tooltip or detailed view shows the recorded timestamp and provenance. Missing or inaccessible sources display an em dash while retaining the binding. Groups and widgets with more than two responsive rows have independent **Show all** and **Collapse** controls.
+Readings come from saved Growatt, Daikin ONECTA, eWeLink and Smart Life / Tuya data. Simulator readings appear only when selected and are labeled. Each reading is green for less than five minutes, blue from five minutes to under one hour, and gray from one hour onward. Age uses the recorded observation instant. The tooltip shows the original timestamp and provenance, and Detailed mode shows these details in the widget. Missing or inaccessible sources display an em dash while retaining the binding. Groups and widgets with more than two responsive rows have independent **Show all** and **Collapse** controls.
+
+Use **Compact** or **Detailed** in the Dashboard header to temporarily switch all widgets on the current dashboard. Select the active mode again to restore each widget's saved mode. The toggle keeps expanded groups and widgets open.
 
 ### Assign the initial owner of Countryside House
 

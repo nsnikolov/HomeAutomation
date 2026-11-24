@@ -221,7 +221,16 @@ h3 { font-size: .98rem; font-weight: 650; }
 .monitor-detailed .monitor-measure-detail { margin-top: 4px; }
 .monitor-age-fresh { color: #08624a; }
 .monitor-age-aging { color: #245b99; }
-.monitor-age-old, .monitor-age-missing { color: #526071; }
+.monitor-age-old { color: #5b5b5b; }
+.monitor-age-missing { color: #526071; }
+.monitor-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.monitor-view-toggle {
+  display: inline-flex; align-items: center; gap: 2px; padding: 3px;
+  border: 1px solid #cbd8e1; border-radius: 8px; background: #eef3f5;
+}
+.monitor-view-toggle button { color: #344b60; border-radius: 5px; padding: 5px 9px; min-height: 30px; font-size: .82rem; font-weight: 650; }
+.monitor-view-toggle button:hover { background: #fff; }
+.monitor-view-toggle button[aria-pressed="true"] { color: #fff; background: #225c53; }
 .monitor-expand { margin-top: 5px; padding: 4px 5px; border-radius: 4px; font-size: .77rem; font-weight: 650; color: #185b57; }
 .monitor-expand:hover { text-decoration: underline; }
 .monitor-empty { max-width: 560px; padding: 18px; }

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError } from '../shared/api'
-import type { DashboardGroup, DashboardReading, DashboardSnapshot, DashboardSource } from '../shared/types'
+import type { DashboardGroup, DashboardReading, DashboardSnapshot, DashboardSource, DashboardWidget } from '../shared/types'
 import { Dashboard } from './Dashboard'
 import { DashboardGroups, dashboardFreshness, useDashboardTime } from './DashboardWidgets'
 
@@ -34,13 +34,17 @@ afterEach(() => {
 
 describe('configurable dashboard', () => {
   it('uses the exact color boundaries and treats zero and textual readings as valid', () => {
-    expect(dashboardFreshness(reading(0, 5 * 60000 - 1), now)).toBe('fresh')
-    expect(dashboardFreshness(reading(0, 5 * 60000), now)).toBe('aging')
-    expect(dashboardFreshness({ ...reading(0, 60 * 60000 - 1), number: null, flag: false }, now)).toBe('aging')
-    expect(dashboardFreshness({ ...reading(0, 60 * 60000), number: null, code: 'heating' }, now)).toBe('old')
-    expect(dashboardFreshness(null, now)).toBe('missing')
-    expect(dashboardFreshness(reading(Infinity, 1), now)).toBe('missing')
-    expect(dashboardFreshness(reading(2, -1), now)).toBe('missing')
+    expect(dashboardFreshness(reading(0, 5 * 60000 - 1), now).tier).toBe('fresh')
+    expect(dashboardFreshness(reading(0, 5 * 60000), now).tier).toBe('aging')
+    expect(dashboardFreshness({ ...reading(0, 60 * 60000 - 1), number: null, flag: false }, now).tier).toBe('aging')
+    expect(dashboardFreshness({ ...reading(0, 60 * 60000), number: null, code: 'heating' }, now).tier).toBe('old')
+    expect(dashboardFreshness(null, now).tier).toBe('missing')
+    expect(dashboardFreshness(reading(Infinity, 1), now).tier).toBe('missing')
+    expect(dashboardFreshness(reading(2, -1), now).tier).toBe('missing')
+    for (const observedAt of ['2026-11-24T07:00:00', '2026-02-30T07:00:00Z', 'invalid']) {
+      expect(dashboardFreshness({ ...reading(0, 0), observedAt }, now).tier).toBe('missing')
+    }
+    expect(dashboardFreshness({ ...reading(0, 0), observedAt: '2026-11-24T09:00:00+02:00' }, now).tier).toBe('old')
   })
 
   it('advances freshness without telemetry or a refetch', () => {
@@ -48,7 +52,7 @@ describe('configurable dashboard', () => {
     vi.setSystemTime(now)
     const timed = { ...source, reading: reading(0, 5 * 60000 - 1) }
     const sources = [timed]
-    function Clock() { return <output>{dashboardFreshness(timed.reading, useDashboardTime(sources))}</output> }
+    function Clock() { return <output>{dashboardFreshness(timed.reading, useDashboardTime(sources)).tier}</output> }
     render(<Clock />)
     expect(screen.getByText('fresh')).toBeInTheDocument()
     act(() => vi.advanceTimersByTime(1))
@@ -70,8 +74,8 @@ describe('configurable dashboard', () => {
       return Math.floor(Array.from(this.parentElement?.children ?? []).indexOf(this) / columns) * 50
     })
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(44)
-    const view = (sample: DashboardSource) => <MemoryRouter>
-      <DashboardGroups groups={groups} sources={new Map([[sample.key, sample]])} property={property} now={now} />
+    const view = (sample: DashboardSource, viewMode?: DashboardWidget['mode']) => <MemoryRouter>
+      <DashboardGroups groups={groups} sources={new Map([[sample.key, sample]])} property={property} now={now} viewMode={viewMode} />
     </MemoryRouter>
     const { rerender } = render(view(source))
     expect(screen.queryByRole('heading', { name: 'Widget 5' })).not.toBeInTheDocument()
@@ -86,8 +90,9 @@ describe('configurable dashboard', () => {
     expect(groupControl).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(groupControl)
     expect(screen.getByRole('heading', { name: 'Widget 5' })).toBeInTheDocument()
-    rerender(view({ ...source, reading: reading(42, 100) }))
+    rerender(view({ ...source, reading: reading(42, 100) }, 'detailed'))
     expect(within(first).getAllByText('42 W')[0]).toHaveClass('monitor-age-fresh')
+    expect(first).toHaveClass('monitor-detailed')
     expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
     expect(within(first).getByRole('button', { name: 'Collapse Widget 1' })).toBeInTheDocument()
     act(() => { columns = 3; observers.forEach(callback => callback()) })
@@ -119,6 +124,52 @@ describe('configurable dashboard', () => {
     expect(await screen.findByRole('heading', { name: 'No monitoring widgets yet' })).toBeInTheDocument()
     expect(screen.getByText('A property operator can configure this dashboard.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Configure dashboard' })).not.toBeInTheDocument()
+    expect(catalog).not.toHaveBeenCalled()
+  })
+
+  it('overrides widget modes in monitoring view and keeps each reading’s color and provenance', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const daikin = { ...source, key: 'daikin:ac:Temperature', provider: 'daikin', deviceName: 'Kitchen AC', metric: 'temperature',
+      unit: '°C', reading: reading(21, 5 * 60000 - 1) } satisfies DashboardSource
+    const target = { ...daikin, key: 'daikin:ac:TargetTemperature', metric: 'targetTemperature',
+      reading: reading(22, 5 * 60000) } satisfies DashboardSource
+    const tuya = { ...source, key: 'tuya:thermometer:temp', provider: 'tuya', deviceName: 'Kitchen thermometer', metric: 'temperature',
+      unit: '°C', reading: { ...reading(0, 0), observedAt: '2026-11-24T09:00:00+02:00', provenance: 'provider' } } satisfies DashboardSource
+    const values = [daikin, target, tuya].map(item => ({ id: item.key, sourceKey: item.key, label: null }))
+    const snapshot: DashboardSnapshot = { canEdit: false, revision: 'fixture', sources: [daikin, target, tuya],
+      groups: [{ ...groups[0], widgets: [
+        { ...groups[0].widgets[0], title: 'AC measurements', navigationSource: null, mode: 'compact', values: values.slice(0, 2) },
+        { ...groups[0].widgets[1], title: 'Thermometer measurements', navigationSource: null, mode: 'detailed', values: values.slice(2) },
+    ] }] }
+    const load = vi.spyOn(api, 'dashboard').mockResolvedValue(snapshot)
+    const catalog = vi.spyOn(api, 'dashboardSources')
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+
+    const compact = await screen.findByRole('button', { name: 'Compact' })
+    const detailed = screen.getByRole('button', { name: 'Detailed' })
+    const acWidget = screen.getByRole('heading', { name: 'AC measurements' }).closest('article')!
+    const sensorWidget = screen.getByRole('heading', { name: 'Thermometer measurements' }).closest('article')!
+    expect(acWidget).toHaveClass('monitor-compact')
+    expect(sensorWidget).toHaveClass('monitor-detailed')
+    expect(detailed).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByRole('button', { name: 'Configure dashboard' })).not.toBeInTheDocument()
+    fireEvent.click(compact)
+    expect(sensorWidget).toHaveClass('monitor-compact')
+    fireEvent.click(detailed)
+    expect(acWidget).toHaveClass('monitor-detailed')
+    expect(detailed).toHaveAttribute('aria-pressed', 'true')
+    expect(within(acWidget).getByText('21 °C')).toHaveClass('monitor-age-fresh')
+    expect(within(acWidget).getByText('22 °C')).toHaveClass('monitor-age-aging')
+    const old = within(sensorWidget).getByText('0 °C')
+    expect(old).toHaveClass('monitor-age-old')
+    expect(old).toHaveAttribute('title', expect.stringContaining('2026-11-24T09:00:00+02:00'))
+    expect(sensorWidget.querySelector('.monitor-measure-detail')).toHaveTextContent('Smart Life / Tuya · Kitchen thermometer')
+    expect(sensorWidget.querySelector('.monitor-measure-detail')).toHaveTextContent('Provider observation')
+    fireEvent.click(detailed)
+    expect(acWidget).toHaveClass('monitor-compact')
+    expect(sensorWidget).toHaveClass('monitor-detailed')
+    expect(load).toHaveBeenCalledTimes(1)
     expect(catalog).not.toHaveBeenCalled()
   })
 
