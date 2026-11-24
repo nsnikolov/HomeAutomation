@@ -121,8 +121,9 @@ describe('configurable dashboard', () => {
     expect(screen.queryByRole('button', { name: /on|off|switch/i })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Expand Electrical' }))
     expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
+    fireEvent.click(within(screen.getByRole('group', { name: 'Widget 1 display mode' })).getByRole('button', { name: 'Detailed' }))
     expect(screen.queryByRole('heading', { name: 'Provider detail' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('link', { name: 'Widget 1' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Open Widget 1' }))
     expect(screen.getByRole('heading', { name: 'Provider detail' })).toBeInTheDocument()
   })
 
@@ -160,8 +161,9 @@ describe('configurable dashboard', () => {
     render(<QueryClientProvider client={client}><MemoryRouter><style>{browserStyles}</style>
       <Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
 
-    const compact = await screen.findByRole('button', { name: 'Compact' })
-    const detailed = screen.getByRole('button', { name: 'Detailed' })
+    const global = within(await screen.findByRole('group', { name: 'Dashboard display mode' }))
+    const compact = global.getByRole('button', { name: 'Compact' })
+    const detailed = global.getByRole('button', { name: 'Detailed' })
     const acWidget = screen.getByRole('heading', { name: 'AC measurements' }).closest('article')!
     const sensorWidget = screen.getByRole('heading', { name: 'Thermometer measurements' }).closest('article')!
     expect(acWidget).toHaveClass('monitor-compact')
@@ -171,14 +173,14 @@ describe('configurable dashboard', () => {
     fireEvent.click(compact)
     expect(sensorWidget).toHaveClass('monitor-compact')
     const old = within(sensorWidget).getByText('0 °C')
-    expect(getComputedStyle(old).color).toBe('rgb(74, 74, 74)')
+    expect(getComputedStyle(old).color).toBe('rgb(102, 102, 102)')
     expect(getComputedStyle(old.closest('.monitor-measure')!).backgroundColor).toBe('rgb(244, 244, 244)')
     fireEvent.click(detailed)
     expect(acWidget).toHaveClass('monitor-detailed')
     expect(detailed).toHaveAttribute('aria-pressed', 'true')
-    expect(getComputedStyle(within(acWidget).getByText('21 °C')).color).toBe('rgb(8, 98, 74)')
-    expect(getComputedStyle(within(acWidget).getByText('22 °C')).color).toBe('rgb(36, 91, 153)')
-    expect(getComputedStyle(old).color).toBe('rgb(74, 74, 74)')
+    expect(getComputedStyle(within(acWidget).getByText('21 °C')).color).toBe('rgb(0, 127, 54)')
+    expect(getComputedStyle(within(acWidget).getByText('22 °C')).color).toBe('rgb(0, 106, 202)')
+    expect(getComputedStyle(old).color).toBe('rgb(102, 102, 102)')
     expect(getComputedStyle(sensorWidget.querySelector('.monitor-measure-label')!).color).toBe('rgb(82, 82, 82)')
     expect(getComputedStyle(sensorWidget.querySelector('.monitor-measure-detail')!).color).toBe('rgb(82, 82, 82)')
     expect(old).toHaveAttribute('title', expect.stringContaining('2026-11-24T09:00:00+02:00'))
@@ -199,8 +201,9 @@ describe('configurable dashboard', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
 
-    const compact = await screen.findByRole('button', { name: 'Compact' })
-    const detailed = screen.getByRole('button', { name: 'Detailed' })
+    const global = within(await screen.findByRole('group', { name: 'Dashboard display mode' }))
+    const compact = global.getByRole('button', { name: 'Compact' })
+    const detailed = global.getByRole('button', { name: 'Detailed' })
     fireEvent.click(screen.getByRole('button', { name: 'Expand Electrical' }))
     fireEvent.click(screen.getByRole('button', { name: 'Show all Widget 1' }))
     expect(screen.getByRole('button', { name: 'Expand Climate' })).toHaveAttribute('aria-expanded', 'false')
@@ -227,6 +230,48 @@ describe('configurable dashboard', () => {
     expect(load).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps independent widget modes across telemetry and reapplies global modes without restoring old choices', async () => {
+    const snapshot: DashboardSnapshot = { canEdit: false, revision: 'fixture', sources: [source], groups: [
+      { ...groups[0], collapsed: false, widgets: groups[0].widgets.slice(0, 3) },
+    ] }
+    const load = vi.spyOn(api, 'dashboard').mockResolvedValue(snapshot)
+    const save = vi.spyOn(api, 'saveDashboard')
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+    const global = within(await screen.findByRole('group', { name: 'Dashboard display mode' }))
+    const widgetButton = (index: number, mode: 'Compact' | 'Detailed') =>
+      within(screen.getByRole('group', { name: `Widget ${index} display mode` })).getByRole('button', { name: mode })
+    const modes = (expected: string[]) => expected.forEach((mode, index) => {
+      expect(screen.getByRole('heading', { name: `Widget ${index + 1}` }).closest('article')).toHaveClass(`monitor-${mode}`)
+    })
+
+    fireEvent.click(widgetButton(1, 'Detailed'))
+    modes(['detailed', 'compact', 'compact'])
+    fireEvent.click(widgetButton(3, 'Detailed'))
+    modes(['detailed', 'compact', 'detailed'])
+    expect(widgetButton(3, 'Detailed')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toHaveAttribute('aria-expanded', 'true')
+    act(() => { client.setQueryData(['property', property.id, 'dashboard'], {
+      ...snapshot, sources: [{ ...source, reading: { ...reading(42, 0), observedAt: new Date(Date.now() - 1000).toISOString() } }],
+    }) })
+    await waitFor(() => expect(screen.getAllByText('42 W').length).toBeGreaterThan(0))
+    modes(['detailed', 'compact', 'detailed'])
+
+    fireEvent.click(global.getByRole('button', { name: 'Compact' }))
+    modes(['compact', 'compact', 'compact'])
+    fireEvent.click(widgetButton(2, 'Detailed'))
+    modes(['compact', 'detailed', 'compact'])
+    expect(screen.getByRole('button', { name: 'Expand Electrical' })).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(global.getByRole('button', { name: 'Detailed' }))
+    modes(['detailed', 'detailed', 'detailed'])
+    fireEvent.click(widgetButton(3, 'Compact'))
+    modes(['detailed', 'detailed', 'compact'])
+    fireEvent.click(global.getByRole('button', { name: 'Detailed' }))
+    modes(['detailed', 'detailed', 'detailed'])
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(save).not.toHaveBeenCalled()
+  })
+
   it('creates, previews and saves a property layout from assigned sources', async () => {
     let snapshot: DashboardSnapshot = { groups: [], revision: 'initial', canEdit: true, sources: [] }
     vi.spyOn(api, 'dashboard').mockImplementation(async () => snapshot)
@@ -249,14 +294,14 @@ describe('configurable dashboard', () => {
     fireEvent.change(screen.getByLabelText('Open on click'), { target: { value: source.key } })
     fireEvent.click(screen.getByText('Preview widget'))
     expect(screen.getByText('0 W')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Heater monitor' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open Heater monitor' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Ask a database administrator to check storage permissions. Your edits are still open.')
     expect(screen.getByLabelText('Group title')).toHaveValue('Utilities')
     expect(screen.getByLabelText('Widget title')).toHaveValue('Heater monitor')
     expect(screen.getByLabelText('Measurement', { exact: true })).toHaveValue(source.key)
     fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }))
-    expect(await screen.findByRole('link', { name: 'Heater monitor' })).toHaveAttribute('href', source.route)
+    expect(await screen.findByRole('link', { name: 'Open Heater monitor' })).toHaveAttribute('href', source.route)
     expect(save).toHaveBeenCalledWith(3, 'initial', [expect.objectContaining({
       title: 'Utilities', widgets: [expect.objectContaining({ mode: 'detailed', navigationSource: source.key })],
     })])

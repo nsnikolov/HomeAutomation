@@ -17,6 +17,17 @@ const numeric = new Intl.NumberFormat(undefined, { maximumFractionDigits: 20 })
 
 export type DashboardPresentation = { mode: DashboardWidget['mode']; generation: number }
 
+export function DashboardViewToggle({ label, selected, onSelect, title }: {
+  label: string; selected?: DashboardWidget['mode']; onSelect: (mode: DashboardWidget['mode']) => void; title?: string
+}) {
+  return <div className="monitor-view-toggle" role="group" aria-label={label} title={title}>
+    {(['compact', 'detailed'] as const).map(mode => <button key={mode} type="button"
+      aria-pressed={selected === mode} onClick={() => onSelect(mode)}>
+      {mode === 'compact' ? 'Compact' : 'Detailed'}
+    </button>)}
+  </div>
+}
+
 function observationTime(reading: DashboardReading | null | undefined) {
   if (!reading || typeof reading.observedAt !== 'string') return null
   const validValue = reading.number !== null ? Number.isFinite(reading.number)
@@ -151,7 +162,9 @@ export function MonitoringWidget({ widget, sources, property, now, preview = fal
   presentation?: DashboardPresentation
 }) {
   const navigate = useNavigate()
-  const mode = presentation?.mode ?? widget.mode
+  const [local, setLocal] = useState<{ mode: DashboardWidget['mode']; generation?: number }>()
+  const localMode = local?.generation === presentation?.generation ? local?.mode : undefined
+  const mode = localMode ?? presentation?.mode ?? widget.mode
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(undefined,
     { dateStyle: 'full', timeStyle: 'long', timeZone: property.timeZone }), [property.timeZone])
   const target = widget.navigationSource && sources.get(widget.navigationSource)
@@ -162,9 +175,18 @@ export function MonitoringWidget({ widget, sources, property, now, preview = fal
     ? target.route : undefined
   return <article className={`monitor-widget monitor-${mode}${route ? ' monitor-linked' : ''}`}
     onClick={route ? event => {
-      if (event.target instanceof Element && !event.target.closest('a,button') && !window.getSelection()?.toString()) void navigate(route)
+      if (event.target instanceof Element && !event.target.closest('a,button,.monitor-widget-actions') && !window.getSelection()?.toString()) void navigate(route)
     } : undefined}>
-    <h3>{route ? <Link to={route}>{widget.title}<ArrowUpRight size={14} aria-hidden /></Link> : widget.title}</h3>
+    <div className="monitor-widget-header">
+      <h3>{widget.title}</h3>
+      {!preview && <div className="monitor-widget-actions">
+        <DashboardViewToggle label={`${widget.title} display mode`} selected={mode}
+          onSelect={mode => setLocal({ mode, generation: presentation?.generation })} />
+        {route && <Link className="monitor-widget-link" to={route} aria-label={`Open ${widget.title}`}>
+          <ArrowUpRight size={14} aria-hidden />
+        </Link>}
+      </div>}
+    </div>
     <PreviewGrid label={widget.title} kind="values" presentation={presentation} items={widget.values.map(value => ({
       id: value.id, content: <Measurement value={value} source={sources.get(value.sourceKey)} now={now}
         dateFormat={dateFormat} detailed={mode === 'detailed'} />,

@@ -115,7 +115,7 @@ Select the property, open **Dashboard**, and choose **Configure dashboard**. Add
 
 Readings come from saved Growatt, Daikin ONECTA, eWeLink and Smart Life / Tuya data. Simulator readings appear only when selected and are labeled. Each reading is green for less than five minutes, blue from five minutes to under one hour, and gray from one hour onward. Age uses the recorded observation instant. The tooltip shows the original timestamp and provenance, and Detailed mode shows these details in the widget. Missing or inaccessible sources display an em dash while retaining the binding. Each group has a chevron and shows its first widget row when collapsed. Widgets with more than two responsive measurement rows have their own **Show all** and **Collapse** controls.
 
-Use **Compact** in the Dashboard header to collapse every group and widget, or **Detailed** to expand them all and show measurement context. Either action can be repeated to reset local expansions. The group chevrons and widget buttons remain available for independent changes. The shared layout stores the default modes and collapse settings.
+Use **Compact** in the Dashboard header to collapse every group and widget, or **Detailed** to expand them all and show measurement context. Either action can be repeated to reset local modes and expansions. Each widget header also has its own **Compact** and **Detailed** buttons. These change the widget's display while leaving its expansion and group state alone. The shared layout stores the default modes and collapse settings.
 
 ### Assign the initial owner of Countryside House
 

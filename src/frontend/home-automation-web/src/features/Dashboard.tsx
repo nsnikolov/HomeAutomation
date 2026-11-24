@@ -5,7 +5,7 @@ import { api, ApiError } from '../shared/api'
 import type { DashboardSource, Property } from '../shared/types'
 import { Button, Card } from '../shared/ui'
 import { DashboardEditor, dashboardKey } from './DashboardEditor'
-import { DashboardGroups, useDashboardTime, type DashboardPresentation } from './DashboardWidgets'
+import { DashboardGroups, DashboardViewToggle, useDashboardTime, type DashboardPresentation } from './DashboardWidgets'
 
 const emptySources: DashboardSource[] = []
 
@@ -26,14 +26,9 @@ export function Dashboard({ property, live }: { property: Property; live: boolea
     <div className="page-heading page-heading-inline">
       <h1>Dashboard</h1>
       {hasGroups && !editing && <div className="monitor-header-actions">
-        <div className="monitor-view-toggle" role="group" aria-label="Dashboard display mode"
-          title="Compact collapses all groups and widgets. Detailed expands them.">
-          {(['compact', 'detailed'] as const).map(mode => <button key={mode} type="button"
-            aria-pressed={presentation?.mode === mode}
-            onClick={() => setPresentation(current => ({ mode, generation: (current?.generation ?? 0) + 1 }))}>
-            {mode === 'compact' ? 'Compact' : 'Detailed'}
-          </button>)}
-        </div>
+        <DashboardViewToggle label="Dashboard display mode" selected={presentation?.mode}
+          title="Compact collapses all groups and widgets. Detailed expands them."
+          onSelect={mode => setPresentation(current => ({ mode, generation: (current?.generation ?? 0) + 1 }))} />
         {snapshot?.canEdit && <Button variant="outline" onClick={() => setEditing(true)}>
           <Settings2 size={16} />Configure dashboard
         </Button>}
