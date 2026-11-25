@@ -155,6 +155,33 @@ The command checks that property 1 is the seeded `countryside` property and that
 
 Use `dotnet run --project src/backend/HomeAutomation.Api -- --create-property` in a separate administrative session. Set `PropertyAdmin__AccountEmail` to the existing creator account's sign-in email, `PropertyAdmin__SiteKey` to a unique lowercase key such as `city-home`, `PropertyAdmin__Name` to the display name, and `PropertyAdmin__TimeZone` to an IANA zone such as `Europe/Sofia`. The command inserts the property and its creator's Owner membership in one transaction. An existing site key causes the command to fail before any membership changes.
 
+## Historical telemetry
+
+Milestone 7A adds hourly rollups, local calendar days, energy estimates and provider-neutral history routes. The model, quality rules and API are in [historical telemetry](docs/architecture/10-historical-telemetry.md).
+
+1. With explicit approval, apply migration `017_telemetry_rollups.sql` using the migration account. It creates two tables and changes no existing table. The migration account already needs `CREATE` and `REFERENCES` for earlier migrations. The runtime account needs only the existing schema-wide `SELECT, INSERT, UPDATE`. Aggregation never deletes rows, so no grant change is required.
+
+```powershell
+# Repository root, migration account settings active
+dotnet run --project src/backend/HomeAutomation.Api -- --migrate
+```
+
+2. After the next planned API restart, the rollup worker aggregates the most recent 72 hours every 15 minutes. Until 017 is recorded, it waits and raw ingestion continues. `TelemetryHistory:RollupsEnabled`, `RollupIntervalMinutes`, `RecomputeHours` and `CatchUpDays` adjust it.
+
+3. To aggregate older raw history, first run a dry run with the runtime settings. It lists each series' range, raw observation count, hourly buckets and existing rows, and writes nothing.
+
+```powershell
+dotnet run --project src/backend/HomeAutomation.Api -- --backfill-telemetry-rollups --history-property=1
+```
+
+4. Add `--execute` to write. Optionally limit the run with `--history-series=12,15`, `--history-from=2026-01-01T00:00:00Z` and `--history-to=2026-02-01T00:00:00Z`.
+
+```powershell
+dotnet run --project src/backend/HomeAutomation.Api -- --backfill-telemetry-rollups --history-property=1 --execute
+```
+
+The command loads the selected provider profiles first so hold intervals match the running service. It processes seven-day chunks newest first. Ctrl+C stops after the current chunk with exit code 2, and rerunning the same command continues the remaining range. Exit code 1 reports a configuration, lock or database failure. Completed chunks are kept, and repeated runs write no duplicates. Raw observations are never changed. History that was not collected cannot be reconstructed.
+
 ## Growatt read-only monitoring
 
 Sign in and choose **Live Growatt** in the property sidebar to open the inverter detail page. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.

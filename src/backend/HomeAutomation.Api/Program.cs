@@ -36,6 +36,21 @@ catch (ProviderConfigurationException error)
     Environment.ExitCode = 1;
     return;
 }
+TelemetryBackfillCommand.Options? backfillTelemetry;
+try { backfillTelemetry = TelemetryBackfillCommand.Parse(args); }
+catch (TelemetryBackfillException error)
+{
+    Console.Error.WriteLine(error.Message);
+    Environment.ExitCode = 1;
+    return;
+}
+if (backfillTelemetry is not null && (importProvider is not null || migrate || bootstrap || discoverGrowatt || createProperty ||
+    promoteInitialOwner || rotateConfigurationKeys || convertConfigurationIdentifiers))
+{
+    Console.Error.WriteLine("Run the telemetry backfill command by itself.");
+    Environment.ExitCode = 1;
+    return;
+}
 if (importProvider is not null && (migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner ||
     rotateConfigurationKeys || convertConfigurationIdentifiers))
 {
@@ -57,7 +72,8 @@ if ((createProperty || promoteInitialOwner) && (migrate || bootstrap || discover
     Environment.ExitCode = 1;
     return;
 }
-var builder = WebApplication.CreateBuilder(args.Where(arg => !ProviderConfigurationStartup.IsImportArgument(arg) && arg is not
+var builder = WebApplication.CreateBuilder(args.Where(arg => !ProviderConfigurationStartup.IsImportArgument(arg) &&
+    !TelemetryBackfillCommand.IsArgument(arg) && arg is not
     ("--migrate" or "--bootstrap-user" or "--discover-growatt" or "--create-property" or "--promote-initial-owner" or
         "--rotate-configuration-keys" or "--convert-configuration-identifiers")).ToArray());
 builder.Logging.ClearProviders();
@@ -220,6 +236,7 @@ if (!string.IsNullOrWhiteSpace(keyDirectory))
 
 builder.Services.AddSingleton<PollProgress>();
 builder.Services.AddHostedService<TelemetryWorker>();
+builder.Services.AddTelemetryHistory();
 builder.Services.AddHealthChecks()
     .AddCheck<DatabaseReadiness>("database", tags: ["ready"], timeout: TimeSpan.FromSeconds(6));
 
@@ -257,6 +274,17 @@ if (rotateConfigurationKeys || convertConfigurationIdentifiers)
                 error.GetType().Name);
         Environment.ExitCode = 1;
     }
+    return;
+}
+if (backfillTelemetry is not null)
+{
+    // Load the selected provider profiles so hold intervals match the running service.
+    if (!await providerConfiguration.LoadAsync(app))
+    {
+        Environment.ExitCode = 1;
+        return;
+    }
+    Environment.ExitCode = await TelemetryBackfillCommand.RunAsync(app, backfillTelemetry);
     return;
 }
 if (discoverGrowatt)

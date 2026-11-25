@@ -69,7 +69,27 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
         name.EndsWith(".015_configuration_identifiers.sql", StringComparison.Ordinal) ||
         name.EndsWith(".016_provider_runtime_configuration.sql", StringComparison.Ordinal)).ToArray();
     private static readonly string[] StagingMigrations = ConfigurationMigrations[..^1];
+    private const string TelemetryRollupMigration = ".017_telemetry_rollups.sql";
     private volatile bool receiveTimeReady;
+    private volatile bool telemetryHistoryReady;
+
+    /// <summary>Historical rollups are optional until migration 017 is applied. Other readiness checks ignore it.</summary>
+    public async Task<bool> VerifyTelemetryHistoryAsync(CancellationToken ct)
+    {
+        if (telemetryHistoryReady) return true;
+        var name = Scripts.Single(script => script.EndsWith(TelemetryRollupMigration, StringComparison.Ordinal));
+        await using var connection = await database.OpenAsync(ct);
+        try
+        {
+            telemetryHistoryReady = await connection.ExecuteScalarAsync<bool>(Query(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE name=@name)", ct, new { name }));
+        }
+        catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.NoSuchTable)
+        {
+            return false;
+        }
+        return telemetryHistoryReady;
+    }
 
     internal async Task<bool> VerifyEwelinkReceiveTimeAsync(CancellationToken ct)
     {
@@ -95,6 +115,7 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
                 (includeEwelink || !name.EndsWith(".008_ewelink_relay_commands.sql", StringComparison.Ordinal)) &&
                 (includeEwelink || !name.EndsWith(".009_ewelink_relay_preferences.sql", StringComparison.Ordinal)) &&
                 !name.EndsWith(EwelinkReceiveTimeMigration, StringComparison.Ordinal) &&
+                !name.EndsWith(TelemetryRollupMigration, StringComparison.Ordinal) &&
                 !ConfigurationMigrations.Contains(name, StringComparer.Ordinal) &&
                 (includeTuya || !name.EndsWith(".005_tuya_cloud.sql", StringComparison.Ordinal)) &&
                 (includeDashboard || !name.EndsWith(".011_monitoring_dashboard.sql", StringComparison.Ordinal)) &&

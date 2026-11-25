@@ -57,3 +57,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 53. 2026-11-25 · [HomeAutomation — Milestone 6A.1: Separate Secret and Non-Secret Configuration](0053-separate-secret-provider-configuration.md)
 54. 2026-11-25 · [HomeAutomation — Milestone 6B: Provider Configuration Migration and Controlled Cutover](0054-provider-configuration-controlled-cutover.md)
 55. 2026-11-25 · [HomeAutomation — Milestone 6C: Startup Diagnostics and Configuration Verification](0055-startup-diagnostics-and-verification.md)
+56. 2026-11-25 · [HomeAutomation — Milestone 7A: Historical Telemetry, Aggregation and History APIs](0056-historical-telemetry-aggregation.md)

@@ -958,6 +958,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             builder.UseSetting("Database:User", "test");
             builder.UseSetting("Database:Password", "test-configuration-only");
             builder.UseSetting("Simulator:Enabled", "false");
+            builder.UseSetting("TelemetryHistory:RollupsEnabled", "false");
             builder.UseSetting("Growatt:Enabled", "false");
             builder.UseSetting("Daikin:ClientId", "");
             builder.UseSetting("Daikin:ClientSecret", "");
@@ -967,6 +968,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
                 services.AddSingleton<IMonitoringReader, FixtureReader>();
                 services.RemoveAll<IMonitoringDashboard>();
                 services.AddSingleton<IMonitoringDashboard, DashboardFixture>();
+                services.RemoveAll<ITelemetryHistory>();
+                services.AddSingleton<ITelemetryHistory, HistoryApiTests.HistoryFixture>();
                 services.RemoveAll<TuyaOptions>();
                 services.AddSingleton(new TuyaOptions());
                 services.RemoveAll<EwelinkOptions>();

@@ -19,7 +19,7 @@ public sealed class TuyaService
 {
     private static readonly TimeSpan SpecificationLifetime = TimeSpan.FromDays(1);
     private static readonly TimeSpan SpecificationRetry = TimeSpan.FromHours(1);
-    private const string SensorReportSource = "tuya-sensor-report";
+    internal const string SensorReportSource = "tuya-sensor-report";
     private readonly TuyaOptions options;
     private readonly TuyaSession session;
     private readonly TuyaClient client;
