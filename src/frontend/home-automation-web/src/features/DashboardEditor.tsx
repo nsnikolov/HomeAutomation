@@ -1,6 +1,6 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type FormEvent, type PointerEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, GripVertical, Plus, Trash2 } from 'lucide-react'
 import { api, ApiError } from '../shared/api'
 import type { DashboardGroup, DashboardSnapshot, DashboardSource, DashboardValue, DashboardWidget, Property } from '../shared/types'
 import { Button, Input } from '../shared/ui'
@@ -10,17 +10,23 @@ import { MonitoringWidget, providerNames, useDashboardTime } from './DashboardWi
 export const dashboardKey = (id: number) => ['property', id, 'dashboard'] as const
 const emptySources: DashboardSource[] = []
 const newId = () => crypto.randomUUID()
-const newValue = (): DashboardValue => ({ id: newId(), sourceKey: '', label: null })
-const newWidget = (): DashboardWidget => ({ id: newId(), title: '', mode: 'compact', navigationSource: null, values: [newValue()] })
+const newValue = (): DashboardValue => ({ id: newId(), sourceKey: '', label: null, colorMode: 'automatic', customColor: null })
+const newWidget = (): DashboardWidget => ({ id: newId(), title: '', mode: 'compact', navigationSource: null,
+  width: 1, measurementColumns: 2, values: [newValue()] })
 const newGroup = (): DashboardGroup => ({ id: newId(), title: '', hidden: false, collapsed: true, widgets: [] })
 const change = <T,>(items: T[], index: number, item: T) => items.map((existing, position) => position === index ? item : existing)
 const remove = <T,>(items: T[], index: number) => items.filter((_, position) => position !== index)
 function move<T>(items: T[], index: number, direction: number) {
   const result = [...items]
-  const destination = index + direction
-  result[index] = items[destination]
-  result[destination] = items[index]
+  const [item] = result.splice(index, 1)
+  result.splice(index + direction, 0, item)
   return result
+}
+
+const columns = [1, 2, 3, 4]
+const colorPresets = {
+  '#007f36': 'Green', '#006aca': 'Blue', '#985006': 'Orange',
+  '#b91c1c': 'Red', '#6d28d9': 'Purple', '#666666': 'Gray',
 }
 
 export function DashboardEditor({ property, snapshot, done }: { property: Property; snapshot: DashboardSnapshot; done: () => void }) {
@@ -98,8 +104,6 @@ function GroupEditor({ group, index, count, sources, previewSources, property, n
     </div>
     <div className="monitor-edit-options">
       <label><input type="checkbox" checked={group.hidden} onChange={event => update({ ...group, hidden: event.target.checked })} /> Hide group</label>
-      <label><input type="checkbox" checked={!group.collapsed}
-        onChange={event => update({ ...group, collapsed: !event.target.checked })} /> Start expanded</label>
     </div>
     <div className="monitor-edit-widgets">
       {group.widgets.map((widget, position) => <WidgetEditor key={widget.id} widget={widget} index={position} count={group.widgets.length}
@@ -117,11 +121,18 @@ function WidgetEditor({ widget, index, count, sources, previewSources, property,
   widget: DashboardWidget; index: number; count: number; sources: DashboardSource[]; previewSources: Map<string, DashboardSource>
   property: Property; now: number; update: (widget: DashboardWidget) => void; shift: (by: number) => void; discard: () => void
 }) {
-  const destinations = [...new Set(widget.values.map(value => value.sourceKey).filter(Boolean))]
+  const list = useRef<HTMLDivElement>(null)
+  const drag = useRef<{ id: string; pointer: number }>(null)
+  const [dropTarget, setDropTarget] = useState<string>()
   function updateValues(values: DashboardValue[]) {
     update({ ...widget, values, navigationSource: values.some(value => value.sourceKey === widget.navigationSource)
       ? widget.navigationSource : null })
   }
+  function pointerTarget(event: PointerEvent) {
+    const item = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-dashboard-value]')
+    return item && item.parentElement === list.current ? item.dataset.dashboardValue : undefined
+  }
+  function clearDrag() { drag.current = null; setDropTarget(undefined) }
   return <fieldset className="monitor-edit-widget">
     <legend>{widget.title || 'New widget'}</legend>
     <div className="monitor-edit-line">
@@ -130,23 +141,39 @@ function WidgetEditor({ widget, index, count, sources, previewSources, property,
       <label>Display<select value={widget.mode} onChange={event => update({ ...widget, mode: event.target.value === 'detailed' ? 'detailed' : 'compact' })}>
         <option value="compact">Compact</option><option value="detailed">Detailed</option>
       </select></label>
+      <label>Widget width<select value={widget.width ?? 1} onChange={event => update({ ...widget, width: Number(event.target.value) })}>
+        {columns.map(count => <option key={count} value={count}>{count === 4 ? '4 columns / full width' : count}</option>)}
+      </select></label>
+      <label>Measurement columns<select value={widget.measurementColumns ?? 2}
+        onChange={event => update({ ...widget, measurementColumns: Number(event.target.value) })}>
+        {columns.map(count => <option key={count} value={count}>{count}</option>)}
+      </select></label>
       <Reorder label={widget.title || 'widget'} index={index} count={count} shift={shift} discard={discard} />
     </div>
-    <div className="monitor-edit-values">
-      {widget.values.map((value, position) => <ValueEditor key={value.id} value={value} position={position} count={widget.values.length}
-        sources={sources} update={updated => updateValues(change(widget.values, position, updated))}
-        shift={by => updateValues(move(widget.values, position, by))}
-        discard={() => updateValues(remove(widget.values, position))} />)}
+    <div className="monitor-edit-values" ref={list} onPointerMove={event => {
+      if (drag.current?.pointer === event.pointerId) setDropTarget(pointerTarget(event))
+    }} onPointerUp={event => {
+      if (drag.current?.pointer !== event.pointerId) return
+      const from = widget.values.findIndex(value => value.id === drag.current?.id)
+      const target = pointerTarget(event)
+      const to = widget.values.findIndex(value => value.id === target)
+      if (from >= 0 && to >= 0 && from !== to) updateValues(move(widget.values, from, to - from))
+      clearDrag()
+    }} onPointerCancel={clearDrag} onLostPointerCapture={clearDrag}>
+      {widget.values.map((value, position) => <div key={value.id} data-dashboard-value={value.id}
+        className={dropTarget === value.id ? 'monitor-edit-value-target' : undefined}>
+        <ValueEditor value={value} position={position} count={widget.values.length}
+          sources={sources} update={updated => updateValues(change(widget.values, position, updated))}
+          shift={by => updateValues(move(widget.values, position, by))}
+          discard={() => updateValues(remove(widget.values, position))}
+          startDrag={event => {
+            if (widget.values.length < 2 || event.button !== 0 || !event.isPrimary) return
+            drag.current = { id: value.id, pointer: event.pointerId }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }} />
+      </div>)}
     </div>
     <div className="monitor-edit-line">
-      <label>Open on click<select value={widget.navigationSource ?? ''} onChange={event => update({ ...widget, navigationSource: event.target.value || null })}>
-        <option value="">No destination</option>
-        {destinations.map(key => {
-          const source = previewSources.get(key)
-          return <option key={key} value={key}>{source ? `${providerNames[source.provider]} · ${source.deviceName} · ${metricLabels[source.metric]}`
-            : 'Unavailable source'}</option>
-        })}
-      </select></label>
       <Button variant="outline" type="button" disabled={widget.values.length >= 16}
         onClick={() => updateValues([...widget.values, newValue()])}><Plus size={16} />Add measurement</Button>
     </div>
@@ -157,9 +184,10 @@ function WidgetEditor({ widget, index, count, sources, previewSources, property,
   </fieldset>
 }
 
-function ValueEditor({ value, position, count, sources, update, shift, discard }: {
+function ValueEditor({ value, position, count, sources, update, shift, discard, startDrag }: {
   value: DashboardValue; position: number; count: number; sources: DashboardSource[]
   update: (value: DashboardValue) => void; shift: (by: number) => void; discard: () => void
+  startDrag: (event: PointerEvent<HTMLButtonElement>) => void
 }) {
   const selected = sources.find(source => source.key === value.sourceKey)
   const [provider, setProvider] = useState(selected?.provider ?? '')
@@ -196,6 +224,17 @@ function ValueEditor({ value, position, count, sources, update, shift, discard }
       </select></label>
       <label>Custom label<Input maxLength={96} value={value.label ?? ''}
         onChange={event => update({ ...value, label: event.target.value || null })} /></label>
+      <label>Value color<select value={value.colorMode === 'fixed' ? value.customColor ?? '' : ''} onChange={event => {
+        const customColor = event.target.value || null
+        update({ ...value, colorMode: customColor ? 'fixed' : 'automatic', customColor })
+      }}>
+        <option value="">Automatic (freshness)</option>
+        {Object.entries(colorPresets).map(([color, name]) => <option key={color} value={color}>{name}</option>)}
+        {value.colorMode === 'fixed' && value.customColor && !Object.hasOwn(colorPresets, value.customColor) &&
+          <option value={value.customColor}>{value.customColor}</option>}
+      </select></label>
+      <Button variant="ghost" type="button" className="monitor-value-grip" title="Drag to reorder"
+        aria-label={`Drag measurement ${position + 1}`} disabled={count < 2} onPointerDown={startDrag}><GripVertical size={16} /></Button>
       <Reorder label={`measurement ${position + 1}`} index={position} count={count} shift={shift} discard={discard} />
     </div>
   </fieldset>

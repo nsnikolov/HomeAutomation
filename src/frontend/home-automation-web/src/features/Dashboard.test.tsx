@@ -83,44 +83,43 @@ describe('configurable dashboard', () => {
       <DashboardGroups groups={groups} sources={new Map([[sample.key, sample]])} property={property} now={now} />
     </MemoryRouter>
     const { rerender } = render(view(source))
-    expect(screen.queryByRole('heading', { name: 'Widget 5' })).not.toBeInTheDocument()
-    const groupControl = screen.getByRole('button', { name: 'Expand Electrical' })
+    expect(screen.getByRole('heading', { name: 'Widget 5' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Expand Electrical' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Electrical' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Widget 3' })).not.toBeInTheDocument()
     const first = screen.getByRole('heading', { name: 'Widget 1' }).closest('article')!
     expect(within(first).getAllByText('0 W')[0]).toHaveClass('monitor-age-aging')
     expect(within(first).getByText('—')).toHaveAttribute('title', expect.stringContaining('no longer available'))
-    const widgetControl = within(first).getByRole('button', { name: 'Show all Widget 1' })
-    expect(widgetControl).toHaveAttribute('aria-expanded', 'false')
+    const widgetControl = within(first).getByRole('button', { name: 'Collapse Widget 1' })
+    expect(widgetControl).toHaveAttribute('aria-expanded', 'true')
     fireEvent.click(widgetControl)
-    expect(within(first).getByRole('button', { name: 'Collapse Widget 1' })).toHaveAttribute('aria-expanded', 'true')
-    expect(groupControl).toHaveAttribute('aria-expanded', 'false')
-    fireEvent.click(groupControl)
+    expect(within(first).getByRole('button', { name: 'Show all Widget 1' })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByRole('heading', { name: 'Widget 5' })).toBeInTheDocument()
     rerender(view({ ...source, reading: reading(42, 100) }))
     expect(within(first).getAllByText('42 W')[0]).toHaveClass('monitor-age-fresh')
-    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
-    expect(within(first).getByRole('button', { name: 'Collapse Widget 1' })).toBeInTheDocument()
+    expect(within(first).getByRole('button', { name: 'Show all Widget 1' })).toBeInTheDocument()
     act(() => { columns = 3; observers.forEach(callback => callback()) })
-    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
-    expect(within(first).queryByRole('button', { name: 'Collapse Widget 1' })).not.toBeInTheDocument()
+    expect(within(first).queryByRole('button', { name: 'Show all Widget 1' })).not.toBeInTheDocument()
     act(() => { columns = 1; observers.forEach(callback => callback()) })
-    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
-    expect(within(first).getByRole('button', { name: 'Collapse Widget 1' })).toBeInTheDocument()
+    expect(within(first).getByRole('button', { name: 'Show all Widget 1' })).toBeInTheDocument()
   })
 
-  it('only navigates to the configured internal provider page', () => {
-    const target = { ...groups[0], widgets: [groups[0].widgets[0]] }
+  it('routes mixed-provider measurements separately and leaves missing or unsafe sources inert', () => {
+    const tuya = { ...source, key: 'tuya:sensor:temp', provider: 'tuya', deviceName: 'Thermometer', route: '/properties/3/tuya' } satisfies DashboardSource
+    const unsafe = { ...tuya, key: 'unsafe', route: '/properties/4/tuya' }
+    const target = { ...groups[0], widgets: [{ ...groups[0].widgets[0], values: [
+      { id: 'relay', label: 'Relay', sourceKey: source.key },
+      { id: 'temp', label: 'Thermometer reading', sourceKey: tuya.key },
+      { id: 'missing', label: 'Deleted source', sourceKey: 'removed' },
+      { id: 'unsafe', label: 'Other property', sourceKey: unsafe.key },
+    ] }] }
     render(<MemoryRouter initialEntries={['/']}>
       <Routes>
-        <Route path="/" element={<DashboardGroups groups={[target]} sources={new Map([[source.key, source]])}
+        <Route path="/" element={<DashboardGroups groups={[target]} sources={new Map([source, tuya, unsafe].map(item => [item.key, item]))}
           property={property} now={now} />} />
         <Route path={source.route} element={<h1>Provider detail</h1>} />
       </Routes>
     </MemoryRouter>)
     expect(screen.queryByRole('button', { name: /on|off|switch/i })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Electrical' }))
-    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toBeInTheDocument()
     const view = screen.getByRole('button', { name: 'Show detailed view for Widget 1' })
     expect(view).toHaveAttribute('title', 'Show detailed view for Widget 1')
     expect(view.querySelector('.lucide-rows-3')).toHaveAttribute('width', '16')
@@ -130,9 +129,11 @@ describe('configurable dashboard', () => {
     expect(compactView).toHaveAttribute('title', 'Show compact view for Widget 1')
     expect(compactView.querySelector('.lucide-rows-2')).toHaveAttribute('width', '16')
     expect(screen.queryByRole('heading', { name: 'Provider detail' })).not.toBeInTheDocument()
-    const navigation = screen.getByRole('link', { name: 'Open Widget 1' })
-    expect(navigation).toHaveAttribute('title', 'Open Widget 1')
-    expect(navigation.querySelector('.lucide-arrow-up-right')).toHaveAttribute('width', '16')
+    expect(screen.getByRole('link', { name: /Open Thermometer for Thermometer reading/ })).toHaveAttribute('href', tuya.route)
+    expect(screen.queryByRole('link', { name: /Deleted source|Other property/ })).not.toBeInTheDocument()
+    expect(screen.getByText('—')).toBeInTheDocument()
+    const navigation = screen.getByRole('link', { name: /Open Heater for Relay/ })
+    expect(navigation).toHaveAttribute('href', source.route)
     fireEvent.click(navigation)
     expect(screen.getByRole('heading', { name: 'Provider detail' })).toBeInTheDocument()
   })
@@ -203,7 +204,7 @@ describe('configurable dashboard', () => {
     expect(catalog).not.toHaveBeenCalled()
   })
 
-  it('reapplies global expansion and allows independent group and widget overrides between actions', async () => {
+  it('keeps all groups visible and only expands manually collapsed widgets on global Detailed', async () => {
     mockGridPositions(() => 1)
     const second = { ...groups[0], id: 'climate', title: 'Climate',
       widgets: groups[0].widgets.map((widget, index) => ({ ...widget, id: `climate-${index}`, title: `Climate widget ${index + 1}` })) }
@@ -214,29 +215,17 @@ describe('configurable dashboard', () => {
     const global = within(await screen.findByRole('group', { name: 'Dashboard display mode' }))
     const compact = global.getByRole('button', { name: 'Compact' })
     const detailed = global.getByRole('button', { name: 'Detailed' })
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Electrical' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Show all Widget 1' }))
-    expect(screen.getByRole('button', { name: 'Expand Climate' })).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.getByRole('button', { name: 'Show all Climate widget 1' })).toHaveAttribute('aria-expanded', 'false')
-
-    fireEvent.click(detailed)
-    expect(screen.getByRole('button', { name: 'Collapse Climate' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('heading', { name: 'Climate widget 5' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collapse Widget 1' })).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('button', { name: 'Collapse Climate widget 1' })).toHaveAttribute('aria-expanded', 'true')
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Climate widget 1' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse Climate' }))
-    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByRole('button', { name: 'Collapse Widget 1' })).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(compact)
+    expect(screen.getByRole('button', { name: 'Show all Climate widget 1' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('heading', { name: 'Climate widget 5' })).toBeInTheDocument()
     fireEvent.click(detailed)
     expect(screen.getByRole('button', { name: 'Collapse Climate widget 1' })).toHaveAttribute('aria-expanded', 'true')
-
     fireEvent.click(compact)
-    expect(screen.getByRole('button', { name: 'Expand Electrical' })).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.getByRole('button', { name: 'Expand Climate' })).toHaveAttribute('aria-expanded', 'false')
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Climate' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Show all Climate widget 1' }))
-    fireEvent.click(compact)
-    expect(screen.getByRole('button', { name: 'Expand Climate' })).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.getByRole('button', { name: 'Show all Climate widget 1' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: 'Collapse Climate widget 1' })).toHaveAttribute('aria-expanded', 'true')
     expect(load).toHaveBeenCalledTimes(1)
   })
 
@@ -260,7 +249,7 @@ describe('configurable dashboard', () => {
     fireEvent.click(widgetButton(3, 'Detailed'))
     modes(['detailed', 'compact', 'detailed'])
     expect(widgetButton(3, 'Compact').querySelector('.lucide-rows-2')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Collapse Electrical' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('heading', { name: 'Electrical' })).toBeInTheDocument()
     act(() => { client.setQueryData(['property', property.id, 'dashboard'], {
       ...snapshot, sources: [{ ...source, reading: { ...reading(42, 0), observedAt: new Date(Date.now() - 1000).toISOString() } }],
     }) })
@@ -272,7 +261,7 @@ describe('configurable dashboard', () => {
     expect(widgetButton(1, 'Detailed').querySelector('.lucide-rows-3')).toBeInTheDocument()
     fireEvent.click(widgetButton(2, 'Detailed'))
     modes(['compact', 'detailed', 'compact'])
-    expect(screen.getByRole('button', { name: 'Expand Electrical' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('heading', { name: 'Electrical' })).toBeInTheDocument()
     fireEvent.click(global.getByRole('button', { name: 'Detailed' }))
     modes(['detailed', 'detailed', 'detailed'])
     fireEvent.click(widgetButton(3, 'Compact'))
@@ -281,6 +270,57 @@ describe('configurable dashboard', () => {
     modes(['detailed', 'detailed', 'detailed'])
     expect(load).toHaveBeenCalledTimes(1)
     expect(save).not.toHaveBeenCalled()
+  })
+
+  it('reorders draft measurements by pointer and keyboard controls without saving on Cancel', async () => {
+    const snapshot: DashboardSnapshot = { canEdit: true, revision: 'draft', sources: [source], groups: [
+      { ...groups[0], widgets: [{ ...groups[0].widgets[0], values: [
+        { id: 'first', sourceKey: source.key, label: 'First', colorMode: 'fixed', customColor: '#985006' },
+        { id: 'middle', sourceKey: source.key, label: 'Middle' },
+        { id: 'last', sourceKey: source.key, label: 'Last' },
+      ] }] },
+    ] }
+    vi.spyOn(api, 'dashboard').mockResolvedValue(snapshot)
+    vi.spyOn(api, 'dashboardSources').mockResolvedValue([source])
+    const save = vi.spyOn(api, 'saveDashboard').mockResolvedValue(undefined)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { container } = render(<QueryClientProvider client={client}><MemoryRouter>
+      <Dashboard property={property} live={false} />
+    </MemoryRouter></QueryClientProvider>)
+    const order = () => Array.from(container.querySelectorAll('[data-dashboard-value]'))
+      .map(item => item.getAttribute('data-dashboard-value'))
+    const open = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Configure dashboard' }))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Drag measurement 1' })).toBeEnabled())
+    }
+    await open()
+    const grip = screen.getByRole('button', { name: 'Drag measurement 1' })
+    Object.defineProperty(grip, 'setPointerCapture', { value: vi.fn() })
+    const original = Object.getOwnPropertyDescriptor(document, 'elementFromPoint')
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => container.querySelector('[data-dashboard-value="last"]') })
+    try {
+      const pointer = { pointerId: 1, button: 0, pointerType: 'mouse', isPrimary: true }
+      fireEvent.pointerDown(grip, pointer)
+      fireEvent.pointerUp(grip, pointer)
+      expect(order()).toEqual(['middle', 'last', 'first'])
+      fireEvent.click(screen.getByRole('button', { name: 'Move measurement 3 up' }))
+      expect(order()).toEqual(['middle', 'first', 'last'])
+      expect(save).not.toHaveBeenCalled()
+    } finally {
+      if (original) Object.defineProperty(document, 'elementFromPoint', original)
+      else Reflect.deleteProperty(document, 'elementFromPoint')
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await open()
+    expect(order()).toEqual(['first', 'middle', 'last'])
+    fireEvent.click(screen.getByRole('button', { name: 'Move measurement 1 down' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }))
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    expect(save.mock.calls[0][2][0].widgets[0].values).toEqual([
+      snapshot.groups[0].widgets[0].values[1],
+      snapshot.groups[0].widgets[0].values[0],
+      snapshot.groups[0].widgets[0].values[2],
+    ])
   })
 
   it('creates, previews and saves a property layout from assigned sources', async () => {
@@ -302,19 +342,26 @@ describe('configurable dashboard', () => {
     fireEvent.change(screen.getByLabelText('Device'), { target: { value: source.deviceId } })
     fireEvent.change(screen.getByLabelText('Measurement', { exact: true }), { target: { value: source.key } })
     fireEvent.change(screen.getByLabelText('Display'), { target: { value: 'detailed' } })
-    fireEvent.change(screen.getByLabelText('Open on click'), { target: { value: source.key } })
+    fireEvent.change(screen.getByLabelText('Widget width'), { target: { value: '4' } })
+    fireEvent.change(screen.getByLabelText('Measurement columns'), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText('Value color'), { target: { value: '#985006' } })
     fireEvent.click(screen.getByText('Preview widget'))
     expect(screen.getByText('0 W')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Open Heater monitor' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Open Heater/ })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Ask a database administrator to check storage permissions. Your edits are still open.')
     expect(screen.getByLabelText('Group title')).toHaveValue('Utilities')
     expect(screen.getByLabelText('Widget title')).toHaveValue('Heater monitor')
     expect(screen.getByLabelText('Measurement', { exact: true })).toHaveValue(source.key)
     fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }))
-    expect(await screen.findByRole('link', { name: 'Open Heater monitor' })).toHaveAttribute('href', source.route)
+    const tile = await screen.findByRole('link', { name: /Open Heater/ })
+    expect(tile).toHaveAttribute('href', source.route)
+    expect(tile.querySelector('strong')).toHaveStyle({ color: '#985006' })
+    expect(tile.closest('.monitor-grid-values')).toHaveStyle('--measurement-columns: 3')
+    expect(tile.closest('article')?.parentElement).toHaveStyle('--widget-span: 4')
     expect(save).toHaveBeenCalledWith(3, 'initial', [expect.objectContaining({
-      title: 'Utilities', widgets: [expect.objectContaining({ mode: 'detailed', navigationSource: source.key })],
+      title: 'Utilities', widgets: [expect.objectContaining({ mode: 'detailed', width: 4, measurementColumns: 3,
+        values: [expect.objectContaining({ colorMode: 'fixed', customColor: '#985006' })] })],
     })])
     fireEvent.click(screen.getByRole('button', { name: 'Configure dashboard' }))
     fireEvent.change(await screen.findByLabelText('Custom label'), { target: { value: 'Metered load' } })

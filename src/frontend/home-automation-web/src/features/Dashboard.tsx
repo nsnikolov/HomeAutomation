@@ -27,8 +27,11 @@ export function Dashboard({ property, live }: { property: Property; live: boolea
       <h1>Dashboard</h1>
       {hasGroups && !editing && <div className="monitor-header-actions">
         <DashboardViewToggle label="Dashboard display mode" selected={presentation?.mode}
-          title="Compact collapses all groups and widgets. Detailed expands them."
-          onSelect={mode => setPresentation(current => ({ mode, generation: (current?.generation ?? 0) + 1 }))} />
+          title="Compact keeps measurement visibility. Detailed expands all measurements."
+          onSelect={mode => setPresentation(current => {
+            const generation = (current?.generation ?? 0) + 1
+            return { mode, generation, expandGeneration: mode === 'detailed' ? generation : current?.expandGeneration }
+          })} />
         {snapshot?.canEdit && <Button variant="outline" onClick={() => setEditing(true)}>
           <Settings2 size={16} />Configure dashboard
         </Button>}

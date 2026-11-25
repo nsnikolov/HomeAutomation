@@ -2,9 +2,9 @@ using HomeAutomation.Domain;
 
 namespace HomeAutomation.Application;
 
-public sealed record DashboardValue(string Id, string SourceKey, string? Label);
+public sealed record DashboardValue(string Id, string SourceKey, string? Label, string ColorMode = "automatic", string? CustomColor = null);
 public sealed record DashboardWidget(string Id, string Title, string Mode, string? NavigationSource,
-    DashboardValue[] Values);
+    DashboardValue[] Values, int Width = 1, int MeasurementColumns = 2);
 public sealed record DashboardGroup(string Id, string Title, bool Hidden, bool Collapsed, DashboardWidget[] Widgets);
 public sealed record DashboardUpdate(string Revision, DashboardGroup[] Groups);
 

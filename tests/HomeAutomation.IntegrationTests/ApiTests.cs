@@ -156,9 +156,9 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         var values = new[]
         {
             new DashboardValue(Id(), $"daikin:{daikinRow.Id}:Temperature", "Климатик"),
-            new DashboardValue(Id(), $"tuya:{tuyaRow.Id}:temp", "Термометър"),
+            new DashboardValue(Id(), $"tuya:{tuyaRow.Id}:temp", "Термометър", "fixed", "#985006"),
         };
-        var widget = new DashboardWidget(Id(), "Температура", "detailed", values[0].SourceKey, values);
+        var widget = new DashboardWidget(Id(), "Температура", "detailed", values[0].SourceKey, values, Width: 3, MeasurementColumns: 4);
         var group = new DashboardGroup(Id(), "СТЪРГЕЛ", false, true, [widget]);
         var update = new DashboardUpdate(snapshot.Revision, [group]);
         var denied = await client.PutAsJsonAsync(path, update);
@@ -173,12 +173,24 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         Assert.Equal("СТЪРГЕЛ", projection.GetProperty("groups")[0].GetProperty("title").GetString());
         var saved = projection.GetProperty("groups")[0].GetProperty("widgets")[0];
         Assert.Equal("Температура", saved.GetProperty("title").GetString());
+        Assert.Equal(3, saved.GetProperty("width").GetInt32());
+        Assert.Equal(4, saved.GetProperty("measurementColumns").GetInt32());
+        Assert.Equal("automatic", saved.GetProperty("values")[0].GetProperty("colorMode").GetString());
+        Assert.Equal("#985006", saved.GetProperty("values")[1].GetProperty("customColor").GetString());
         Assert.Equal(values.Select(value => value.SourceKey), saved.GetProperty("values").EnumerateArray()
             .Select(value => value.GetProperty("sourceKey").GetString()));
         Assert.Equal(new[] { "daikin", "tuya" }, projection.GetProperty("sources").EnumerateArray()
             .Select(source => source.GetProperty("provider").GetString()));
 
         var revision = projection.GetProperty("revision").GetString()!;
+        foreach (var rejected in new[]
+        {
+            widget with { Width = 5 },
+            widget with { MeasurementColumns = 0 },
+            widget with { Values = [values[0] with { ColorMode = "fixed", CustomColor = "#ffffff" }] },
+        })
+            Assert.Equal(HttpStatusCode.BadRequest,
+                (await client.PutAsJsonAsync(path, new DashboardUpdate(revision, [group with { Widgets = [rejected] }]))).StatusCode);
         var invalid = widget with { Values = [new(Id(), "tuya:unknown:temp", null)], NavigationSource = null };
         var bad = await client.PutAsJsonAsync(path, new DashboardUpdate(revision, [group with { Widgets = [invalid] }]));
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);

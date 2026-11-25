@@ -91,6 +91,8 @@ public sealed class Migrations(Database database)
                 !name.EndsWith(EwelinkReceiveTimeMigration, StringComparison.Ordinal) &&
                 (includeTuya || !name.EndsWith(".005_tuya_cloud.sql", StringComparison.Ordinal)) &&
                 (includeDashboard || !name.EndsWith(".011_monitoring_dashboard.sql", StringComparison.Ordinal)) &&
+                (includeDashboard || !name.EndsWith(".012_dashboard_widget_layout.sql", StringComparison.Ordinal)) &&
+                (includeDashboard || !name.EndsWith(".013_dashboard_measurement_colors.sql", StringComparison.Ordinal)) &&
                 (includePreferences || !name.EndsWith(".006_device_view_preferences.sql", StringComparison.Ordinal)))
                 .All(installed.Contains);
         }

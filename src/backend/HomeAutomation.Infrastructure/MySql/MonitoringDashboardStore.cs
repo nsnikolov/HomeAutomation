@@ -59,12 +59,13 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         }).ToArray();
         var widgets = update.Groups.SelectMany(group => group.Widgets.Select((widget, position) => new
         {
-            property, widget.Id, GroupId = group.Id, widget.Title, widget.Mode, widget.NavigationSource, position
+            property, widget.Id, GroupId = group.Id, widget.Title, widget.Mode, widget.NavigationSource,
+            widget.Width, widget.MeasurementColumns, position
         })).ToArray();
         var values = update.Groups.SelectMany(group => group.Widgets).SelectMany(widget =>
             widget.Values.Select((value, position) => new
             {
-                property, value.Id, WidgetId = widget.Id, value.SourceKey, value.Label, position
+                property, value.Id, WidgetId = widget.Id, value.SourceKey, value.Label, value.ColorMode, value.CustomColor, position
             })).ToArray();
 
         await db.ExecuteAsync(Query("DELETE FROM dashboard_groups WHERE property_id=@property", ct, new { property }, tx));
@@ -73,12 +74,12 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
             VALUES(@property,@Id,@position,@Title,@Hidden,@Collapsed)
             """, ct, groups, tx));
         await db.ExecuteAsync(Query("""
-            INSERT INTO dashboard_widgets(property_id,id,group_id,position,title,display_mode,navigation_source)
-            VALUES(@property,@Id,@GroupId,@position,@Title,@Mode,@NavigationSource)
+            INSERT INTO dashboard_widgets(property_id,id,group_id,position,title,display_mode,navigation_source,width_columns,measurement_columns)
+            VALUES(@property,@Id,@GroupId,@position,@Title,@Mode,@NavigationSource,@Width,@MeasurementColumns)
             """, ct, widgets, tx));
         await db.ExecuteAsync(Query("""
-            INSERT INTO dashboard_values(property_id,id,widget_id,position,source_key,label)
-            VALUES(@property,@Id,@WidgetId,@position,@SourceKey,@Label)
+            INSERT INTO dashboard_values(property_id,id,widget_id,position,source_key,label,color_mode,custom_color)
+            VALUES(@property,@Id,@WidgetId,@position,@SourceKey,@Label,@ColorMode,@CustomColor)
             """, ct, values, tx));
         await tx.CommitAsync(ct);
         return DashboardSaveResult.Saved;
@@ -94,9 +95,10 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
             ;
             SELECT id AS Id,title AS Title,hidden AS Hidden,collapsed AS Collapsed
             FROM dashboard_groups WHERE property_id=@property ORDER BY position;
-            SELECT id AS Id,group_id AS GroupId,title AS Title,display_mode AS Mode,navigation_source AS NavigationSource
+            SELECT id AS Id,group_id AS GroupId,title AS Title,display_mode AS Mode,navigation_source AS NavigationSource,
+                   width_columns AS Width,measurement_columns AS MeasurementColumns
             FROM dashboard_widgets WHERE property_id=@property ORDER BY position;
-            SELECT id AS Id,widget_id AS WidgetId,source_key AS SourceKey,label AS Label
+            SELECT id AS Id,widget_id AS WidgetId,source_key AS SourceKey,label AS Label,color_mode AS ColorMode,custom_color AS CustomColor
             FROM dashboard_values WHERE property_id=@property ORDER BY position;
             """, ct, new { property, user }, tx));
         var role = await rows.ReadSingleOrDefaultAsync<string>();
@@ -106,7 +108,8 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         var values = (await rows.ReadAsync<ValueRow>()).ToLookup(value => value.WidgetId);
         return (role, groups.Select(group => new DashboardGroup(group.Id, group.Title, group.Hidden, group.Collapsed,
             widgets[group.Id].Select(widget => new DashboardWidget(widget.Id, widget.Title, widget.Mode, widget.NavigationSource,
-                values[widget.Id].Select(value => new DashboardValue(value.Id, value.SourceKey, value.Label)).ToArray())).ToArray())).ToArray());
+                values[widget.Id].Select(value => new DashboardValue(value.Id, value.SourceKey, value.Label, value.ColorMode, value.CustomColor)).ToArray(),
+                widget.Width, widget.MeasurementColumns)).ToArray())).ToArray());
     }
 
     private static bool CanEdit(string? role) => role?.ToUpperInvariant() is "OWNER" or "ADMIN" or "OPERATOR";
@@ -115,6 +118,6 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         groups.SelectMany(group => group.Widgets).SelectMany(widget => widget.Values);
 
     private sealed record GroupRow(string Id, string Title, bool Hidden, bool Collapsed);
-    private sealed record WidgetRow(string Id, string GroupId, string Title, string Mode, string? NavigationSource);
-    private sealed record ValueRow(string Id, string WidgetId, string SourceKey, string? Label);
+    private sealed record WidgetRow(string Id, string GroupId, string Title, string Mode, string? NavigationSource, int Width, int MeasurementColumns);
+    private sealed record ValueRow(string Id, string WidgetId, string SourceKey, string? Label, string ColorMode, string? CustomColor);
 }

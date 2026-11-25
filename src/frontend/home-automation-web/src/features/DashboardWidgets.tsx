@@ -1,6 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowUpRight, ChevronDown, ChevronRight, Rows2, Rows3 } from 'lucide-react'
-import { Link, useNavigate } from 'react-router'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Rows2, Rows3 } from 'lucide-react'
+import { Link } from 'react-router'
 import type { DashboardGroup, DashboardReading, DashboardSource, DashboardValue, DashboardWidget, Property } from '../shared/types'
 import { metricLabels } from './Devices'
 
@@ -15,7 +15,7 @@ const freshnessLabels = {
 const provenanceLabels = { provider: 'Provider observation', serverReceived: 'Server received', simulated: 'Simulated observation' }
 const numeric = new Intl.NumberFormat(undefined, { maximumFractionDigits: 20 })
 
-export type DashboardPresentation = { mode: DashboardWidget['mode']; generation: number }
+export type DashboardPresentation = { mode: DashboardWidget['mode']; generation: number; expandGeneration?: number }
 
 export function DashboardViewToggle({ label, selected, onSelect, title }: {
   label: string; selected?: DashboardWidget['mode']; onSelect: (mode: DashboardWidget['mode']) => void; title?: string
@@ -80,14 +80,11 @@ export function useDashboardTime(sources: readonly DashboardSource[]) {
   return now
 }
 
-function PreviewGrid({ items, label, kind, initiallyCollapsed = true, presentation, heading }: {
-  items: { id: string; content: ReactNode }[]; label: string; kind: 'widgets' | 'values'; initiallyCollapsed?: boolean
-  presentation?: DashboardPresentation; heading?: ReactNode
+function PreviewGrid({ items, label, expandGeneration, columns }: {
+  items: { id: string; content: ReactNode }[]; label: string; expandGeneration?: number; columns: number
 }) {
   const id = useId()
   const grid = useRef<HTMLDivElement>(null)
-  const group = kind === 'widgets'
-  const previewRows = group ? 1 : 2
   const [limit, setLimit] = useState<{ count: number; height: number } | null>(null)
   const [override, setOverride] = useState<{ expanded: boolean; generation: number | undefined }>()
   const itemKeys = items.map(item => item.id).join('|')
@@ -101,7 +98,7 @@ function PreviewGrid({ items, label, kind, initiallyCollapsed = true, presentati
       for (const [index, child] of Array.from(element.children).entries()) {
         const item = child as HTMLElement
         if (item.offsetTop !== lastTop) { row++; lastTop = item.offsetTop }
-        if (row > previewRows) {
+        if (row > 2) {
           setLimit(previous => previous?.count === index && previous.height === height ? previous : { count: index, height })
           return
         }
@@ -114,30 +111,21 @@ function PreviewGrid({ items, label, kind, initiallyCollapsed = true, presentati
     observer?.observe(element)
     Array.from(element.children).forEach(item => observer?.observe(item))
     return () => observer?.disconnect()
-  }, [itemKeys, previewRows])
+  }, [itemKeys, columns])
 
-  const localExpanded = override?.generation === presentation?.generation ? override?.expanded : undefined
-  const expanded = localExpanded ?? (presentation ? presentation.mode === 'detailed' : !initiallyCollapsed)
-  const toggle = () => setOverride({ expanded: !expanded, generation: presentation?.generation })
+  const expanded = override?.generation === expandGeneration ? override?.expanded ?? true : true
+  const toggle = () => setOverride({ expanded: !expanded, generation: expandGeneration })
   const cropped = !expanded && limit !== null
   return <>
-    {group && <div className="monitor-group-heading">
-      {heading}
-      <button type="button" className="monitor-group-toggle" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${label}`}
-        aria-controls={id} aria-expanded={expanded} onClick={toggle}>
-        {expanded ? <ChevronDown size={17} aria-hidden /> : <ChevronRight size={17} aria-hidden />}
-      </button>
-    </div>}
     <div id={id} className={cropped ? 'monitor-cropped' : undefined} style={cropped ? { maxHeight: limit.height } : undefined}>
-      <div ref={grid} className={`monitor-grid monitor-grid-${kind}`}>
+      <div ref={grid} className="monitor-grid monitor-grid-values" style={{ '--measurement-columns': columns } as CSSProperties}>
         {items.map((item, index) =>
           <div key={item.id} className="monitor-grid-item" inert={cropped && index >= limit.count}
             aria-hidden={cropped && index >= limit.count || undefined}
             data-overflow={cropped && index >= limit.count ? 'true' : undefined}>{item.content}</div>)}
       </div>
-      {group && items.length === 0 && <p className="muted">This group has no widgets.</p>}
     </div>
-    {!group && limit && <button type="button" className="monitor-expand" aria-label={`${expanded ? 'Collapse' : 'Show all'} ${label}`}
+    {limit && <button type="button" className="monitor-expand" aria-label={`${expanded ? 'Collapse' : 'Show all'} ${label}`}
       aria-controls={id} aria-expanded={expanded} onClick={toggle}>{expanded ? 'Collapse' : 'Show all'}</button>}
   </>
 }
@@ -148,11 +136,13 @@ export function DashboardGroups({ groups, sources, property, now, presentation }
 }) {
   return <div className="monitor-groups">
     {groups.filter(group => !group.hidden).map(group => <section key={group.id} className="monitor-group" aria-labelledby={`group-${group.id}`}>
-      <PreviewGrid label={group.title} kind="widgets" initiallyCollapsed={group.collapsed} presentation={presentation}
-        heading={<h2 id={`group-${group.id}`}>{group.title}</h2>}
-        items={group.widgets.map(widget => ({ id: widget.id, content:
-          <MonitoringWidget widget={widget} sources={sources} property={property} now={now} presentation={presentation} />,
-        }))} />
+      <h2 id={`group-${group.id}`}>{group.title}</h2>
+      {group.widgets.length ? <div className="monitor-grid monitor-grid-widgets">
+        {group.widgets.map(widget => <div key={widget.id} className="monitor-grid-item"
+          style={{ '--widget-span': widget.width ?? 1 } as CSSProperties}>
+          <MonitoringWidget widget={widget} sources={sources} property={property} now={now} presentation={presentation} />
+        </div>)}
+      </div> : <p className="muted">This group has no widgets.</p>}
     </section>)}
   </div>
 }
@@ -161,26 +151,15 @@ export function MonitoringWidget({ widget, sources, property, now, preview = fal
   widget: DashboardWidget; sources: Map<string, DashboardSource>; property: Property; now: number; preview?: boolean
   presentation?: DashboardPresentation
 }) {
-  const navigate = useNavigate()
   const [local, setLocal] = useState<{ mode: DashboardWidget['mode']; generation?: number }>()
   const localMode = local?.generation === presentation?.generation ? local?.mode : undefined
   const mode = localMode ?? presentation?.mode ?? widget.mode
   const nextMode = mode === 'compact' ? 'detailed' : 'compact'
   const ViewIcon = mode === 'compact' ? Rows3 : Rows2
   const viewLabel = `Show ${nextMode} view for ${widget.title}`
-  const navigationLabel = `Open ${widget.title}`
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(undefined,
     { dateStyle: 'full', timeStyle: 'long', timeZone: property.timeZone }), [property.timeZone])
-  const target = widget.navigationSource && sources.get(widget.navigationSource)
-  const base = `/properties/${property.id}`
-  const route = !preview && target && (target.provider === 'simulator'
-    ? /^\d+$/.test(target.deviceId) && target.route === `${base}/devices/${target.deviceId}`
-    : ['growatt', 'daikin', 'ewelink', 'tuya'].includes(target.provider) && target.route === `${base}/${target.provider}`)
-    ? target.route : undefined
-  return <article className={`monitor-widget monitor-${mode}${route ? ' monitor-linked' : ''}`}
-    onClick={route ? event => {
-      if (event.target instanceof Element && !event.target.closest('a,button,.monitor-widget-actions') && !window.getSelection()?.toString()) void navigate(route)
-    } : undefined}>
+  return <article className={`monitor-widget monitor-${mode}`}>
     <div className="monitor-widget-header">
       <h3>{widget.title}</h3>
       {!preview && <div className="monitor-widget-actions">
@@ -188,20 +167,19 @@ export function MonitoringWidget({ widget, sources, property, now, preview = fal
           onClick={() => setLocal({ mode: nextMode, generation: presentation?.generation })}>
           <ViewIcon size={16} aria-hidden />
         </button>
-        {route && <Link className="monitor-widget-icon" to={route} aria-label={navigationLabel} title={navigationLabel}>
-          <ArrowUpRight size={16} aria-hidden />
-        </Link>}
       </div>}
     </div>
-    <PreviewGrid label={widget.title} kind="values" presentation={presentation} items={widget.values.map(value => ({
-      id: value.id, content: <Measurement value={value} source={sources.get(value.sourceKey)} now={now}
-        dateFormat={dateFormat} detailed={mode === 'detailed'} />,
-    }))} />
+    <PreviewGrid label={widget.title} columns={widget.measurementColumns ?? 2} expandGeneration={presentation?.expandGeneration}
+      items={widget.values.map(value => ({
+        id: value.id, content: <Measurement value={value} source={sources.get(value.sourceKey)} now={now}
+          dateFormat={dateFormat} detailed={mode === 'detailed'} propertyId={property.id} preview={preview} />,
+      }))} />
   </article>
 }
 
-function Measurement({ value, source, now, dateFormat, detailed }: {
+function Measurement({ value, source, now, dateFormat, detailed, propertyId, preview }: {
   value: DashboardValue; source?: DashboardSource; now: number; dateFormat: Intl.DateTimeFormat; detailed: boolean
+  propertyId: number; preview: boolean
 }) {
   const reading = source?.reading
   const { at, tier } = dashboardFreshness(reading, now)
@@ -221,11 +199,20 @@ function Measurement({ value, source, now, dateFormat, detailed }: {
     provenance = provenanceLabels[reading.provenance]
   }
   const tooltip = [origin, summary, stamp && `${stamp} (${originalStamp})`, provenance].filter(Boolean).join(' · ')
-  return <div className="monitor-measure">
+  const base = `/properties/${propertyId}`
+  const route = !preview && source && (source.provider === 'simulator'
+    ? /^\d+$/.test(source.deviceId) && source.route === `${base}/devices/${source.deviceId}`
+    : ['growatt', 'daikin', 'ewelink', 'tuya'].includes(source.provider) && source.route === `${base}/${source.provider}`)
+    ? source.route : undefined
+  const fixed = tier !== 'missing' && value.colorMode === 'fixed' && /^#[0-9a-f]{6}$/i.test(value.customColor ?? '')
+  const contents = <>
     <span className="monitor-measure-label">{title}{source?.provider === 'simulator' && ' (simulated)'}</span>
-    <strong className={`monitor-age-${tier}`} title={tooltip}>{measurement}</strong>
+    <strong className={`monitor-age-${tier}`} title={tooltip} style={fixed ? { color: value.customColor! } : undefined}>{measurement}</strong>
     <span className={detailed ? 'monitor-measure-detail' : 'sr-only'}>{origin && <>{origin}<br /></>}{summary}
       {stamp && <> · <time dateTime={originalStamp}>{stamp}</time> · {provenance}</>}
     </span>
-  </div>
+  </>
+  return route ? <Link className="monitor-measure monitor-measure-link" to={route} title={tooltip}
+    aria-label={`Open ${source?.deviceName} for ${title}: ${measurement}. ${summary}`}>{contents}</Link>
+    : <div className="monitor-measure">{contents}</div>
 }
