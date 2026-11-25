@@ -148,7 +148,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
       <main className="content">
         {simulatorView && snapshot.isError && <div className="notice" role="alert">The property feed could not be refreshed. <Button variant="outline" onClick={() => void snapshot.refetch()}>Retry</Button></div>}
         <Routes>
-          <Route index element={<Dashboard property={property} live={live} />} />
+          <Route index element={<Dashboard property={property} live={live} email={email} />} />
           <Route path="growatt" element={<GrowattPanel property={property} />} />
           <Route path="daikin" element={<DaikinPanel property={property} />} />
           <Route path="ewelink" element={<EwelinkPanel property={property} />} />

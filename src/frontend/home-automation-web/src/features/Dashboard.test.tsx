@@ -1,13 +1,17 @@
 import { readFileSync } from 'node:fs'
+import { webcrypto } from 'node:crypto'
+import { useState, type ComponentProps } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Link, MemoryRouter, Route, Routes } from 'react-router'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError } from '../shared/api'
 import type { DashboardGroup, DashboardReading, DashboardSnapshot, DashboardSource } from '../shared/types'
 import { Dashboard } from './Dashboard'
 import { DashboardGroups, dashboardFreshness, useDashboardTime } from './DashboardWidgets'
+import { defaultWidgetView, type WidgetView } from './dashboardWidgetViews'
 
+const email = 'viewer@example.test'
 const property = { id: 3, name: 'Test property', timeZone: 'Europe/Sofia' }
 const now = Date.parse('2026-11-24T08:00:00Z')
 const reading = (number: number, age: number): DashboardReading => ({
@@ -27,11 +31,22 @@ const groups: DashboardGroup[] = [{
   })),
 }]
 
+beforeEach(() => {
+  vi.stubGlobal('crypto', webcrypto)
+  localStorage.clear()
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
+
+function TestDashboardGroups(props: Omit<ComponentProps<typeof DashboardGroups>, 'views' | 'onViewChange'>) {
+  const [views, setViews] = useState(new Map<string, WidgetView>())
+  return <DashboardGroups {...props} views={views} onViewChange={(id, change) =>
+    setViews(current => new Map(current).set(id, { ...(current.get(id) ?? defaultWidgetView), ...change }))} />
+}
 
 function mockGridPositions(columns: () => number) {
   vi.spyOn(HTMLElement.prototype, 'getClientRects').mockReturnValue({ length: 1 } as DOMRectList)
@@ -80,7 +95,7 @@ describe('configurable dashboard', () => {
     })
     mockGridPositions(() => columns)
     const view = (sample: DashboardSource) => <MemoryRouter>
-      <DashboardGroups groups={groups} sources={new Map([[sample.key, sample]])} property={property} now={now} />
+      <TestDashboardGroups groups={groups} sources={new Map([[sample.key, sample]])} property={property} now={now} />
     </MemoryRouter>
     const { rerender } = render(view(source))
     expect(screen.getByRole('heading', { name: 'Widget 5' })).toBeInTheDocument()
@@ -114,7 +129,7 @@ describe('configurable dashboard', () => {
     ] }] }
     render(<MemoryRouter initialEntries={['/']}>
       <Routes>
-        <Route path="/" element={<DashboardGroups groups={[target]} sources={new Map([source, tuya, unsafe].map(item => [item.key, item]))}
+        <Route path="/" element={<TestDashboardGroups groups={[target]} sources={new Map([source, tuya, unsafe].map(item => [item.key, item]))}
           property={property} now={now} />} />
         <Route path={source.route} element={<h1>Provider detail</h1>} />
       </Routes>
@@ -142,7 +157,7 @@ describe('configurable dashboard', () => {
     vi.spyOn(api, 'dashboard').mockResolvedValue({ groups: [], revision: 'initial', canEdit: false, sources: [] })
     const catalog = vi.spyOn(api, 'dashboardSources')
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} email={email} /></MemoryRouter></QueryClientProvider>)
 
     expect(await screen.findByRole('heading', { name: 'No monitoring widgets yet' })).toBeInTheDocument()
     expect(screen.getByText('A property operator can configure this dashboard.')).toBeInTheDocument()
@@ -154,7 +169,7 @@ describe('configurable dashboard', () => {
     vi.spyOn(api, 'dashboard').mockRejectedValue(new ApiError(503, undefined,
       'The dashboard could not read its database. Check the backend log for the MySQL error.'))
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} email={email} /></MemoryRouter></QueryClientProvider>)
     expect(await screen.findByRole('alert')).toHaveTextContent('Check the backend log for the MySQL error.')
     expect(screen.queryByText('The dashboard database migration is required.')).not.toBeInTheDocument()
   })
@@ -179,7 +194,7 @@ describe('configurable dashboard', () => {
     const browserStyles = readFileSync('src/styles.css', 'utf8')
       .replace(/^@import "tailwindcss";/m, '').replace(/@theme inline\s*\{[^}]*\}/, '')
     render(<QueryClientProvider client={client}><MemoryRouter><style>{browserStyles}</style>
-      <Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+      <Dashboard property={property} live={false} email={email} /></MemoryRouter></QueryClientProvider>)
 
     const global = within(await screen.findByRole('group', { name: 'Dashboard display mode' }))
     const compact = global.getByRole('button', { name: 'Compact' })
@@ -187,7 +202,7 @@ describe('configurable dashboard', () => {
     const acWidget = screen.getByRole('heading', { name: 'AC measurements' }).closest('article')!
     const sensorWidget = screen.getByRole('heading', { name: 'Thermometer measurements' }).closest('article')!
     expect(acWidget).toHaveClass('monitor-compact')
-    expect(sensorWidget).toHaveClass('monitor-detailed')
+    expect(sensorWidget).toHaveClass('monitor-compact')
     expect(detailed).toHaveAttribute('aria-pressed', 'false')
     expect(screen.queryByRole('button', { name: 'Configure dashboard' })).not.toBeInTheDocument()
     fireEvent.click(compact)
@@ -219,7 +234,10 @@ describe('configurable dashboard', () => {
       widgets: groups[0].widgets.map((widget, index) => ({ ...widget, id: `climate-${index}`, title: `Climate widget ${index + 1}` })) }
     const load = vi.spyOn(api, 'dashboard').mockResolvedValue({ canEdit: false, revision: 'fixture', sources: [source], groups: [...groups, second] })
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+    const mount = (cache: QueryClient) => render(<QueryClientProvider client={cache}><MemoryRouter>
+      <Dashboard property={property} live={false} email={email} />
+    </MemoryRouter></QueryClientProvider>)
+    const first = mount(client)
 
     const global = within(await screen.findByRole('group', { name: 'Dashboard display mode' }))
     const compact = global.getByRole('button', { name: 'Compact' })
@@ -228,14 +246,117 @@ describe('configurable dashboard', () => {
     expect(screen.getByRole('button', { name: 'Collapse Widget 1' })).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('button', { name: 'Collapse Climate widget 1' })).toHaveAttribute('aria-expanded', 'true')
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Climate widget 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show detailed view for Climate widget 1' }))
+    expect(screen.getByRole('button', { name: 'Show all Climate widget 1' })).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(compact)
     expect(screen.getByRole('button', { name: 'Show all Climate widget 1' })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByRole('heading', { name: 'Climate widget 5' })).toBeInTheDocument()
     fireEvent.click(detailed)
     expect(screen.getByRole('button', { name: 'Collapse Climate widget 1' })).toHaveAttribute('aria-expanded', 'true')
-    fireEvent.click(compact)
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Climate widget 1' }))
+    fireEvent.click(detailed)
     expect(screen.getByRole('button', { name: 'Collapse Climate widget 1' })).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Widget 1' }))
     expect(load).toHaveBeenCalledTimes(1)
+
+    first.unmount()
+    mount(new QueryClient())
+    expect(await screen.findByRole('button', { name: 'Show compact view for Climate widget 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collapse Climate widget 1' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: 'Show all Widget 1' })).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('restores independent views after navigation and isolates the same widget IDs by property and account', async () => {
+    mockGridPositions(() => 1)
+    const snapshot = { canEdit: false, revision: 'fixture', sources: [source], groups }
+    const load = vi.spyOn(api, 'dashboard').mockResolvedValue(snapshot)
+    const client = new QueryClient()
+    const view = (activeProperty = property, account = email) => <QueryClientProvider client={client}><MemoryRouter>
+      <Link to="/">Dashboard route</Link><Link to="/away">Away</Link>
+      <Routes><Route path="/" element={<Dashboard property={activeProperty} live={false} email={account} />} />
+        <Route path="/away" element={<h1>Away from dashboard</h1>} /></Routes>
+    </MemoryRouter></QueryClientProvider>
+    const { rerender } = render(view())
+    fireEvent.click(await screen.findByRole('button', { name: 'Show detailed view for Widget 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Widget 2' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Away' }))
+    expect(screen.getByRole('heading', { name: 'Away from dashboard' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('link', { name: 'Dashboard route' }))
+    expect(await screen.findByRole('button', { name: 'Show compact view for Widget 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show all Widget 2' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collapse Widget 1' })).toBeInTheDocument()
+
+    rerender(view({ ...property, id: 4 }))
+    await screen.findByRole('button', { name: 'Show detailed view for Widget 1' })
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Widget 1' }))
+    expect(screen.getByRole('button', { name: 'Collapse Widget 2' })).toBeInTheDocument()
+    expect(load).toHaveBeenCalledWith(4, expect.anything())
+
+    rerender(view(property, 'other@example.test'))
+    await screen.findByRole('button', { name: 'Show detailed view for Widget 1' })
+    expect(screen.getByRole('button', { name: 'Collapse Widget 2' })).toBeInTheDocument()
+    rerender(view())
+    expect(await screen.findByRole('button', { name: 'Show compact view for Widget 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show all Widget 2' })).toBeInTheDocument()
+    expect(Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).join()).not.toContain(email)
+  })
+
+  it('retains saved choices while loading and discards preferences for deleted widgets on the next edit', async () => {
+    mockGridPositions(() => 1)
+    const snapshot = { canEdit: false, revision: 'fixture', sources: [source], groups }
+    const load = vi.spyOn(api, 'dashboard').mockResolvedValue(snapshot)
+    const mount = (client: QueryClient) => render(<QueryClientProvider client={client}><MemoryRouter>
+      <Dashboard property={property} live={false} email={email} />
+    </MemoryRouter></QueryClientProvider>)
+    const initial = mount(new QueryClient())
+    fireEvent.click(await screen.findByRole('button', { name: 'Show detailed view for Widget 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Widget 1' }))
+    const key = localStorage.key(0)!
+    const saved = localStorage.getItem(key)
+    initial.unmount()
+
+    let finishLoad!: (value: DashboardSnapshot) => void
+    load.mockReturnValueOnce(new Promise(resolve => { finishLoad = resolve }))
+    const write = vi.spyOn(Storage.prototype, 'setItem')
+    const client = new QueryClient()
+    mount(client)
+    expect(screen.getByRole('status')).toHaveTextContent('Loading dashboard')
+    expect(localStorage.getItem(key)).toBe(saved)
+    await act(async () => finishLoad(snapshot))
+    expect(await screen.findByRole('button', { name: 'Show compact view for Widget 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show all Widget 1' })).toBeInTheDocument()
+
+    const [deleted, ...remaining] = groups[0].widgets
+    const updated = { ...snapshot, groups: [{ ...groups[0], widgets: remaining }] }
+    act(() => { client.setQueryData(['property', property.id, 'dashboard'], updated) })
+    await waitFor(() => expect(screen.queryByRole('heading', { name: deleted.title })).not.toBeInTheDocument())
+    expect(write).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Show detailed view for Widget 2' }))
+    expect(JSON.parse(localStorage.getItem(key)!)).not.toHaveProperty(deleted.id)
+    act(() => { client.setQueryData(['property', property.id, 'dashboard'], {
+      ...updated, groups: [{ ...groups[0], widgets: [{ ...deleted, id: 'recreated-widget' }, ...remaining] }],
+    }) })
+    expect(await screen.findByRole('button', { name: 'Show detailed view for Widget 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collapse Widget 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show compact view for Widget 2' })).toBeInTheDocument()
+  })
+
+  it('uses defaults and keeps controls usable when storage is corrupt or unavailable', async () => {
+    const account = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(email))
+    localStorage.setItem(`dashboard-widget-views:v1:${Buffer.from(account).toString('hex')}:${property.id}`, '{bad json')
+    vi.spyOn(api, 'dashboard').mockResolvedValue({ canEdit: false, revision: 'fixture', sources: [source], groups })
+    const mount = () => render(<QueryClientProvider client={new QueryClient()}><MemoryRouter>
+      <Dashboard property={property} live={false} email={email} />
+    </MemoryRouter></QueryClientProvider>)
+    const first = mount()
+    expect(await screen.findByRole('button', { name: 'Show detailed view for Widget 1' })).toBeInTheDocument()
+    first.unmount()
+
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('Unavailable', 'SecurityError') })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('Unavailable', 'SecurityError') })
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: 'Show detailed view for Widget 1' }))
+    expect(screen.getByRole('button', { name: 'Show compact view for Widget 1' })).toBeInTheDocument()
   })
 
   it('keeps independent widget modes across telemetry and reapplies global modes without restoring old choices', async () => {
@@ -245,7 +366,7 @@ describe('configurable dashboard', () => {
     const load = vi.spyOn(api, 'dashboard').mockResolvedValue(snapshot)
     const save = vi.spyOn(api, 'saveDashboard')
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} email={email} /></MemoryRouter></QueryClientProvider>)
     const global = within(await screen.findByRole('group', { name: 'Dashboard display mode' }))
     const widgetButton = (index: number, mode: 'Compact' | 'Detailed') =>
       screen.getByRole('button', { name: `Show ${mode.toLowerCase()} view for Widget ${index}` })
@@ -294,7 +415,7 @@ describe('configurable dashboard', () => {
     const save = vi.spyOn(api, 'saveDashboard').mockResolvedValue(undefined)
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const { container } = render(<QueryClientProvider client={client}><MemoryRouter>
-      <Dashboard property={property} live={false} />
+      <Dashboard property={property} live={false} email={email} />
     </MemoryRouter></QueryClientProvider>)
     const order = () => Array.from(container.querySelectorAll('[data-dashboard-value]'))
       .map(item => item.getAttribute('data-dashboard-value'))
@@ -340,7 +461,7 @@ describe('configurable dashboard', () => {
       snapshot = { ...snapshot, groups: saved, sources: [source] }
     }).mockRejectedValueOnce(new ApiError(503, undefined, 'Ask a database administrator to check storage permissions.'))
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} email={email} /></MemoryRouter></QueryClientProvider>)
     fireEvent.click(await screen.findByRole('button', { name: 'Configure dashboard' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add group' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Add group' }))

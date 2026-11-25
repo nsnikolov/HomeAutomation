@@ -3,6 +3,7 @@ import { Rows2, Rows3 } from 'lucide-react'
 import { Link } from 'react-router'
 import type { DashboardGroup, DashboardReading, DashboardSource, DashboardValue, DashboardWidget, Property } from '../shared/types'
 import { metricLabels } from './Devices'
+import { defaultWidgetView, type WidgetView } from './dashboardWidgetViews'
 
 export const providerNames: Record<DashboardSource['provider'], string> = {
   growatt: 'Growatt', daikin: 'Daikin ONECTA', ewelink: 'eWeLink', tuya: 'Smart Life / Tuya', simulator: 'Simulator (simulated)',
@@ -14,8 +15,6 @@ const freshnessLabels = {
 }
 const provenanceLabels = { provider: 'Provider observation', serverReceived: 'Server received', simulated: 'Simulated observation' }
 const numeric = new Intl.NumberFormat(undefined, { maximumFractionDigits: 20 })
-
-export type DashboardPresentation = { mode: DashboardWidget['mode']; generation: number; expandGeneration?: number }
 
 export function DashboardViewToggle({ label, selected, onSelect, title }: {
   label: string; selected?: DashboardWidget['mode']; onSelect: (mode: DashboardWidget['mode']) => void; title?: string
@@ -80,13 +79,14 @@ export function useDashboardTime(sources: readonly DashboardSource[]) {
   return now
 }
 
-function PreviewGrid({ items, label, expandGeneration, columns }: {
-  items: { id: string; content: ReactNode }[]; label: string; expandGeneration?: number; columns: number
+function PreviewGrid({ items, label, columns, expanded: savedExpansion, onExpand }: {
+  items: { id: string; content: ReactNode }[]; label: string; columns: number
+  expanded?: boolean; onExpand?: (expanded: boolean) => void
 }) {
   const id = useId()
   const grid = useRef<HTMLDivElement>(null)
   const [limit, setLimit] = useState<{ count: number; height: number } | null>(null)
-  const [override, setOverride] = useState<{ expanded: boolean; generation: number | undefined }>()
+  const [previewExpanded, setPreviewExpanded] = useState(true)
   const itemKeys = items.map(item => item.id).join('|')
   useLayoutEffect(() => {
     const element = grid.current!
@@ -113,8 +113,8 @@ function PreviewGrid({ items, label, expandGeneration, columns }: {
     return () => observer?.disconnect()
   }, [itemKeys, columns])
 
-  const expanded = override?.generation === expandGeneration ? override?.expanded ?? true : true
-  const toggle = () => setOverride({ expanded: !expanded, generation: expandGeneration })
+  const expanded = savedExpansion ?? previewExpanded
+  const toggle = () => (onExpand ?? setPreviewExpanded)(!expanded)
   const cropped = !expanded && limit !== null
   return <>
     <div id={id} className={cropped ? 'monitor-cropped' : undefined} style={cropped ? { maxHeight: limit.height } : undefined}>
@@ -130,9 +130,9 @@ function PreviewGrid({ items, label, expandGeneration, columns }: {
   </>
 }
 
-export function DashboardGroups({ groups, sources, property, now, presentation }: {
+export function DashboardGroups({ groups, sources, property, now, views, onViewChange }: {
   groups: DashboardGroup[]; sources: Map<string, DashboardSource>; property: Property; now: number
-  presentation?: DashboardPresentation
+  views: ReadonlyMap<string, WidgetView>; onViewChange: (id: string, change: Partial<WidgetView>) => void
 }) {
   return <div className="monitor-groups">
     {groups.filter(group => !group.hidden).map(group => <section key={group.id} className="monitor-group" aria-labelledby={`group-${group.id}`}>
@@ -140,20 +140,19 @@ export function DashboardGroups({ groups, sources, property, now, presentation }
       {group.widgets.length ? <div className="monitor-grid monitor-grid-widgets">
         {group.widgets.map(widget => <div key={widget.id} className="monitor-grid-item"
           style={{ '--widget-span': widget.width ?? 1 } as CSSProperties}>
-          <MonitoringWidget widget={widget} sources={sources} property={property} now={now} presentation={presentation} />
+          <MonitoringWidget widget={widget} sources={sources} property={property} now={now}
+            view={views.get(widget.id) ?? defaultWidgetView} onViewChange={change => onViewChange(widget.id, change)} />
         </div>)}
       </div> : <p className="muted">This group has no widgets.</p>}
     </section>)}
   </div>
 }
 
-export function MonitoringWidget({ widget, sources, property, now, preview = false, presentation }: {
+export function MonitoringWidget({ widget, sources, property, now, preview = false, view, onViewChange }: {
   widget: DashboardWidget; sources: Map<string, DashboardSource>; property: Property; now: number; preview?: boolean
-  presentation?: DashboardPresentation
+  view?: WidgetView; onViewChange?: (change: Partial<WidgetView>) => void
 }) {
-  const [local, setLocal] = useState<{ mode: DashboardWidget['mode']; generation?: number }>()
-  const localMode = local?.generation === presentation?.generation ? local?.mode : undefined
-  const mode = localMode ?? presentation?.mode ?? widget.mode
+  const mode = view?.mode ?? widget.mode
   const nextMode = mode === 'compact' ? 'detailed' : 'compact'
   const ViewIcon = mode === 'compact' ? Rows3 : Rows2
   const viewLabel = `Show ${nextMode} view for ${widget.title}`
@@ -164,12 +163,13 @@ export function MonitoringWidget({ widget, sources, property, now, preview = fal
       <h3>{widget.title}</h3>
       {!preview && <div className="monitor-widget-actions">
         <button type="button" className="monitor-widget-icon" aria-label={viewLabel} title={viewLabel}
-          onClick={() => setLocal({ mode: nextMode, generation: presentation?.generation })}>
+          onClick={() => onViewChange?.({ mode: nextMode })}>
           <ViewIcon size={16} aria-hidden />
         </button>
       </div>}
     </div>
-    <PreviewGrid label={widget.title} columns={widget.measurementColumns ?? 2} expandGeneration={presentation?.expandGeneration}
+    <PreviewGrid label={widget.title} columns={widget.measurementColumns ?? 2} expanded={view?.expanded}
+      onExpand={onViewChange && (expanded => onViewChange({ expanded })) }
       items={widget.values.map(value => ({
         id: value.id, content: <Measurement value={value} source={sources.get(value.sourceKey)} now={now}
           dateFormat={dateFormat} detailed={mode === 'detailed'} propertyId={property.id} preview={preview} />,

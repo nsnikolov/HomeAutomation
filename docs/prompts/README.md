@@ -51,3 +51,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 47. 2026-11-24 · [HomeAutomation — Compact Widget Header Icons and Brighter Green](0047-dashboard-widget-icons-and-brighter-green.md)
 48. 2026-11-24 · [HomeAutomation — Milestone 5B: Configurable Dashboard Layout and Interactions](0048-configurable-dashboard-layout-and-interactions.md)
 49. 2026-11-25 · [HomeAutomation — Diagnose Dashboard HTTP 503 after migrations 012/013](0049-dashboard-schema-503.md)
+50. 2026-11-25 · [HomeAutomation — Persist Dashboard Widget View State](0050-persist-dashboard-widget-view.md)
