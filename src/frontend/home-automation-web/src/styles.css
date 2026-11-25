@@ -268,3 +268,7 @@ h3 { font-size: .98rem; font-weight: 650; }
 .monitor-editor-fields > button, .monitor-edit-group > button { justify-self: start; }
 .monitor-preview summary { cursor: pointer; width: fit-content; margin-bottom: 5px; font-size: .82rem; color: #175b55; }
 .monitor-preview .monitor-widget { max-width: 380px; }
+.settings-form fieldset { display: grid; gap: .75rem; min-width: 0; }
+.settings-form fieldset > div { display: grid; gap: .25rem; }
+.settings-form .badge { justify-self: start; }
+.settings-form button { justify-self: start; }

@@ -1,5 +1,6 @@
 import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePageKey, DevicePreferences, EwelinkRelayOutcome, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, SensorHistory, SensorPeriod, TuyaState } from './types'
 import type { DashboardGroup, DashboardSnapshot, DashboardSource } from './types'
+import type { ConfigurationView, ProviderConfigurationUpdate } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code?: string, public readonly detail?: string) {
@@ -49,7 +50,14 @@ async function putWithCsrf(path: string, body: object) {
   })
 }
 
+const configurationPath = (property: number | null) => property === null
+  ? '/configuration/global' : `/configuration/properties/${property}`
+
 export const api = {
+  configuration: (property: number | null, signal?: AbortSignal) =>
+    request<ConfigurationView>(configurationPath(property), { signal }),
+  saveConfiguration: (property: number | null, provider: string, update: ProviderConfigurationUpdate) =>
+    putWithCsrf(`${configurationPath(property)}/${encodeURIComponent(provider)}`, update),
   session: async (signal?: AbortSignal) => {
     try {
       return await request<{ email: string }>('/session', { signal })

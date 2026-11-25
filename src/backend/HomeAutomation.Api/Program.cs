@@ -1,10 +1,12 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using HomeAutomation.Api;
 using HomeAutomation.Application;
 using HomeAutomation.Infrastructure.MySql;
+using HomeAutomation.Infrastructure.Configuration;
 using HomeAutomation.Infrastructure.Simulator;
 using HomeAutomation.Infrastructure.Growatt;
 using HomeAutomation.Infrastructure.Daikin;
@@ -24,6 +26,13 @@ var bootstrap = args.Contains("--bootstrap-user", StringComparer.Ordinal);
 var discoverGrowatt = args.Contains("--discover-growatt", StringComparer.Ordinal);
 var createProperty = args.Contains("--create-property", StringComparer.Ordinal);
 var promoteInitialOwner = args.Contains("--promote-initial-owner", StringComparer.Ordinal);
+var rotateConfigurationKeys = args.Contains("--rotate-configuration-keys", StringComparer.Ordinal);
+if (rotateConfigurationKeys && (migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner))
+{
+    Console.Error.WriteLine("Run the configuration key rotation command by itself.");
+    Environment.ExitCode = 1;
+    return;
+}
 if ((createProperty || promoteInitialOwner) && (migrate || bootstrap || discoverGrowatt || (createProperty && promoteInitialOwner)))
 {
     Console.Error.WriteLine("Run a property administration command by itself.");
@@ -31,7 +40,8 @@ if ((createProperty || promoteInitialOwner) && (migrate || bootstrap || discover
     return;
 }
 var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not
-    ("--migrate" or "--bootstrap-user" or "--discover-growatt" or "--create-property" or "--promote-initial-owner")).ToArray());
+    ("--migrate" or "--bootstrap-user" or "--discover-growatt" or "--create-property" or "--promote-initial-owner" or
+        "--rotate-configuration-keys")).ToArray());
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 builder.Services.AddProblemDetails();
@@ -68,6 +78,10 @@ builder.Services.AddSingleton(services =>
 });
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<Migrations>();
+builder.Services.AddOptions<ConfigurationVaultOptions>().BindConfiguration("ConfigurationVault");
+builder.Services.AddSingleton(services => services.GetRequiredService<IOptions<ConfigurationVaultOptions>>().Value);
+builder.Services.AddSingleton<ProviderConfigurationStore>();
+builder.Services.AddSingleton<IProviderConfiguration>(services => services.GetRequiredService<ProviderConfigurationStore>());
 builder.Services.AddSingleton<IObservationProvider, SimulatorProvider>();
 builder.Services.AddScoped<TelemetryWriter>();
 builder.Services.AddScoped<DeviceViewPreferences>();
@@ -187,6 +201,23 @@ builder.Services.AddHealthChecks()
     .AddCheck<DatabaseReadiness>("database", tags: ["ready"], timeout: TimeSpan.FromSeconds(6));
 
 await using var app = builder.Build();
+if (rotateConfigurationKeys)
+{
+    using var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+    try
+    {
+        var rotated = await app.Services.GetRequiredService<ProviderConfigurationStore>().RotateAsync(operation.Token);
+        app.Logger.LogInformation("Re-encrypted {CredentialCount} configuration credentials.", rotated);
+    }
+    catch (Exception error) when (error is CryptographicException or MySqlException or ConfigurationStorageException or
+        OptionsValidationException or OperationCanceledException)
+    {
+        app.Logger.LogError("Configuration rotation failed ({FailureType}). Check migration 014 and the external key files.",
+            error.GetType().Name);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
 if (discoverGrowatt)
 {
     await GrowattDiscovery.RunAsync(app, migrate || bootstrap);
@@ -249,6 +280,7 @@ app.UseRateLimiter();
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = registration => registration.Tags.Contains("ready") });
 app.MapSession();
+app.MapConfiguration();
 app.MapMonitoring();
 app.MapDaikin();
 app.MapEwelink();

@@ -53,3 +53,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 49. 2026-11-25 · [HomeAutomation — Diagnose Dashboard HTTP 503 after migrations 012/013](0049-dashboard-schema-503.md)
 50. 2026-11-25 · [HomeAutomation — Persist Dashboard Widget View State](0050-persist-dashboard-widget-view.md)
 51. 2026-11-25 · [HomeAutomation — Cross-Agent Context, Documentation and Automatic Handoff](0051-cross-agent-context-and-handoff.md)
+52. 2026-11-25 · [HomeAutomation — Milestone 6: Database Configuration and Encrypted Secrets](0052-database-configuration-and-encrypted-secrets.md)

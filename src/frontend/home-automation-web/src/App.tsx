@@ -13,6 +13,7 @@ import { EwelinkPanel } from './features/EwelinkPanel'
 import { TuyaPanel } from './features/TuyaPanel'
 import { Devices, DevicePage } from './features/Devices'
 import { Energy } from './features/Energy'
+import { ConfigurationSettings } from './features/ConfigurationSettings'
 
 export function App() {
   const session = useQuery({ queryKey: ['session'], queryFn: ({ signal }) => api.session(signal) })
@@ -157,7 +158,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
           <Route path="devices/:deviceId" element={<DevicePage property={property} />} />
           <Route path="energy" element={<Energy property={property} state={snapshot.data} pollSeconds={health.data?.pollSeconds ?? 10} />} />
           <Route path="automations" element={<Placeholder title="Automations" description="Automation rules will appear here when rule execution is available." />} />
-          <Route path="settings" element={<Placeholder title="Settings" description="Property configuration will appear here when editing is available." />} />
+          <Route path="settings" element={<ConfigurationSettings property={property} />} />
           <Route path="*" element={<Navigate to={root} replace />} />
         </Routes>
       </main>
