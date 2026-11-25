@@ -193,7 +193,7 @@ Set the existing Daikin app's redirect URI to `https://ha-dev.britishlab.org:544
 
 ## Verify changes
 
-For encrypted, database-backed provider configuration staging, see the [configuration vault setup and recovery guide](docs/architecture/09-configuration-vault.md). Existing provider configuration stays active during Phase 6A.
+For encrypted, database-backed provider configuration, see the [vault setup, import, and cutover guide](docs/architecture/09-configuration-vault.md). Legacy provider configuration remains the default until the deployment administrator explicitly selects the vault.
 
 ```powershell
 dotnet build HomeAutomation.slnx -c Release

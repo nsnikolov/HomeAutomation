@@ -28,6 +28,21 @@ var createProperty = args.Contains("--create-property", StringComparer.Ordinal);
 var promoteInitialOwner = args.Contains("--promote-initial-owner", StringComparer.Ordinal);
 var rotateConfigurationKeys = args.Contains("--rotate-configuration-keys", StringComparer.Ordinal);
 var convertConfigurationIdentifiers = args.Contains("--convert-configuration-identifiers", StringComparer.Ordinal);
+ProviderConfigurationStartup.ImportCommand? importProvider;
+try { importProvider = ProviderConfigurationStartup.ParseImport(args); }
+catch (ProviderConfigurationException error)
+{
+    Console.Error.WriteLine(error.Message);
+    Environment.ExitCode = 1;
+    return;
+}
+if (importProvider is not null && (migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner ||
+    rotateConfigurationKeys || convertConfigurationIdentifiers))
+{
+    Console.Error.WriteLine("Run the provider import command by itself.");
+    Environment.ExitCode = 1;
+    return;
+}
 if ((rotateConfigurationKeys || convertConfigurationIdentifiers) &&
     (migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner ||
      (rotateConfigurationKeys && convertConfigurationIdentifiers)))
@@ -42,7 +57,7 @@ if ((createProperty || promoteInitialOwner) && (migrate || bootstrap || discover
     Environment.ExitCode = 1;
     return;
 }
-var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not
+var builder = WebApplication.CreateBuilder(args.Where(arg => !ProviderConfigurationStartup.IsImportArgument(arg) && arg is not
     ("--migrate" or "--bootstrap-user" or "--discover-growatt" or "--create-property" or "--promote-initial-owner" or
         "--rotate-configuration-keys" or "--convert-configuration-identifiers")).ToArray());
 builder.Logging.ClearProviders();
@@ -94,8 +109,10 @@ builder.Services.AddScoped<ITelemetryWriter>(services => services.GetRequiredSer
 builder.Services.AddScoped<IMonitoringReader, MonitoringReader>();
 builder.Services.AddScoped<IGrowattTelemetryStore>(services => services.GetRequiredService<TelemetryWriter>());
 builder.Services.AddScoped<IGrowattMonitoringReader, MonitoringReader>();
+var providerConfiguration = new ProviderConfigurationStartup();
 builder.Services.AddSingleton(services =>
 {
+    if (providerConfiguration.Get<GrowattOptions>("growatt") is { } fromVault) return fromVault;
     try
     {
         return services.GetRequiredService<IConfiguration>().GetSection("Growatt").Get<GrowattOptions>() ?? new GrowattOptions();
@@ -121,6 +138,7 @@ builder.Services.AddScoped<IGrowattReadSource, GrowattCloudSource>();
 builder.Services.AddHostedService<GrowattWorker>();
 builder.Services.AddSingleton(services =>
 {
+    if (providerConfiguration.Get<DaikinOptions>("daikin") is { } fromVault) return fromVault;
     try { return services.GetRequiredService<IConfiguration>().GetSection("Daikin").Get<DaikinOptions>() ?? new DaikinOptions(); }
     catch (InvalidOperationException) { return new DaikinOptions(); }
 });
@@ -129,6 +147,7 @@ DaikinService.Register(builder.Services);
 builder.Services.AddHostedService<DaikinWorker>();
 builder.Services.AddSingleton(services =>
 {
+    if (providerConfiguration.Get<EwelinkOptions>("ewelink") is { } fromVault) return fromVault;
     try { return services.GetRequiredService<IConfiguration>().GetSection("Ewelink").Get<EwelinkOptions>() ?? new EwelinkOptions(); }
     catch (InvalidOperationException) { return new EwelinkOptions(); }
 });
@@ -137,6 +156,7 @@ builder.Services.AddSingleton<IEwelinkLiveNotifier, EwelinkLiveNotifier>();
 EwelinkService.Register(builder.Services);
 builder.Services.AddSingleton(services =>
 {
+    if (providerConfiguration.Get<TuyaOptions>("tuya") is { } fromVault) return fromVault;
     try { return services.GetRequiredService<IConfiguration>().GetSection("Tuya").Get<TuyaOptions>() ?? new TuyaOptions(); }
     catch (InvalidOperationException) { return new TuyaOptions(); }
 });
@@ -204,6 +224,11 @@ builder.Services.AddHealthChecks()
     .AddCheck<DatabaseReadiness>("database", tags: ["ready"], timeout: TimeSpan.FromSeconds(6));
 
 await using var app = builder.Build();
+if (importProvider is not null)
+{
+    if (!await ProviderConfigurationStartup.ImportAsync(app, importProvider)) Environment.ExitCode = 1;
+    return;
+}
 if (rotateConfigurationKeys || convertConfigurationIdentifiers)
 {
     using var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -236,6 +261,11 @@ if (rotateConfigurationKeys || convertConfigurationIdentifiers)
 }
 if (discoverGrowatt)
 {
+    if (!migrate && !bootstrap && !await providerConfiguration.LoadAsync(app, "growatt"))
+    {
+        Environment.ExitCode = 1;
+        return;
+    }
     await GrowattDiscovery.RunAsync(app, migrate || bootstrap);
     return;
 }
@@ -259,6 +289,12 @@ if (migrate || bootstrap || createProperty || promoteInitialOwner)
         app.Logger.LogError("Database or account setup failed: {Reason}", error.Message);
         Environment.ExitCode = 1;
     }
+    return;
+}
+
+if (!await providerConfiguration.LoadAsync(app))
+{
+    Environment.ExitCode = 1;
     return;
 }
 

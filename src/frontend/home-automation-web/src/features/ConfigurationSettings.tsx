@@ -15,7 +15,7 @@ const fieldNames: Record<string, string> = {
 export function ConfigurationSettings({ property }: { property: Property }) {
   return <>
     <div className="page-heading"><h1>Settings</h1></div>
-    <p className="muted">These settings are staged. Running integrations still use their existing configuration.</p>
+    <p className="muted">Vault settings take effect after restart for providers configured to use the vault.</p>
     <ConfigurationScope property={property.id} title={property.name} />
     <ConfigurationScope property={null} title="Global configuration" />
   </>

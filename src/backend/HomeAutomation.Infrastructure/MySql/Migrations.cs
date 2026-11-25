@@ -66,7 +66,9 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
     private const string EwelinkReceiveTimeMigration = ".010_ewelink_receive_time_provenance.sql";
     private static readonly string[] ConfigurationMigrations = Scripts.Where(name =>
         name.EndsWith(".014_configuration_vault.sql", StringComparison.Ordinal) ||
-        name.EndsWith(".015_configuration_identifiers.sql", StringComparison.Ordinal)).ToArray();
+        name.EndsWith(".015_configuration_identifiers.sql", StringComparison.Ordinal) ||
+        name.EndsWith(".016_provider_runtime_configuration.sql", StringComparison.Ordinal)).ToArray();
+    private static readonly string[] StagingMigrations = ConfigurationMigrations[..^1];
     private volatile bool receiveTimeReady;
 
     internal async Task<bool> VerifyEwelinkReceiveTimeAsync(CancellationToken ct)
@@ -115,13 +117,19 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
     }
 
     public async Task<bool> VerifyConfigurationAsync(CancellationToken ct)
+        => await VerifyConfigurationAsync(StagingMigrations, ct);
+
+    internal async Task<bool> VerifyProviderConfigurationAsync(CancellationToken ct)
+        => await VerifyConfigurationAsync(ConfigurationMigrations, ct);
+
+    private async Task<bool> VerifyConfigurationAsync(string[] names, CancellationToken ct)
     {
         await using var connection = await database.OpenAsync(ct);
         try
         {
             var installed = await connection.ExecuteScalarAsync<int>(Query(
-                "SELECT COUNT(*) FROM schema_migrations WHERE name IN @names", ct, new { names = ConfigurationMigrations }));
-            return installed == ConfigurationMigrations.Length;
+                "SELECT COUNT(*) FROM schema_migrations WHERE name IN @names", ct, new { names }));
+            return installed == names.Length;
         }
         catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.NoSuchTable)
         {

@@ -55,3 +55,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 51. 2026-11-25 · [HomeAutomation — Cross-Agent Context, Documentation and Automatic Handoff](0051-cross-agent-context-and-handoff.md)
 52. 2026-11-25 · [HomeAutomation — Milestone 6: Database Configuration and Encrypted Secrets](0052-database-configuration-and-encrypted-secrets.md)
 53. 2026-11-25 · [HomeAutomation — Milestone 6A.1: Separate Secret and Non-Secret Configuration](0053-separate-secret-provider-configuration.md)
+54. 2026-11-25 · [HomeAutomation — Milestone 6B: Provider Configuration Migration and Controlled Cutover](0054-provider-configuration-controlled-cutover.md)

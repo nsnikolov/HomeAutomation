@@ -12,7 +12,7 @@ namespace HomeAutomation.Infrastructure.Configuration;
 
 public sealed class ConfigurationStorageException : Exception;
 
-public sealed class ProviderConfigurationStore(Database database, Migrations migrations, ConfigurationVaultOptions options,
+public sealed partial class ProviderConfigurationStore(Database database, Migrations migrations, ConfigurationVaultOptions options,
     TimeProvider clock) : IProviderConfiguration
 {
     private sealed record Definition(string Provider, int Default, int Minimum, int Maximum, int Step,
