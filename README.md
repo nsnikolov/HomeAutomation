@@ -75,6 +75,12 @@ With frontend dependencies restored, select **Home Automation (API + web)** in V
 
 For terminal launches, press **Ctrl+C** in each terminal to stop both services. In VS Code, stop the debug sessions and use **Tasks: Terminate Task** if the Vite task is still running. Check the Vite task terminal for startup errors.
 
+### Verify provider startup on Windows
+
+Run `.erify-provider-configuration.ps1` from the repository root. It checks local liveness and correlates structured startup events in `logs/backend.stdout.log` and `logs/backend.stderr.log` with the listening process. For redirected logs elsewhere, pass `-LogDirectory`. Exit `0` means all four providers have current validation summaries marked Valid or Disabled. Exit `1` means there is no listener or configuration validation failed. Exit `2` means the available evidence cannot confirm all providers. Startup validation checks local configuration. Provider reachability requires evidence from normal polling.
+
+At the next planned restart, `.estart-backend.ps1` captures fresh logs. It stops only listeners whose executable or DLL it can verify belongs to this checkout. If startup fails it reports the launcher exit code when it exists and safe summaries from the log files. Sessions that started before event 6100 was introduced, or that log only to a terminal, can appear as Unknown until current log files are available.
+
 | Symptom | Check |
 | --- | --- |
 | Missing database setting | Set the named key in Development User Secrets or in the process environment. Recheck inherited overrides. |

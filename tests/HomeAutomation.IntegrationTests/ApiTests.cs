@@ -941,6 +941,17 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+            {
+                // Keep this synthetic host independent of the developer's selected live vault profiles.
+                var sources = new Dictionary<string, string?>();
+                foreach (var provider in new[] { "growatt", "daikin", "ewelink", "tuya" })
+                {
+                    sources[$"ConfigurationVault:Providers:{provider}:Source"] = "Legacy";
+                    sources[$"ConfigurationVault:Providers:{provider}:PropertyId"] = null;
+                }
+                configuration.AddInMemoryCollection(sources);
+            });
             builder.UseSetting("Database:Host", "127.0.0.1");
             builder.UseSetting("Database:Port", "3306");
             builder.UseSetting("Database:Name", "homeautomation_test");

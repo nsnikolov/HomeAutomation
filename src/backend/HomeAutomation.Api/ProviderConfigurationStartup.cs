@@ -1,6 +1,10 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using HomeAutomation.Infrastructure.Configuration;
+using HomeAutomation.Infrastructure.Daikin;
+using HomeAutomation.Infrastructure.Ewelink;
+using HomeAutomation.Infrastructure.Growatt;
+using HomeAutomation.Infrastructure.Tuya;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
 using MySqlConnector;
@@ -17,26 +21,53 @@ internal sealed class ProviderConfigurationStartup
     public async Task<bool> LoadAsync(WebApplication app, string? onlyProvider = null)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var success = true;
         foreach (var provider in Providers)
         {
             if (onlyProvider is not null && provider != onlyProvider) continue;
+            var configuredSource = app.Configuration[$"ConfigurationVault:Providers:{provider}:Source"] ?? "Legacy";
+            var source = configuredSource.Equals("Vault", StringComparison.OrdinalIgnoreCase) ? "Vault" :
+                configuredSource.Equals("Legacy", StringComparison.OrdinalIgnoreCase) ? "Legacy" : "Unknown";
+            long? property = null;
+            var scope = "Unknown";
+            var status = "Invalid";
             try
             {
-                var (vault, property) = Select(app.Configuration, provider);
-                if (!vault) continue;
-                snapshots[provider] = await app.Services.GetRequiredService<ProviderConfigurationStore>().LoadProviderAsync(
-                    provider, property, provider == "daikin" ? app.Configuration["Daikin:TokenKey"] : null,
-                    app.Services.GetRequiredService<IDataProtectionProvider>(), timeout.Token);
-                app.Logger.LogInformation("Loaded {Provider} configuration from the vault (property {PropertyId}).",
-                    provider, property);
+                var selection = Select(app.Configuration, provider);
+                property = selection.Property;
+                scope = property.HasValue ? "Property" : "Global";
+                if (selection.Vault)
+                {
+                    snapshots[provider] = await app.Services.GetRequiredService<ProviderConfigurationStore>().LoadProviderAsync(
+                        provider, property, provider == "daikin" ? app.Configuration["Daikin:TokenKey"] : null,
+                        app.Services.GetRequiredService<IDataProtectionProvider>(), timeout.Token);
+                    status = "Valid";
+                }
+                else status = LegacyStatus(app.Services, provider);
             }
             catch (Exception error) when (IsConfigurationFailure(error))
             {
                 LogFailure(app, provider, error);
-                return false;
+                success = false;
             }
+            app.Logger.LogInformation(new EventId(6100, "ProviderConfigurationStartup"),
+                "Provider startup {Provider} uses {Source} at {Scope} (property {PropertyId}), validation {ValidationStatus}, PID {ProcessId}, UTC {ObservedAtUtc}.",
+                provider, source, scope, property, status, Environment.ProcessId, DateTimeOffset.UtcNow);
         }
-        return true;
+        return success;
+    }
+
+    private static string LegacyStatus(IServiceProvider services, string provider)
+    {
+        var configured = provider switch
+        {
+            "growatt" => services.GetRequiredService<GrowattOptions>() is { Enabled: true } growatt
+                ? growatt.HasCloudConfiguration() : (bool?)null,
+            "daikin" => services.GetRequiredService<DaikinOptions>().IsConfigured,
+            "ewelink" => services.GetRequiredService<EwelinkOptions>().IsConfigured,
+            _ => services.GetRequiredService<TuyaOptions>().IsConfigured
+        };
+        return configured switch { true => "Valid", false => "NotConfiguredOrInvalid", null => "Disabled" };
     }
 
     internal static (bool Vault, long? Property) Select(IConfiguration config, string provider)
