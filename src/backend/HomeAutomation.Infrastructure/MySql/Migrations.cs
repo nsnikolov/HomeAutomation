@@ -1,11 +1,12 @@
 using System.Security.Cryptography;
 using Dapper;
+using Microsoft.Extensions.Logging;
 using MySqlConnector;
 using static HomeAutomation.Infrastructure.MySql.Database;
 
 namespace HomeAutomation.Infrastructure.MySql;
 
-public sealed class Migrations(Database database)
+public sealed class Migrations(Database database, ILogger<Migrations>? logger = null)
 {
     private static readonly string[] Scripts = typeof(Migrations).Assembly.GetManifestResourceNames()
         .Where(name => name.EndsWith(".sql", StringComparison.Ordinal))
@@ -83,7 +84,7 @@ public sealed class Migrations(Database database)
         {
             var applied = await connection.QueryAsync<string>(Query("SELECT name FROM schema_migrations", cancellationToken));
             var installed = applied.ToHashSet(StringComparer.Ordinal);
-            return Scripts.Where(name => (includeDaikin || !name.EndsWith(".003_daikin_onecta.sql", StringComparison.Ordinal)) &&
+            var required = Scripts.Where(name => (includeDaikin || !name.EndsWith(".003_daikin_onecta.sql", StringComparison.Ordinal)) &&
                 (includeEwelink || !name.EndsWith(".004_ewelink_cloud.sql", StringComparison.Ordinal)) &&
                 (includeEwelink || !name.EndsWith(".007_ewelink_sync_budget.sql", StringComparison.Ordinal)) &&
                 (includeEwelink || !name.EndsWith(".008_ewelink_relay_commands.sql", StringComparison.Ordinal)) &&
@@ -93,11 +94,18 @@ public sealed class Migrations(Database database)
                 (includeDashboard || !name.EndsWith(".011_monitoring_dashboard.sql", StringComparison.Ordinal)) &&
                 (includeDashboard || !name.EndsWith(".012_dashboard_widget_layout.sql", StringComparison.Ordinal)) &&
                 (includeDashboard || !name.EndsWith(".013_dashboard_measurement_colors.sql", StringComparison.Ordinal)) &&
-                (includePreferences || !name.EndsWith(".006_device_view_preferences.sql", StringComparison.Ordinal)))
-                .All(installed.Contains);
+                (includePreferences || !name.EndsWith(".006_device_view_preferences.sql", StringComparison.Ordinal)));
+            if (!includeDashboard) return required.All(installed.Contains);
+            var missing = required.Where(name => !installed.Contains(name)).ToArray();
+            if (missing.Length != 0)
+                logger?.LogWarning("Dashboard schema migration records are missing: {MissingMigrations}", string.Join(", ", missing));
+            return missing.Length == 0;
         }
         catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.NoSuchTable)
         {
+            if (includeDashboard)
+                logger?.LogWarning("Dashboard schema migration ledger is missing ({ErrorCode}, SQL state {SqlState}).",
+                    error.ErrorCode, error.SqlState);
             return false;
         }
     }

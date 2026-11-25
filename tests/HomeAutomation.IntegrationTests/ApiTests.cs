@@ -144,12 +144,26 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         using var testHost = host.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<IMonitoringDashboard>();
-            services.AddSingleton<IMonitoringDashboard>(new MonitoringDashboardStore(runtime, new Migrations(runtime), tuyaOptions));
+            services.AddSingleton<IMonitoringDashboard>(sp => new MonitoringDashboardStore(runtime,
+                new Migrations(runtime, sp.GetRequiredService<ILogger<Migrations>>()), tuyaOptions));
         }));
         using var client = testHost.CreateClient();
         client.DefaultRequestHeaders.Add("X-Test-User", "dashboard-editor");
         var csrf = await client.GetFromJsonAsync<JsonElement>("/api/v1/session/csrf");
         client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", csrf.GetProperty("token").GetString());
+        var ledger = (await db.QueryAsync("""
+            SELECT name AS Name, checksum AS Checksum FROM schema_migrations
+            WHERE name LIKE '%.012_dashboard_widget_layout.sql' OR name LIKE '%.013_dashboard_measurement_colors.sql'
+            """)).Select(row => new { Name = (string)row.Name, Checksum = (string)row.Checksum }).ToArray();
+        Assert.Equal(2, ledger.Length);
+        await db.ExecuteAsync("DELETE FROM schema_migrations WHERE name IN @names", new { names = ledger.Select(row => row.Name).ToArray() });
+        var direct = new MonitoringDashboardStore(runtime, new Migrations(runtime), tuyaOptions);
+        Assert.True((await direct.ReadAsync(1, "dashboard-editor", default)).CanEdit);
+        var missingHistory = await client.GetAsync(path);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, missingHistory.StatusCode);
+        var missingProblem = await missingHistory.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("The dashboard migration history is incomplete.", missingProblem.GetProperty("title").GetString());
+        await db.ExecuteAsync("INSERT INTO schema_migrations(name, checksum) VALUES(@Name, @Checksum)", ledger);
         var snapshot = await client.GetFromJsonAsync<DashboardSnapshot>(path);
         Assert.NotNull(snapshot);
         Assert.True(snapshot.CanEdit);
@@ -203,6 +217,12 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         var childDelete = await Assert.ThrowsAsync<MySqlException>(() =>
             scoped.ExecuteAsync("DELETE FROM dashboard_widgets WHERE 1=0"));
         Assert.Equal(MySqlErrorCode.TableAccessDenied, childDelete.ErrorCode);
+        await db.ExecuteAsync("ALTER TABLE dashboard_widgets DROP CHECK ck_dashboard_widget_width, DROP COLUMN width_columns");
+        var drift = await client.GetAsync(path);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, drift.StatusCode);
+        var driftProblem = await drift.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Dashboard storage is unavailable.", driftProblem.GetProperty("title").GetString());
+        Assert.DoesNotContain("width_columns", driftProblem.GetRawText(), StringComparison.Ordinal);
 
         static string Id() => Guid.NewGuid().ToString("D");
     }

@@ -150,6 +150,15 @@ describe('configurable dashboard', () => {
     expect(catalog).not.toHaveBeenCalled()
   })
 
+  it('shows the backend storage diagnosis for a dashboard 503', async () => {
+    vi.spyOn(api, 'dashboard').mockRejectedValue(new ApiError(503, undefined,
+      'The dashboard could not read its database. Check the backend log for the MySQL error.'))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><MemoryRouter><Dashboard property={property} live={false} /></MemoryRouter></QueryClientProvider>)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Check the backend log for the MySQL error.')
+    expect(screen.queryByText('The dashboard database migration is required.')).not.toBeInTheDocument()
+  })
+
   it('computes neutral stale text in both dashboard modes using the production stylesheet', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(now)
     const daikin = { ...source, key: 'daikin:ac:Temperature', provider: 'daikin', deviceName: 'Kitchen AC', metric: 'temperature',

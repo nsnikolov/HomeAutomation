@@ -39,8 +39,7 @@ export function Dashboard({ property, live }: { property: Property; live: boolea
     </div>
     {query.isPending && <p role="status">Loading dashboard…</p>}
     {query.isError && <p className="notice" role="alert">
-      {query.error instanceof ApiError && query.error.status === 503
-        ? 'The dashboard database migration is required.' : 'The dashboard could not be refreshed.'}
+      {(query.error instanceof ApiError && query.error.detail) || 'The dashboard could not be refreshed.'}
       {' '}<Button type="button" variant="outline" onClick={() => void query.refetch()}>Retry</Button>
     </p>}
     {snapshot && (editing && snapshot.canEdit ? <DashboardEditor property={property} snapshot={snapshot} done={() => setEditing(false)} />

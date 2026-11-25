@@ -103,6 +103,16 @@ Use `docker compose logs migrate app` to inspect startup and `docker compose dow
 
 Apply migrations through `013_dashboard_measurement_colors.sql` with the migration account using `dotnet run --project src/backend/HomeAutomation.Api -- --migrate`. For the dashboard layout upgrade, the migration account needs `ALTER` on `dashboard_widgets` and `dashboard_values` in addition to its existing grants. Existing widgets start at one grid column and two measurement columns, and existing values keep automatic colors. Each property has a shared layout. Its members can read it, and members with the `Operator`, `Admin`, or `Owner` property role can save it. A bootstrapped `Viewer` account stays read-only.
 
+If migrations 012 and 013 were executed as standalone SQL, the dashboard can report incomplete migration history even when the columns exist. Check the log for the missing records. Where both records are absent, first compare the live table definitions with the versioned migrations, including defaults, column types, and enforced checks. After confirming both definitions match, a database administrator can record the already-applied scripts with their runner checksums.
+
+```sql
+INSERT INTO homeautomation.schema_migrations (name, checksum) VALUES
+  ('HomeAutomation.Infrastructure.012_dashboard_widget_layout.sql', '9BE1A3000EF9C38843030F4DE136D270383BDF70D239A00116E17A6B3E810B29'),
+  ('HomeAutomation.Infrastructure.013_dashboard_measurement_colors.sql', 'BB275783DE97F51F5061BC470CE38B62AD656BC4FCEA929340B2B9B65787EBCD');
+```
+
+The dashboard checks the ledger on each request. Retry after recording the missing rows. The SQL above records migration history only.
+
 The runtime account needs `DELETE` on `dashboard_groups` so a save can replace a property's layout in one transaction. After applying migration 011, run `SELECT CURRENT_USER();` through a runtime connection to verify the exact MySQL account and host. Then have the database administrator apply the table-specific grant, using that account and the configured schema. The Windows setup example uses the following grant.
 
 ```sql

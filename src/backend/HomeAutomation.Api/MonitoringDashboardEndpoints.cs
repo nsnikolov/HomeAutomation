@@ -16,9 +16,23 @@ internal static class MonitoringDashboardEndpoints
                 try { await http.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(http); }
                 catch (AntiforgeryValidationException) { return Results.BadRequest(); }
             }
-            if (!await http.RequestServices.GetRequiredService<IMonitoringDashboard>().SchemaReadyAsync(http.RequestAborted))
-                return Results.Problem(statusCode: 503, title: "Apply the monitoring dashboard database migration.");
-            return await next(context);
+            var stage = "checking the migration ledger";
+            try
+            {
+                if (!await http.RequestServices.GetRequiredService<IMonitoringDashboard>().SchemaReadyAsync(http.RequestAborted))
+                    return Results.Problem(statusCode: 503, title: "The dashboard migration history is incomplete.",
+                        detail: "Ask a database administrator to check the dashboard migration records.");
+                stage = "reading dashboard data";
+                return await next(context);
+            }
+            catch (MySqlException failure) when (HttpMethods.IsGet(http.Request.Method) && !http.RequestAborted.IsCancellationRequested)
+            {
+                http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(MonitoringDashboardEndpoints))
+                    .LogError("MySQL failed while {Stage} ({ErrorCode}, SQL state {SqlState}).",
+                        stage, failure.ErrorCode, failure.SqlState);
+                return Results.Problem(statusCode: 503, title: "Dashboard storage is unavailable.",
+                    detail: "The dashboard could not read its database. Check the backend log for the MySQL error.");
+            }
         });
         dashboard.MapGet("", (long propertyId, HttpContext http, IMonitoringDashboard store, CancellationToken ct) =>
             store.ReadAsync(propertyId, MonitoringEndpoints.UserId(http.User), ct));
