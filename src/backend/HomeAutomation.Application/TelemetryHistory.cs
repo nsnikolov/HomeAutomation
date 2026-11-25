@@ -73,7 +73,8 @@ public sealed record HistoryBucket(
     int? Transitions,
     HistoryEnergy? Energy,
     bool Provisional,
-    IReadOnlyList<string> Flags);
+    IReadOnlyList<string> Flags,
+    IReadOnlyList<long>? SeriesIds = null);
 
 public sealed record HistoryResult(
     HistorySeriesInfo Series,

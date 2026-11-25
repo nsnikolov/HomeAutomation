@@ -11,7 +11,7 @@ internal static class MonitoringDashboardEndpoints
         var dashboard = property.MapGroup("/dashboard").AddEndpointFilter(async (context, next) =>
         {
             var http = context.HttpContext;
-            if (HttpMethods.IsPut(http.Request.Method))
+            if (!HttpMethods.IsGet(http.Request.Method))
             {
                 try { await http.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(http); }
                 catch (AntiforgeryValidationException) { return Results.BadRequest(); }
@@ -39,6 +39,24 @@ internal static class MonitoringDashboardEndpoints
         dashboard.MapGet("/sources", async (long propertyId, HttpContext http, IMonitoringDashboard store, CancellationToken ct) =>
             await store.CatalogAsync(propertyId, MonitoringEndpoints.UserId(http.User), ct) is { } sources
                 ? Results.Ok(sources) : Results.Forbid());
+        dashboard.MapGet("/logical-bindings", async (long propertyId, HttpContext http, IMonitoringDashboard store, CancellationToken ct) =>
+            await store.LogicalBindingsAsync(propertyId, MonitoringEndpoints.UserId(http.User), ct) is { } review
+                ? Results.Ok(review) : Results.Forbid());
+        dashboard.MapPost("/logical-bindings", async (long propertyId, HttpContext http, LogicalBindingUpdate update,
+            IMonitoringDashboard store, IMonitoringDashboardNotifier notifier, CancellationToken ct) =>
+        {
+            if (update.Revision is not { Length: 64 } || update.ValueIds is not { Length: >= 1 and <= 512 })
+                return Invalid("Select up to 512 measurements from the current dashboard revision.");
+            var result = await store.ConvertToLogicalAsync(propertyId, MonitoringEndpoints.UserId(http.User), update, ct);
+            if (result == DashboardSaveResult.Saved) await notifier.ChangedAsync(propertyId, ct);
+            return result switch
+            {
+                DashboardSaveResult.Saved => Results.NoContent(),
+                DashboardSaveResult.Conflict => Results.Conflict(),
+                DashboardSaveResult.InvalidSource => Invalid("A selected measurement can no longer be converted. Review the proposals again."),
+                _ => Results.Forbid()
+            };
+        });
         dashboard.MapPut("", async (long propertyId, HttpContext http, DashboardUpdate update,
             IMonitoringDashboard store, CancellationToken ct) =>
         {

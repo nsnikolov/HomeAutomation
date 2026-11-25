@@ -65,14 +65,14 @@ Measured and estimated energy are separate fields and are never added together.
 
 Hourly rows are UTC. A daily bucket is the local calendar day in `properties.time_zone`, including 23- and 25-hour DST days and zones with non-whole-hour offsets such as Asia/Kolkata and Asia/Kathmandu. `HistoryPlanner` splits each day into whole materialized hours and partial-hour edges. The same calculator computes the edges from raw samples, so a daily summary equals a direct raw calculation over the exact local day. Unit tests verify this. Hours after the materialized range are calculated from raw for at most 48 hours. Earlier time is `notAggregated`.
 
-The same mechanism lets Milestone 7B split a logical device's history at any replacement instant. Counter deltas never cross series.
+Milestone 7B uses the same mechanism to split a logical device's history at any replacement instant. See [logical devices](11-logical-devices.md#continuous-history). Counter deltas never cross series.
 
 ## Aggregation worker
 
 `TelemetryRollupWorker` starts with the API and is enabled by default under `TelemetryHistory`. Each run, every 15 minutes:
 
 - waits until migration 017 is recorded;
-- acquires `GET_LOCK('homeautomation:telemetry-rollups')`, and skips the run when the backfill or another worker holds it;
+- acquires the named lock `homeautomation:telemetry-rollups` scoped to the current schema, and skips the run when the backfill or another worker on the same schema holds it;
 - recomputes the most recent 72 complete hours of every series;
 - catches up from `rolled_to_utc` in seven-day steps after downtime.
 

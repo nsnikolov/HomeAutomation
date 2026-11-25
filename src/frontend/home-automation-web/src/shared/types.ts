@@ -126,9 +126,35 @@ export type DashboardReading = {
   provenance: 'provider' | 'serverReceived' | 'simulated'
 }
 export type DashboardSource = {
-  key: string; provider: 'growatt' | 'daikin' | 'ewelink' | 'tuya' | 'simulator'
+  key: string; provider: 'growatt' | 'daikin' | 'ewelink' | 'tuya' | 'simulator' | 'logical'
   deviceId: string; deviceName: string; channel: string | null; metric: Metric; unit: string | null
   route: string; reading: DashboardReading | null
+  status?: 'unsupported' | 'unassigned' | 'ambiguous' | 'archived' | null; physicalProvider?: string | null
+}
+export type LogicalAssignment = {
+  id: number; channelKey: string; deviceId: number; deviceName: string; provider: string; manufacturer: string; model: string
+  endpointId: number | null; endpointName: string | null; validFrom: string; validTo: string | null; assignedBy: string
+  assignedAt: string; reason: string | null; capabilities: string[]
+}
+export type LogicalDevice = {
+  id: number; name: string; kind: string; roomId: number | null; description: string | null; createdAt: string; updatedAt: string
+  archivedAt: string | null; current: LogicalAssignment[]; previous: LogicalAssignment[]
+}
+export type LogicalDeviceList = { canManage: boolean; devices: LogicalDevice[] }
+export type ReplacementCandidate = {
+  deviceId: number; name: string; provider: string; manufacturer: string; model: string; kind: string; roomId: number | null
+  endpoints: { id: number; name: string; capabilities: string[] }[]; capabilities: string[]; shared: string[]; missing: string[]
+  added: string[]; compatible: boolean; requiresEndpoint: boolean; assignedLogicalDeviceId: number | null
+  assignedLogicalDeviceName: string | null; current: boolean
+}
+export type ReplaceDeviceRequest = {
+  channelKey: string; expectedAssignmentId: number; deviceId: number; endpointId: number | null; effectiveAt: string
+  reason: string | null; acceptMissingCapabilities: boolean
+}
+export type LogicalBindingReview = {
+  revision: string
+  proposals: { valueId: string; widgetTitle: string; sourceKey: string; logicalKey: string; logicalName: string; metric: Metric }[]
+  skipped: { valueId: string; sourceKey: string; reason: string }[]
 }
 export type DashboardSnapshot = { revision: string; canEdit: boolean; groups: DashboardGroup[]; sources: DashboardSource[] }
 export type ProviderConfigurationView = {

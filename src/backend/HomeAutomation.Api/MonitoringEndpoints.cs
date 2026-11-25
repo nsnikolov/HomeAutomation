@@ -66,6 +66,7 @@ internal static class MonitoringEndpoints
         property.MapDevicePreferences();
         property.MapDashboard();
         property.MapHistory();
+        property.MapLogicalDevices();
     }
 
     private static async Task<IResult> HistoryAsync(long propertyId, long? endpointId, string metric, DateTimeOffset? from,

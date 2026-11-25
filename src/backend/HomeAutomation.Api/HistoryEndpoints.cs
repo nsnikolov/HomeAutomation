@@ -71,6 +71,15 @@ internal static class HistoryEndpoints
             parsedMetric = value;
         }
         if (seriesId is null && parsedMetric is null) return Invalid("Select a metric with a device, endpoint or installation.");
+        return ValidateRange(new HistorySelector(seriesId, deviceId, endpointId, installationId, parsedMetric), resolution, from, to,
+            fromDate, toDate, after, limit, now, out query);
+    }
+
+    /// <summary>Shared resolution, range and paging rules for physical and logical history.</summary>
+    internal static IResult? ValidateRange(HistorySelector selector, string? resolution, DateTimeOffset? from, DateTimeOffset? to,
+        DateOnly? fromDate, DateOnly? toDate, DateTimeOffset? after, int? limit, DateTimeOffset now, out HistoryQuery? query)
+    {
+        query = null;
         HistoryResolution parsedResolution;
         switch (resolution?.ToLowerInvariant())
         {
@@ -81,7 +90,6 @@ internal static class HistoryEndpoints
         }
         if (parsedResolution != HistoryResolution.Raw && (after is not null || limit is not null))
             return Invalid("after and limit apply to raw resolution only.");
-        var selector = new HistorySelector(seriesId, deviceId, endpointId, installationId, parsedMetric);
 
         if (parsedResolution == HistoryResolution.Day)
         {
@@ -104,7 +112,7 @@ internal static class HistoryEndpoints
         return null;
     }
 
-    private static bool TryMetric(string metric, out Metric parsed) =>
+    internal static bool TryMetric(string metric, out Metric parsed) =>
         Enum.TryParse(metric, true, out parsed) && Enum.IsDefined(parsed) &&
         string.Equals(metric, parsed.ToString(), StringComparison.OrdinalIgnoreCase);
 

@@ -182,6 +182,39 @@ dotnet run --project src/backend/HomeAutomation.Api -- --backfill-telemetry-roll
 
 The command loads the selected provider profiles first so hold intervals match the running service. It processes seven-day chunks newest first. Ctrl+C stops after the current chunk with exit code 2, and rerunning the same command continues the remaining range. Exit code 1 reports a configuration, lock or database failure. Completed chunks are kept, and repeated runs write no duplicates. Raw observations are never changed. History that was not collected cannot be reconstructed.
 
+## Logical devices and device replacement
+
+Milestone 7B adds stable logical identities that keep one history while physical hardware is replaced. The model, rules and API are in [logical devices](docs/architecture/11-logical-devices.md). Migration `018_logical_devices.sql` creates three tables and changes no existing table. The runtime account needs only its existing schema-wide `SELECT, INSERT, UPDATE`. Assignments are closed, never deleted.
+
+Deployment sequence, to be run only with explicit approval and in a planned window:
+
+1. Back up the database, for example with `mysqldump --single-transaction --routines homeautomation > homeautomation-backup.sql` using an administrative account, and keep the file outside the repository.
+2. Apply all pending migrations, including 017 and 018, with the migration account.
+
+```powershell
+dotnet run --project src/backend/HomeAutomation.Api -- --migrate
+```
+
+3. Restart the backend with this application version at the next planned restart.
+4. Review and then run the [7A backfill](#historical-telemetry).
+
+```powershell
+dotnet run --project src/backend/HomeAutomation.Api -- --backfill-telemetry-rollups --history-property=1
+dotnet run --project src/backend/HomeAutomation.Api -- --backfill-telemetry-rollups --history-property=1 --execute
+```
+
+5. Review and then create logical identities for the existing devices. The dry run lists each device, its channels, its telemetry series count and any skip reason. `--execute` creates all planned identities in one transaction; rerunning skips them. Assignments start at 1970-01-01 so all recorded history stays with each device.
+
+```powershell
+dotnet run --project src/backend/HomeAutomation.Api -- --initialize-logical-devices --logical-property=1
+dotnet run --project src/backend/HomeAutomation.Api -- --initialize-logical-devices --logical-property=1 --execute
+```
+
+6. Validate: open **Devices** and check the Logical devices section; open **Dashboard** and confirm existing widgets still show their readings. Optionally use **Review dashboard bindings** on the Devices page to convert selected measurements to logical sources.
+7. Verify a safe replacement by reading logical history, for example `GET /api/v1/properties/1/logical-devices/{id}/history?metric=Temperature&resolution=hour`, and by replacing a non-critical sensor with a spare that is already added to the property. A replacement only changes database mappings and sends nothing to either device.
+
+Only property Owners and Admins can replace devices. Replacing a Growatt inverter needs a separate configuration workflow, because the Growatt identity guard rejects bindings that differ from the configured serials. See [provider boundary](docs/architecture/11-logical-devices.md#provider-boundary).
+
 ## Growatt read-only monitoring
 
 Sign in and choose **Live Growatt** in the property sidebar to open the inverter detail page. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.

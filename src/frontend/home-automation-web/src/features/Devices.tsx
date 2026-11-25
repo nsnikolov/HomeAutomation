@@ -7,6 +7,7 @@ import type { Device, Metric, Property, Reading } from '../shared/types'
 import { Badge, Card, Input } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
 import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
+import { LogicalDevices } from './LogicalDevices'
 
 export const metricLabels: Record<Metric, string> = {
   pvPower: 'PV production', householdPower: 'Household consumption', gridAvailable: 'Grid availability',
@@ -74,6 +75,7 @@ export function Devices({ property, devices }: { property: Property; devices?: D
     {rooms.isError && <p role="alert">Rooms could not be loaded.</p>}
     {devices && !devices.some(matches) && <Card className="placeholder">No devices match your filters.</Card>}
     {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
+    <LogicalDevices property={property} />
     {groups.map(room => {
       const items = (devices ?? []).filter(device => device.roomId === room.id)
       if (!items.some(matches)) return null

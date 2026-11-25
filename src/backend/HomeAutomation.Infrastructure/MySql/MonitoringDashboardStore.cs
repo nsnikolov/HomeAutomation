@@ -19,7 +19,8 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         var (role, groups) = await ReadLayoutAsync(tx, property, user, ct);
         var keys = Values(groups).Select(value => value.SourceKey).ToHashSet(StringComparer.Ordinal);
         DashboardSource[] sources = keys.Count == 0 || role is null ? [] :
-            (await DashboardSources.ReadAsync(tx, property, tuya, ct)).Where(source => keys.Contains(source.Key)).ToArray();
+            (await DashboardSources.ReadAsync(tx, property, tuya, ct, await LogicalReadyAsync(ct)))
+                .Where(source => keys.Contains(source.Key)).ToArray();
         await tx.CommitAsync(ct);
         return new(Revision(groups), CanEdit(role), groups, sources);
     }
@@ -29,7 +30,9 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         await using var db = await database.OpenAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
         var role = await db.QuerySingleOrDefaultAsync<string>(Query(Membership, ct, new { property, user }, tx));
-        var result = CanEdit(role) ? await DashboardSources.ReadAsync(tx, property, tuya, ct) : null;
+        var result = CanEdit(role)
+            ? (await DashboardSources.ReadAsync(tx, property, tuya, ct, await LogicalReadyAsync(ct))).Where(Selectable).ToArray()
+            : null;
         await tx.CommitAsync(ct);
         return result;
     }
@@ -48,8 +51,8 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         var bindings = Values(update.Groups).Where(value => kept.GetValueOrDefault(value.Id) != value.SourceKey).ToArray();
         if (bindings.Length > 0)
         {
-            var available = (await DashboardSources.ReadAsync(tx, property, tuya, ct)).Select(source => source.Key)
-                .ToHashSet(StringComparer.Ordinal);
+            var available = (await DashboardSources.ReadAsync(tx, property, tuya, ct, await LogicalReadyAsync(ct)))
+                .Where(Selectable).Select(source => source.Key).ToHashSet(StringComparer.Ordinal);
             if (bindings.Any(value => !available.Contains(value.SourceKey))) return DashboardSaveResult.InvalidSource;
         }
 
@@ -84,6 +87,73 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         await tx.CommitAsync(ct);
         return DashboardSaveResult.Saved;
     }
+
+    /// <summary>
+    /// Proposes logical bindings only where exactly one active logical channel currently uses the saved physical source.
+    /// Ambiguous or unmatched values are listed with a reason and never changed.
+    /// </summary>
+    public async Task<LogicalBindingReview?> LogicalBindingsAsync(long property, string user, CancellationToken ct)
+    {
+        if (!await LogicalReadyAsync(ct)) return new(Revision([]), [], []);
+        await using var db = await database.OpenAsync(ct);
+        await using var tx = await db.BeginTransactionAsync(ct);
+        var (role, groups) = await ReadLayoutAsync(tx, property, user, ct);
+        if (!CanEdit(role)) return null;
+        var (proposals, skipped) = await ProposeAsync(tx, property, groups, ct);
+        await tx.CommitAsync(ct);
+        return new(Revision(groups), proposals, skipped);
+    }
+
+    public async Task<DashboardSaveResult> ConvertToLogicalAsync(long property, string user, LogicalBindingUpdate update, CancellationToken ct)
+    {
+        if (!await LogicalReadyAsync(ct)) return DashboardSaveResult.InvalidSource;
+        await using var db = await database.OpenAsync(ct);
+        await using var tx = await db.BeginTransactionAsync(ct);
+        await db.QuerySingleOrDefaultAsync<long>(Query("SELECT id FROM properties WHERE id=@property FOR UPDATE", ct, new { property }, tx));
+        var (role, groups) = await ReadLayoutAsync(tx, property, user, ct);
+        if (!CanEdit(role)) return DashboardSaveResult.Forbidden;
+        if (!string.Equals(update.Revision, Revision(groups), StringComparison.Ordinal)) return DashboardSaveResult.Conflict;
+        var proposals = (await ProposeAsync(tx, property, groups, ct)).Proposals.ToDictionary(item => item.ValueId, StringComparer.Ordinal);
+        if (update.ValueIds.Length == 0 || update.ValueIds.Distinct(StringComparer.Ordinal).Count() != update.ValueIds.Length ||
+            update.ValueIds.Any(id => !proposals.ContainsKey(id)))
+            return DashboardSaveResult.InvalidSource;
+        foreach (var proposal in update.ValueIds.Select(id => proposals[id]))
+            await db.ExecuteAsync(Query("""
+                UPDATE dashboard_widgets w JOIN dashboard_values v ON v.property_id=w.property_id AND v.widget_id=w.id
+                SET w.navigation_source=@LogicalKey
+                WHERE w.property_id=@property AND v.id=@ValueId AND w.navigation_source=@SourceKey;
+                UPDATE dashboard_values SET source_key=@LogicalKey WHERE property_id=@property AND id=@ValueId AND source_key=@SourceKey;
+                """, ct, new { property, proposal.ValueId, proposal.SourceKey, proposal.LogicalKey }, tx));
+        await tx.CommitAsync(ct);
+        return DashboardSaveResult.Saved;
+    }
+
+    private async Task<(List<LogicalBindingProposal> Proposals, List<LogicalBindingSkip> Skipped)> ProposeAsync(MySqlTransaction tx,
+        long property, DashboardGroup[] groups, CancellationToken ct)
+    {
+        var physical = await DashboardSources.ReadPhysicalAsync(tx, property, tuya, ct);
+        var logical = (await DashboardSources.LogicalAsync(tx, property, physical, ct)).Where(item => item.Source.Status is null).ToList();
+        var keys = physical.Select(item => item.Source.Key).ToHashSet(StringComparer.Ordinal);
+        var proposals = new List<LogicalBindingProposal>();
+        var skipped = new List<LogicalBindingSkip>();
+        foreach (var widget in groups.SelectMany(group => group.Widgets))
+        foreach (var value in widget.Values.Where(value => !value.SourceKey.StartsWith("logical:", StringComparison.Ordinal)))
+        {
+            var matches = logical.Where(item => item.PhysicalKey == value.SourceKey).ToList();
+            if (!keys.Contains(value.SourceKey)) skipped.Add(new(value.Id, value.SourceKey, "The source is no longer available."));
+            else if (matches.Count == 0) skipped.Add(new(value.Id, value.SourceKey, "No active logical device uses this measurement."));
+            else if (matches.Count > 1)
+                skipped.Add(new(value.Id, value.SourceKey, "Several logical devices use this measurement. Choose one in the dashboard editor."));
+            else proposals.Add(new(value.Id, widget.Title, value.SourceKey, matches[0].Source.Key, matches[0].Source.DeviceName,
+                matches[0].Source.Metric));
+        }
+        return (proposals, skipped);
+    }
+
+    private Task<bool> LogicalReadyAsync(CancellationToken ct) => migrations.VerifyLogicalDevicesAsync(ct);
+
+    /// <summary>Archived logical sources keep rendering for saved widgets but are not offered for new bindings.</summary>
+    private static bool Selectable(DashboardSource source) => source.Status != "archived";
 
     private const string Membership =
         "SELECT role_code FROM property_memberships WHERE property_id=@property AND user_id=@user";

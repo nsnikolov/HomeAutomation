@@ -970,6 +970,8 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
                 services.AddSingleton<IMonitoringDashboard, DashboardFixture>();
                 services.RemoveAll<ITelemetryHistory>();
                 services.AddSingleton<ITelemetryHistory, HistoryApiTests.HistoryFixture>();
+                services.RemoveAll<ILogicalDevices>();
+                services.AddSingleton<ILogicalDevices, LogicalDeviceApiTests.LogicalFixture>();
                 services.RemoveAll<TuyaOptions>();
                 services.AddSingleton(new TuyaOptions());
                 services.RemoveAll<EwelinkOptions>();
@@ -1004,7 +1006,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
         public Task<IReadOnlyList<PropertySummary>> PropertiesAsync(string userId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PropertySummary>>([new PropertySummary(1, "Fixture", "Europe/Sofia")]);
         public Task<bool> CanReadAsync(string userId, long propertyId, CancellationToken cancellationToken) =>
-            Task.FromResult(userId is "viewer" or "dashboard-editor" && propertyId == 1);
+            Task.FromResult(userId is "viewer" or "dashboard-editor" or "logical-owner" && propertyId == 1);
         public Task<IReadOnlyList<RoomSummary>> RoomsAsync(long propertyId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<RoomSummary>>([new RoomSummary(2, "Utility")]);
         public Task<PropertyState> StateAsync(long propertyId, CancellationToken cancellationToken) =>
@@ -1025,5 +1027,13 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             Task.FromResult<IReadOnlyList<DashboardSource>?>(user == "dashboard-editor" ? [] : null);
         public Task<DashboardSaveResult> ReplaceAsync(long property, string user, DashboardUpdate update, CancellationToken ct) =>
             Task.FromResult(user == "dashboard-editor" ? DashboardSaveResult.Saved : DashboardSaveResult.Forbidden);
+        public Task<LogicalBindingReview?> LogicalBindingsAsync(long property, string user, CancellationToken ct) =>
+            Task.FromResult<LogicalBindingReview?>(user == "dashboard-editor"
+                ? new(new string('0', 64), [new("value-1", "Heat pump", "ewelink:abc:ActivePower", "logical:4:main:ActivePower", "Heat pump meter", Metric.ActivePower)], [])
+                : null);
+        public Task<DashboardSaveResult> ConvertToLogicalAsync(long property, string user, LogicalBindingUpdate update, CancellationToken ct) =>
+            Task.FromResult(user != "dashboard-editor" ? DashboardSaveResult.Forbidden
+                : update.Revision != new string('0', 64) ? DashboardSaveResult.Conflict
+                : update.ValueIds.SequenceEqual(["value-1"]) ? DashboardSaveResult.Saved : DashboardSaveResult.InvalidSource);
     }
 }

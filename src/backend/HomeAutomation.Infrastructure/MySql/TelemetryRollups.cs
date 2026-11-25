@@ -345,11 +345,15 @@ public sealed class TelemetryRollups(Database database, Migrations migrations, T
         return rows.AsList();
     }
 
+    // MySQL named locks are server-wide and limited to 64 characters. A schema hash suffix keeps separate schemas on one
+    // server independent: "homeautomation:telemetry-rollups:" (32) + 24 hex characters.
+    private const string ScopedLock = "CONCAT(@name, ':', LEFT(SHA2(DATABASE(), 256), 24))";
+
     private static async Task<bool> TryLockAsync(MySqlConnection connection, int seconds, CancellationToken ct) =>
-        await connection.ExecuteScalarAsync<int?>(Query("SELECT GET_LOCK(@name, @seconds)", ct, new { name = LockName, seconds })) == 1;
+        await connection.ExecuteScalarAsync<int?>(Query($"SELECT GET_LOCK({ScopedLock}, @seconds)", ct, new { name = LockName, seconds })) == 1;
 
     private static Task ReleaseAsync(MySqlConnection connection) =>
-        connection.ExecuteScalarAsync<int?>(Query("SELECT RELEASE_LOCK(@name)", CancellationToken.None, new { name = LockName }));
+        connection.ExecuteScalarAsync<int?>(Query($"SELECT RELEASE_LOCK({ScopedLock})", CancellationToken.None, new { name = LockName }));
 
     internal sealed record SeriesRow(long Id, long PropertyId, string MetricName, string Source, string TimeZone,
         DateTime? RolledFrom, DateTime? RolledTo)
@@ -429,7 +433,10 @@ public static class TelemetryHistoryRegistration
         services.AddSingleton<TelemetryHoldPolicy>();
         services.AddSingleton<TelemetryRollups>();
         services.AddSingleton<ITelemetryRollupRunner>(provider => provider.GetRequiredService<TelemetryRollups>());
-        services.AddScoped<ITelemetryHistory, TelemetryHistoryReader>();
+        services.AddScoped<TelemetryHistoryReader>();
+        services.AddScoped<ITelemetryHistory>(provider => provider.GetRequiredService<TelemetryHistoryReader>());
+        services.AddScoped<LogicalDeviceStore>();
+        services.AddScoped<ILogicalDevices>(provider => provider.GetRequiredService<LogicalDeviceStore>());
         services.AddHostedService<TelemetryRollupWorker>();
         return services;
     }

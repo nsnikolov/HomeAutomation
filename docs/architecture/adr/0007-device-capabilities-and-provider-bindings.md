@@ -13,3 +13,9 @@ Use a property-owned physical device with stable application endpoints for its d
 ## Alternatives and consequences
 
 Capability interfaces on every device would provide compile-time behavior at the cost of adapter and persistence complexity for each combination. An unrestricted state dictionary would be easy to ingest but would hide units, access rules and command contracts from validation. The typed catalog supports Dapper filters and common UI panels with bounded metadata. Each adapter must maintain mappings, and administrators must resolve uncertain identity matches. Cloud-first rollout and durable automation remain governed by the existing decisions. [Data model](../04-data-model.md) · [Integration design](../05-integrations.md) · [ADR 0004](0004-cloud-first-integrations.md) · [ADR 0005](0005-automation-execution.md)
+
+## Addendum — Logical devices (Milestone 7B)
+
+**Status** Accepted.
+
+A logical device gives a monitored role a stable identity independent of hardware. Its channels are assigned to physical devices over half-open intervals, and metrics resolve by canonical `Metric` across the assigned device's endpoints. An endpoint is pinned only when one measurement capability repeats across endpoints. Assignments never move or rewrite physical history: series, samples and rollups stay owned by the physical device, and logical history uses only observations inside each assignment. Changes are serialized per property, validated for interval overlap in the application, and audited. The alternatives were endpoint-level assignment, which cannot follow Tuya's per-data-point endpoints to a single-endpoint eWeLink sensor, and re-keying series to logical identities, which would rewrite history and blur provenance. [Logical devices](../11-logical-devices.md)

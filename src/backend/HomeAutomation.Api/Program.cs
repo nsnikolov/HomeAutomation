@@ -51,6 +51,21 @@ if (backfillTelemetry is not null && (importProvider is not null || migrate || b
     Environment.ExitCode = 1;
     return;
 }
+LogicalDeviceInitializationCommand.Options? initializeLogical;
+try { initializeLogical = LogicalDeviceInitializationCommand.Parse(args); }
+catch (LogicalDeviceInitializationException error)
+{
+    Console.Error.WriteLine(error.Message);
+    Environment.ExitCode = 1;
+    return;
+}
+if (initializeLogical is not null && (backfillTelemetry is not null || importProvider is not null || migrate || bootstrap ||
+    discoverGrowatt || createProperty || promoteInitialOwner || rotateConfigurationKeys || convertConfigurationIdentifiers))
+{
+    Console.Error.WriteLine("Run the logical device initialization command by itself.");
+    Environment.ExitCode = 1;
+    return;
+}
 if (importProvider is not null && (migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner ||
     rotateConfigurationKeys || convertConfigurationIdentifiers))
 {
@@ -73,7 +88,7 @@ if ((createProperty || promoteInitialOwner) && (migrate || bootstrap || discover
     return;
 }
 var builder = WebApplication.CreateBuilder(args.Where(arg => !ProviderConfigurationStartup.IsImportArgument(arg) &&
-    !TelemetryBackfillCommand.IsArgument(arg) && arg is not
+    !TelemetryBackfillCommand.IsArgument(arg) && !LogicalDeviceInitializationCommand.IsArgument(arg) && arg is not
     ("--migrate" or "--bootstrap-user" or "--discover-growatt" or "--create-property" or "--promote-initial-owner" or
         "--rotate-configuration-keys" or "--convert-configuration-identifiers")).ToArray());
 builder.Logging.ClearProviders();
@@ -285,6 +300,11 @@ if (backfillTelemetry is not null)
         return;
     }
     Environment.ExitCode = await TelemetryBackfillCommand.RunAsync(app, backfillTelemetry);
+    return;
+}
+if (initializeLogical is not null)
+{
+    Environment.ExitCode = await LogicalDeviceInitializationCommand.RunAsync(app, initializeLogical);
     return;
 }
 if (discoverGrowatt)

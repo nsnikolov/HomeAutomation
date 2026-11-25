@@ -220,6 +220,7 @@ function ValueEditor({ value, position, count, sources, update, shift, discard, 
         {!selected && value.sourceKey && <option value={value.sourceKey}>Unavailable source</option>}
         {measurements.map(source => <option key={source.key} value={source.key}>
           {metricLabels[source.metric]}{source.channel ? ` · ${source.channel}` : ''}{source.unit ? ` (${source.unit})` : ''}
+          {source.status ? ' — not reported by the current device' : ''}
         </option>)}
       </select></label>
       <label>Custom label<Input maxLength={96} value={value.label ?? ''}

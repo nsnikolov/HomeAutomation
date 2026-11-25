@@ -7,6 +7,13 @@ import { defaultWidgetView, type WidgetView } from './dashboardWidgetViews'
 
 export const providerNames: Record<DashboardSource['provider'], string> = {
   growatt: 'Growatt', daikin: 'Daikin ONECTA', ewelink: 'eWeLink', tuya: 'Smart Life / Tuya', simulator: 'Simulator (simulated)',
+  logical: 'Logical device',
+}
+const unavailableLabels: Record<NonNullable<DashboardSource['status']>, string> = {
+  unsupported: 'The current device does not report this measurement.',
+  unassigned: 'No physical device is currently assigned.',
+  ambiguous: 'Several endpoints of the current device report this measurement.',
+  archived: 'The logical device is archived.',
 }
 const freshnessSteps = [0, 5 * 60000, 60 * 60000]
 const timestampWithOffset = /^(\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,7})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
@@ -184,9 +191,14 @@ function Measurement({ value, source, now, dateFormat, detailed, propertyId, pre
   const reading = source?.reading
   const { at, tier } = dashboardFreshness(reading, now)
   const title = value.label || (source ? metricLabels[source.metric] : 'Measurement')
-  const origin = source ? `${providerNames[source.provider]} · ${source.deviceName}` : ''
+  const physical = source?.physicalProvider && source.physicalProvider in providerNames
+    ? providerNames[source.physicalProvider as DashboardSource['provider']] : null
+  const origin = !source ? '' : source.provider === 'logical'
+    ? [source.deviceName, source.channel, physical].filter(Boolean).join(' · ')
+    : `${providerNames[source.provider]} · ${source.deviceName}`
   let measurement = '—'
-  let summary = source ? 'No valid dated reading is available.' : 'The source is no longer available for this property.'
+  let summary = !source ? 'The source is no longer available for this property.'
+    : source.status ? unavailableLabels[source.status] : 'No valid dated reading is available.'
   let stamp: string | undefined
   let originalStamp: string | undefined
   let provenance: string | undefined
@@ -202,7 +214,10 @@ function Measurement({ value, source, now, dateFormat, detailed, propertyId, pre
   const base = `/properties/${propertyId}`
   const route = !preview && source && (source.provider === 'simulator'
     ? /^\d+$/.test(source.deviceId) && source.route === `${base}/devices/${source.deviceId}`
-    : ['growatt', 'daikin', 'ewelink', 'tuya'].includes(source.provider) && source.route === `${base}/${source.provider}`)
+    : source.provider === 'logical'
+      ? source.route === `${base}/devices` || ['growatt', 'daikin', 'ewelink', 'tuya'].some(item => source.route === `${base}/${item}`) ||
+        (source.route.startsWith(`${base}/devices/`) && /^\d+$/.test(source.route.slice(`${base}/devices/`.length)))
+      : ['growatt', 'daikin', 'ewelink', 'tuya'].includes(source.provider) && source.route === `${base}/${source.provider}`)
     ? source.route : undefined
   const fixed = tier !== 'missing' && value.colorMode === 'fixed' && /^#[0-9a-f]{6}$/i.test(value.customColor ?? '')
   const contents = <>

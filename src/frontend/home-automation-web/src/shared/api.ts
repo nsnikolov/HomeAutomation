@@ -1,6 +1,7 @@
 import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePageKey, DevicePreferences, EwelinkRelayOutcome, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, SensorHistory, SensorPeriod, TuyaState } from './types'
 import type { DashboardGroup, DashboardSnapshot, DashboardSource } from './types'
 import type { ConfigurationView, ProviderConfigurationUpdate } from './types'
+import type { LogicalBindingReview, LogicalDeviceList, ReplaceDeviceRequest, ReplacementCandidate } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code?: string, public readonly detail?: string) {
@@ -47,6 +48,37 @@ async function putWithCsrf(path: string, body: object) {
   const { token } = await request<{ token: string }>('/session/csrf')
   return request<void>(path, {
     method: 'PUT', headers: { 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+}
+
+/** Problem responses from logical-device routes carry a title for people and a stable code and missing capabilities. */
+export class LogicalApiError extends Error {
+  constructor(public readonly status: number, public readonly code: string | undefined, message: string,
+    public readonly missing: string[] = []) {
+    super(message)
+  }
+}
+
+async function logicalRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(`/api/v1${path}`, {
+    ...options, headers: { Accept: 'application/json', ...options.headers }, credentials: 'same-origin',
+  })
+  if (!response.ok) {
+    const problem: { title?: unknown; code?: unknown; missing?: unknown } | null = await response.json().catch(() => null)
+    const fallback = response.status === 503 ? 'Logical devices are not available until the database is upgraded.'
+      : response.status === 403 ? 'Only property Owners and Admins can change logical devices.'
+        : response.status === 409 ? 'The device changed in the meantime. Reload and try again.' : `Request failed (${response.status})`
+    throw new LogicalApiError(response.status, typeof problem?.code === 'string' ? problem.code : undefined,
+      typeof problem?.title === 'string' && problem.title ? problem.title : fallback,
+      Array.isArray(problem?.missing) ? problem.missing.filter((item): item is string => typeof item === 'string') : [])
+  }
+  return response.status === 204 ? undefined as T : await response.json() as T
+}
+
+async function logicalPost<T>(path: string, body: object) {
+  const { token } = await request<{ token: string }>('/session/csrf')
+  return logicalRequest<T>(path, {
+    method: 'POST', headers: { 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
 }
 
@@ -119,6 +151,16 @@ export const api = {
   device: (id: number, device: number, signal?: AbortSignal) =>
     request<Device>(`/properties/${id}/devices/${device}`, { signal }),
   health: (signal?: AbortSignal) => request<Health>('/system/health', { signal }),
+  logicalDevices: (id: number, signal?: AbortSignal) =>
+    logicalRequest<LogicalDeviceList>(`/properties/${id}/logical-devices`, { signal }),
+  replacementCandidates: (id: number, logical: number, channel: string, signal?: AbortSignal) =>
+    logicalRequest<ReplacementCandidate[]>(`/properties/${id}/logical-devices/${logical}/candidates?channel=${encodeURIComponent(channel)}`, { signal }),
+  replaceDevice: (id: number, logical: number, body: ReplaceDeviceRequest) =>
+    logicalPost<{ id: number }>(`/properties/${id}/logical-devices/${logical}/replace`, body),
+  logicalBindings: (id: number, signal?: AbortSignal) =>
+    logicalRequest<LogicalBindingReview>(`/properties/${id}/dashboard/logical-bindings`, { signal }),
+  convertLogicalBindings: (id: number, revision: string, valueIds: string[]) =>
+    logicalPost<void>(`/properties/${id}/dashboard/logical-bindings`, { revision, valueIds }),
   history: (id: number, metric: Metric, hours: number, endpoint?: number, signal?: AbortSignal) => {
     const end = Date.now()
     const params = new URLSearchParams({

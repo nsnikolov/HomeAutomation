@@ -70,25 +70,40 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
         name.EndsWith(".016_provider_runtime_configuration.sql", StringComparison.Ordinal)).ToArray();
     private static readonly string[] StagingMigrations = ConfigurationMigrations[..^1];
     private const string TelemetryRollupMigration = ".017_telemetry_rollups.sql";
+    private const string LogicalDeviceMigration = ".018_logical_devices.sql";
     private volatile bool receiveTimeReady;
     private volatile bool telemetryHistoryReady;
+    private volatile bool logicalDevicesReady;
 
     /// <summary>Historical rollups are optional until migration 017 is applied. Other readiness checks ignore it.</summary>
     public async Task<bool> VerifyTelemetryHistoryAsync(CancellationToken ct)
     {
         if (telemetryHistoryReady) return true;
-        var name = Scripts.Single(script => script.EndsWith(TelemetryRollupMigration, StringComparison.Ordinal));
+        telemetryHistoryReady = await RecordedAsync([TelemetryRollupMigration], ct);
+        return telemetryHistoryReady;
+    }
+
+    /// <summary>Logical devices need migrations 017 and 018. Other readiness checks ignore both.</summary>
+    public async Task<bool> VerifyLogicalDevicesAsync(CancellationToken ct)
+    {
+        if (logicalDevicesReady) return true;
+        logicalDevicesReady = await RecordedAsync([TelemetryRollupMigration, LogicalDeviceMigration], ct);
+        return logicalDevicesReady;
+    }
+
+    private async Task<bool> RecordedAsync(string[] suffixes, CancellationToken ct)
+    {
+        var names = suffixes.Select(suffix => Scripts.Single(script => script.EndsWith(suffix, StringComparison.Ordinal))).ToArray();
         await using var connection = await database.OpenAsync(ct);
         try
         {
-            telemetryHistoryReady = await connection.ExecuteScalarAsync<bool>(Query(
-                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE name=@name)", ct, new { name }));
+            return await connection.ExecuteScalarAsync<int>(Query(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name IN @names", ct, new { names })) == names.Length;
         }
         catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.NoSuchTable)
         {
             return false;
         }
-        return telemetryHistoryReady;
     }
 
     internal async Task<bool> VerifyEwelinkReceiveTimeAsync(CancellationToken ct)
@@ -116,6 +131,7 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
                 (includeEwelink || !name.EndsWith(".009_ewelink_relay_preferences.sql", StringComparison.Ordinal)) &&
                 !name.EndsWith(EwelinkReceiveTimeMigration, StringComparison.Ordinal) &&
                 !name.EndsWith(TelemetryRollupMigration, StringComparison.Ordinal) &&
+                !name.EndsWith(LogicalDeviceMigration, StringComparison.Ordinal) &&
                 !ConfigurationMigrations.Contains(name, StringComparer.Ordinal) &&
                 (includeTuya || !name.EndsWith(".005_tuya_cloud.sql", StringComparison.Ordinal)) &&
                 (includeDashboard || !name.EndsWith(".011_monitoring_dashboard.sql", StringComparison.Ordinal)) &&

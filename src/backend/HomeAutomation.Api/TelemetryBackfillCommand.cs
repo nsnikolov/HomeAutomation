@@ -27,8 +27,8 @@ internal static class TelemetryBackfillCommand
     public static Options? Parse(string[] args)
     {
         var arguments = args.Where(IsArgument).ToArray();
-        if (arguments.Length == 0) return null;
-        if (!arguments.Contains(Command)) throw new TelemetryBackfillException($"Use {Execute} and --history-* options only with {Command}.");
+        if (arguments.All(arg => arg == Execute)) return null;
+        if (!arguments.Contains(Command)) throw new TelemetryBackfillException($"Use --history-* options only with {Command}.");
         if (arguments.Count(arg => arg == Command) != 1 || arguments.Count(arg => arg == Execute) > 1)
             throw new TelemetryBackfillException("Use each backfill flag once.");
         var property = Value(Property) ?? throw new TelemetryBackfillException($"Select the property with {Property}=<id>.");
