@@ -2,6 +2,8 @@
 
 Home Automation provides a configurable, read-only dashboard for property monitoring, with separate pages for Growatt, Daikin ONECTA, eWeLink, and Smart Life / Tuya. ASP.NET Core serves the React application and can run a simulator for local development independently of connected browsers.
 
+For a new Codex or Claude Code session, use the [shared development instructions](AGENTS.md) and [current project handoff](docs/AI_HANDOFF.md).
+
 ## Develop on Windows without Docker
 
 Use PowerShell, the .NET 10 SDK, Node.js 24 with `npm.cmd`, and an existing MySQL server. VS Code is optional for running the application. For local development use MySQL 8.0.19 or later in the 8.0 series, or MySQL 8.4. MySQL 8.4 remains the deployment target.
