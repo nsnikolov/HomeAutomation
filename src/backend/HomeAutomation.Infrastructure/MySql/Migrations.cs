@@ -64,7 +64,9 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
     }
 
     private const string EwelinkReceiveTimeMigration = ".010_ewelink_receive_time_provenance.sql";
-    private const string ConfigurationMigration = ".014_configuration_vault.sql";
+    private static readonly string[] ConfigurationMigrations = Scripts.Where(name =>
+        name.EndsWith(".014_configuration_vault.sql", StringComparison.Ordinal) ||
+        name.EndsWith(".015_configuration_identifiers.sql", StringComparison.Ordinal)).ToArray();
     private volatile bool receiveTimeReady;
 
     internal async Task<bool> VerifyEwelinkReceiveTimeAsync(CancellationToken ct)
@@ -91,7 +93,7 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
                 (includeEwelink || !name.EndsWith(".008_ewelink_relay_commands.sql", StringComparison.Ordinal)) &&
                 (includeEwelink || !name.EndsWith(".009_ewelink_relay_preferences.sql", StringComparison.Ordinal)) &&
                 !name.EndsWith(EwelinkReceiveTimeMigration, StringComparison.Ordinal) &&
-                !name.EndsWith(ConfigurationMigration, StringComparison.Ordinal) &&
+                !ConfigurationMigrations.Contains(name, StringComparer.Ordinal) &&
                 (includeTuya || !name.EndsWith(".005_tuya_cloud.sql", StringComparison.Ordinal)) &&
                 (includeDashboard || !name.EndsWith(".011_monitoring_dashboard.sql", StringComparison.Ordinal)) &&
                 (includeDashboard || !name.EndsWith(".012_dashboard_widget_layout.sql", StringComparison.Ordinal)) &&
@@ -114,12 +116,12 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
 
     public async Task<bool> VerifyConfigurationAsync(CancellationToken ct)
     {
-        var name = Scripts.Single(script => script.EndsWith(ConfigurationMigration, StringComparison.Ordinal));
         await using var connection = await database.OpenAsync(ct);
         try
         {
-            return await connection.ExecuteScalarAsync<bool>(Query(
-                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE name=@name)", ct, new { name }));
+            var installed = await connection.ExecuteScalarAsync<int>(Query(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name IN @names", ct, new { names = ConfigurationMigrations }));
+            return installed == ConfigurationMigrations.Length;
         }
         catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.NoSuchTable)
         {

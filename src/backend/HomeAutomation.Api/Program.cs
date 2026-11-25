@@ -27,9 +27,12 @@ var discoverGrowatt = args.Contains("--discover-growatt", StringComparer.Ordinal
 var createProperty = args.Contains("--create-property", StringComparer.Ordinal);
 var promoteInitialOwner = args.Contains("--promote-initial-owner", StringComparer.Ordinal);
 var rotateConfigurationKeys = args.Contains("--rotate-configuration-keys", StringComparer.Ordinal);
-if (rotateConfigurationKeys && (migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner))
+var convertConfigurationIdentifiers = args.Contains("--convert-configuration-identifiers", StringComparer.Ordinal);
+if ((rotateConfigurationKeys || convertConfigurationIdentifiers) &&
+    (migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner ||
+     (rotateConfigurationKeys && convertConfigurationIdentifiers)))
 {
-    Console.Error.WriteLine("Run the configuration key rotation command by itself.");
+    Console.Error.WriteLine("Run one configuration maintenance command by itself.");
     Environment.ExitCode = 1;
     return;
 }
@@ -41,7 +44,7 @@ if ((createProperty || promoteInitialOwner) && (migrate || bootstrap || discover
 }
 var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not
     ("--migrate" or "--bootstrap-user" or "--discover-growatt" or "--create-property" or "--promote-initial-owner" or
-        "--rotate-configuration-keys")).ToArray());
+        "--rotate-configuration-keys" or "--convert-configuration-identifiers")).ToArray());
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 builder.Services.AddProblemDetails();
@@ -201,19 +204,32 @@ builder.Services.AddHealthChecks()
     .AddCheck<DatabaseReadiness>("database", tags: ["ready"], timeout: TimeSpan.FromSeconds(6));
 
 await using var app = builder.Build();
-if (rotateConfigurationKeys)
+if (rotateConfigurationKeys || convertConfigurationIdentifiers)
 {
     using var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
     try
     {
-        var rotated = await app.Services.GetRequiredService<ProviderConfigurationStore>().RotateAsync(operation.Token);
-        app.Logger.LogInformation("Re-encrypted {CredentialCount} configuration credentials.", rotated);
+        var store = app.Services.GetRequiredService<ProviderConfigurationStore>();
+        if (convertConfigurationIdentifiers)
+        {
+            var converted = await store.ConvertIdentifiersAsync(operation.Token);
+            app.Logger.LogInformation("Converted {IdentifierCount} staged configuration identifiers.", converted);
+        }
+        else
+        {
+            var rotated = await store.RotateAsync(operation.Token);
+            app.Logger.LogInformation("Re-encrypted {CredentialCount} configuration credentials.", rotated);
+        }
     }
     catch (Exception error) when (error is CryptographicException or MySqlException or ConfigurationStorageException or
         OptionsValidationException or OperationCanceledException)
     {
-        app.Logger.LogError("Configuration rotation failed ({FailureType}). Check migration 014 and the external key files.",
-            error.GetType().Name);
+        if (convertConfigurationIdentifiers)
+            app.Logger.LogError("Identifier conversion failed ({FailureType}). Check migration 015, the original external key files and identifier conflicts.",
+                error.GetType().Name);
+        else
+            app.Logger.LogError("Configuration rotation failed ({FailureType}). Check migration 015, the external key files and pending identifier conversion.",
+                error.GetType().Name);
         Environment.ExitCode = 1;
     }
     return;

@@ -29,7 +29,7 @@ internal static class ConfigurationEndpoints
             try { return await next(context); }
             catch (ConfigurationStorageException)
             {
-                app.Logger.LogWarning("Configuration vault schema or stored configuration is unavailable. Check migration 014.");
+                app.Logger.LogWarning("Configuration vault schema or stored configuration is unavailable. Check migration 015.");
                 return Unavailable();
             }
             catch (MySqlException error) when (!context.HttpContext.RequestAborted.IsCancellationRequested)
@@ -69,6 +69,8 @@ internal static class ConfigurationEndpoints
             ConfigurationSaveResult.Forbidden => Results.StatusCode(StatusCodes.Status403Forbidden),
             ConfigurationSaveResult.Conflict => Results.Problem(statusCode: 409,
                 detail: "These settings changed. Reload before saving again."),
+            ConfigurationSaveResult.IdentifierConversionRequired => Results.Problem(statusCode: 409,
+                detail: "An administrator must convert the saved identifier before it can be edited."),
             ConfigurationSaveResult.Invalid => InvalidConfiguration(),
             _ => Unavailable()
         };
@@ -80,7 +82,7 @@ internal static class ConfigurationEndpoints
          http.Request.Host.Host.ToLowerInvariant() is "localhost" or "127.0.0.1" or "[::1]");
 
     private static IResult InvalidConfiguration() => Results.Problem(statusCode: 400,
-        detail: "Check the polling interval and credential fields.");
+        detail: "Check the polling interval, identifiers and credential fields.");
 
     private static IResult Unavailable() => Results.Problem(statusCode: 503,
         detail: "Configuration storage or its encryption key is unavailable.");

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Dapper;
 using HomeAutomation.Application;
@@ -29,15 +30,18 @@ public sealed class ConfigurationApiTests(ApiTests.Host host) : IClassFixture<Ap
         var runtime = TestDatabase(RuntimeConnection, "configuration_runtime");
         var migrations = new Migrations(admin);
         await migrations.ApplyAsync(default);
-        await migrations.ApplyAsync(default);
         var runtimeMigrations = new Migrations(runtime);
         Assert.True(await runtimeMigrations.VerifyConfigurationAsync(default));
         await using var db = await admin.OpenAsync(default);
-        await db.ExecuteAsync("DELETE FROM schema_migrations WHERE name LIKE '%.014_configuration_vault.sql'");
+        const string migration014 = "SELECT checksum FROM schema_migrations WHERE name LIKE '%.014_configuration_vault.sql'";
+        var checksum014 = await db.QuerySingleAsync<string>(migration014);
+        // Reconstruct the 014 schema in this disposable fixture before seeding old-format profiles.
+        await db.ExecuteAsync("""
+            ALTER TABLE configuration_profiles DROP CHECK ck_configuration_identifiers_object, DROP COLUMN identifiers;
+            DELETE FROM schema_migrations WHERE name LIKE '%.015_configuration_identifiers.sql';
+            """);
         Assert.True(await runtimeMigrations.VerifyAsync(default, includeDashboard: true));
         Assert.False(await runtimeMigrations.VerifyConfigurationAsync(default));
-        await migrations.ApplyAsync(default);
-        Assert.True(await runtimeMigrations.VerifyConfigurationAsync(default));
         var editor = Guid.NewGuid().ToString("D");
         var viewer = Guid.NewGuid().ToString("D");
         var installationAdmin = Guid.NewGuid().ToString("D");
@@ -56,6 +60,32 @@ public sealed class ConfigurationApiTests(ApiTests.Host host) : IClassFixture<Ap
             var options = new ConfigurationVaultOptions
                 { ActiveKeyId = "old", KeyDirectory = directory.FullName, AdministratorUserId = installationAdmin };
             File.WriteAllBytes(Path.Combine(directory.FullName, "old.key"), RandomNumberGenerator.GetBytes(32));
+            var keys = new ConfigurationKeys(options);
+            const string legacyClientId = "fixture-global-daikin-id";
+            const string legacyAppId = "fixture-ewelink-id";
+            const string legacyAccessId = "fixture-tuya-id";
+            const string legacyUserId = "fixture-tuya-user";
+            const string legacySecret = "fixture-ewelink-secret";
+            var recoveryKey = RandomNumberGenerator.GetBytes(32);
+            var recoveryFile = Path.Combine(directory.FullName, "recovery.key");
+            File.WriteAllBytes(recoveryFile, recoveryKey);
+            await SeedLegacyAsync(db, 0, "daikin", new() { ["clientId"] = keys.Seal(0, "daikin", "clientId", Encoding.UTF8.GetBytes(legacyClientId)) });
+            await SeedLegacyAsync(db, 1, "ewelink", new()
+            {
+                ["appId"] = keys.Seal(1, "ewelink", "appId", Encoding.UTF8.GetBytes(legacyAppId)),
+                ["appSecret"] = keys.Seal(1, "ewelink", "appSecret", Encoding.UTF8.GetBytes(legacySecret)),
+            });
+            options.ActiveKeyId = "recovery";
+            await SeedLegacyAsync(db, 1, "tuya", new()
+            {
+                ["accessId"] = keys.Seal(1, "tuya", "accessId", Encoding.UTF8.GetBytes(legacyAccessId)),
+                ["userId"] = keys.Seal(1, "tuya", "userId", Encoding.UTF8.GetBytes(legacyUserId)),
+            });
+            options.ActiveKeyId = "old";
+            await migrations.ApplyAsync(default);
+            await migrations.ApplyAsync(default);
+            Assert.Equal(checksum014, await db.QuerySingleAsync<string>(migration014));
+            Assert.True(await runtimeMigrations.VerifyConfigurationAsync(default));
             var store = new ProviderConfigurationStore(runtime, runtimeMigrations, options, TimeProvider.System);
             using var fixture = host.WithWebHostBuilder(builder => builder.UseEnvironment("Production").ConfigureTestServices(services =>
             {
@@ -92,6 +122,53 @@ public sealed class ConfigurationApiTests(ApiTests.Host host) : IClassFixture<Ap
             await AddCsrfAsync(globalAdmin);
             Assert.True((await globalAdmin.GetFromJsonAsync<ConfigurationView>(GlobalRoute))!.CanEdit);
             Assert.Equal(HttpStatusCode.NotFound, (await globalAdmin.GetAsync(PropertyRoute)).StatusCode);
+
+            var pending = await ProfileAsync(owner, PropertyRoute, "ewelink");
+            Assert.Equal(["appId"], pending.PendingIdentifierConversion);
+            Assert.Null(pending.Identifiers["appId"]);
+            Assert.True(pending.Credentials["appSecret"]);
+            var changeAppId = new ProviderConfigurationUpdate(pending.Revision, pending.PollSeconds,
+                Identifiers: new Dictionary<string, string?> { ["appId"] = "fixture-new-app-id" });
+            Assert.Equal(HttpStatusCode.Conflict, (await owner.PutAsJsonAsync(PropertyRoute + "/ewelink", changeAppId)).StatusCode);
+            Assert.Equal(HttpStatusCode.BadRequest, (await owner.PutAsJsonAsync(PropertyRoute + "/ewelink", changeAppId with
+            {
+                Identifiers = new Dictionary<string, string?> { ["appSecret"] = "must-not-be-stored-here" }
+            })).StatusCode);
+            await Assert.ThrowsAsync<ConfigurationStorageException>(() => store.RotateAsync(default));
+            File.Delete(recoveryFile);
+            await Assert.ThrowsAnyAsync<CryptographicException>(() => store.ConvertIdentifiersAsync(default));
+            Assert.Equal(pending.Revision, (await ProfileAsync(owner, PropertyRoute, "ewelink")).Revision);
+            Assert.Null((await ProfileAsync(globalAdmin, GlobalRoute, "daikin")).Identifiers["clientId"]);
+            Assert.Equal(0, await db.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM configuration_audit WHERE actor='system:identifier-conversion'"));
+            File.WriteAllBytes(recoveryFile, recoveryKey);
+            CryptographicOperations.ZeroMemory(recoveryKey);
+            Assert.Equal(4, await store.ConvertIdentifiersAsync(default));
+            Assert.Equal(0, await store.ConvertIdentifiersAsync(default));
+            var converted = await ProfileAsync(owner, PropertyRoute, "ewelink");
+            Assert.Equal(pending.Revision + 1, converted.Revision);
+            Assert.Empty(converted.PendingIdentifierConversion);
+            Assert.Equal(legacyAppId, converted.Identifiers["appId"]);
+            Assert.Equal(legacyClientId, (await ProfileAsync(globalAdmin, GlobalRoute, "daikin")).Identifiers["clientId"]);
+            Assert.Null((await ProfileAsync(owner, PropertyRoute, "daikin")).Identifiers["clientId"]);
+            var tuya = await ProfileAsync(owner, PropertyRoute, "tuya");
+            Assert.Equal(legacyAccessId, tuya.Identifiers["accessId"]);
+            Assert.Equal(legacyUserId, tuya.Identifiers["userId"]);
+            Assert.Null((await ProfileAsync(globalAdmin, GlobalRoute, "tuya")).Identifiers["accessId"]);
+            Assert.Equal(HttpStatusCode.Conflict, (await owner.PutAsJsonAsync(PropertyRoute + "/ewelink", changeAppId)).StatusCode);
+            options.ActiveKeyId = "missing";
+            Assert.Equal(HttpStatusCode.NoContent, (await owner.PutAsJsonAsync(PropertyRoute + "/ewelink",
+                changeAppId with { Revision = converted.Revision })).StatusCode);
+            options.ActiveKeyId = "old";
+            const string ewelinkRow = " FROM configuration_profiles WHERE scope_id=1 AND provider='ewelink'";
+            Assert.Equal("fixture-new-app-id", await db.QuerySingleAsync<string>(
+                "SELECT JSON_UNQUOTE(JSON_EXTRACT(identifiers, '$.appId'))" + ewelinkRow));
+            var legacyEncrypted = JsonSerializer.Deserialize<Dictionary<string, CredentialEnvelope>>(
+                await db.QuerySingleAsync<string>("SELECT credentials" + ewelinkRow))!;
+            Assert.Equal("appSecret", Assert.Single(legacyEncrypted).Key);
+            Assert.Equal(legacySecret, Encoding.UTF8.GetString(keys.Open(1, "ewelink", "appSecret", legacyEncrypted["appSecret"])));
+            var legacyNonceCount = await db.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM configuration_nonces");
+
             Assert.Equal(HttpStatusCode.NoContent, (await globalAdmin.PutAsJsonAsync(GlobalRoute + "/growatt", first)).StatusCode);
             Assert.Equal(HttpStatusCode.NoContent, (await owner.PutAsJsonAsync(PropertyRoute + "/growatt", first)).StatusCode);
 
@@ -99,6 +176,7 @@ public sealed class ConfigurationApiTests(ApiTests.Host host) : IClassFixture<Ap
             Assert.True(viewResponse.Headers.CacheControl?.NoStore);
             var json = await viewResponse.Content.ReadAsStringAsync();
             Assert.DoesNotContain(synthetic, json);
+            Assert.DoesNotContain(legacySecret, json);
             Assert.DoesNotContain("ciphertext", json, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("keyId", json, StringComparison.OrdinalIgnoreCase);
             var view = (await owner.GetFromJsonAsync<ConfigurationView>(PropertyRoute))!.Providers.Single(p => p.Provider == "growatt");
@@ -114,7 +192,8 @@ public sealed class ConfigurationApiTests(ApiTests.Host host) : IClassFixture<Ap
             view = (await mirror.ReadAsync(1, editor, default))!.Providers.Single(p => p.Provider == "growatt");
             Assert.Contains(view.PollSeconds, new[] { 360, 420 });
             Assert.Equal(2, view.Revision);
-            var stored = await db.QuerySingleAsync<string>("SELECT credentials FROM configuration_profiles WHERE scope_id=1");
+            const string growattCredentials = "SELECT credentials FROM configuration_profiles WHERE scope_id=1 AND provider='growatt'";
+            var stored = await db.QuerySingleAsync<string>(growattCredentials);
             Assert.DoesNotContain(synthetic, stored);
             var saved = JsonSerializer.Deserialize<Dictionary<string, CredentialEnvelope>>(stored)!["apiToken"];
             Assert.Equal("old", saved.KeyId);
@@ -122,14 +201,22 @@ public sealed class ConfigurationApiTests(ApiTests.Host host) : IClassFixture<Ap
 
             File.WriteAllBytes(Path.Combine(directory.FullName, "next.key"), RandomNumberGenerator.GetBytes(32));
             options.ActiveKeyId = "next";
-            Assert.Equal(2, await store.RotateAsync(default));
+            Assert.Equal(3, await store.RotateAsync(default));
             Assert.Equal(0, await store.RotateAsync(default));
-            var rotated = await db.QuerySingleAsync<string>("SELECT credentials FROM configuration_profiles WHERE scope_id=1");
+            var rotated = await db.QuerySingleAsync<string>(growattCredentials);
             var envelope = JsonSerializer.Deserialize<Dictionary<string, CredentialEnvelope>>(rotated)!["apiToken"];
             Assert.Equal("next", envelope.KeyId);
             Assert.Equal(synthetic, System.Text.Encoding.UTF8.GetString(new ConfigurationKeys(options).Open(1, "growatt", "apiToken", envelope)));
+            const string replacement = "fixture-replacement-secret";
             Assert.Equal(HttpStatusCode.NoContent, (await owner.PutAsJsonAsync(PropertyRoute + "/growatt",
-                new ProviderConfigurationUpdate(view.Revision + 1, view.PollSeconds, Remove: ["apiToken"]))).StatusCode);
+                new ProviderConfigurationUpdate(view.Revision + 1, view.PollSeconds,
+                    new Dictionary<string, string?> { ["apiToken"] = replacement }))).StatusCode);
+            var replaced = JsonSerializer.Deserialize<Dictionary<string, CredentialEnvelope>>(
+                await db.QuerySingleAsync<string>(growattCredentials))!["apiToken"];
+            Assert.NotEqual(envelope.Nonce, replaced.Nonce);
+            Assert.Equal(replacement, Encoding.UTF8.GetString(keys.Open(1, "growatt", "apiToken", replaced)));
+            Assert.Equal(HttpStatusCode.NoContent, (await owner.PutAsJsonAsync(PropertyRoute + "/growatt",
+                new ProviderConfigurationUpdate(view.Revision + 2, view.PollSeconds, Remove: ["apiToken"]))).StatusCode);
             view = (await owner.GetFromJsonAsync<ConfigurationView>(PropertyRoute))!.Providers.Single(p => p.Provider == "growatt");
             Assert.False(view.Credentials["apiToken"]);
             options.ActiveKeyId = "missing";
@@ -144,12 +231,28 @@ public sealed class ConfigurationApiTests(ApiTests.Host host) : IClassFixture<Ap
             Assert.Contains($"{editor}|1|growatt|apiToken|created", audit);
             Assert.Contains($"{editor}|1|growatt|apiToken|removed", audit);
             Assert.Contains("system:key-rotation|1|growatt|apiToken|credentialRotated", audit);
-            Assert.DoesNotContain(audit, item => item.Contains(synthetic, StringComparison.Ordinal));
-            Assert.Equal(4, await db.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM configuration_nonces"));
+            Assert.Contains($"{editor}|1|growatt|apiToken|credentialRotated", audit);
+            Assert.Contains("system:identifier-conversion|1|ewelink|appId|updated", audit);
+            Assert.DoesNotContain(audit, item => item.Contains(synthetic, StringComparison.Ordinal) ||
+                item.Contains(replacement, StringComparison.Ordinal) || item.Contains(legacyAppId, StringComparison.Ordinal));
+            Assert.Equal(legacyNonceCount + 6, await db.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM configuration_nonces"));
             Assert.Equal(1, await db.ExecuteScalarAsync<int>(
                 "SELECT COUNT(*) FROM configuration_nonces WHERE key_id=@KeyId AND nonce=@Nonce", new { saved.KeyId, saved.Nonce }));
         }
         finally { directory.Delete(recursive: true); }
+    }
+
+    private static async Task<ProviderConfigurationView> ProfileAsync(HttpClient client, string route, string provider) =>
+        (await client.GetFromJsonAsync<ConfigurationView>(route))!.Providers.Single(p => p.Provider == provider);
+
+    private static async Task SeedLegacyAsync(MySqlConnection db, long scope, string provider, Dictionary<string, CredentialEnvelope> slots)
+    {
+        await db.ExecuteAsync("INSERT INTO configuration_nonces(key_id,nonce) VALUES(@KeyId,@Nonce)",
+            slots.Values.Select(envelope => new { envelope.KeyId, envelope.Nonce }));
+        await db.ExecuteAsync("""
+            INSERT INTO configuration_profiles(scope_id,property_id,provider,revision,poll_seconds,credentials)
+            VALUES(@scope,NULLIF(@scope,0),@provider,1,@pollSeconds,@credentials)
+            """, new { scope, provider, pollSeconds = provider == "tuya" ? 1800 : 900, credentials = JsonSerializer.Serialize(slots) });
     }
 
     private static Database TestDatabase(string variable, string user)

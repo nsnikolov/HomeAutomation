@@ -134,10 +134,12 @@ export type DashboardSnapshot = { revision: string; canEdit: boolean; groups: Da
 export type ProviderConfigurationView = {
   provider: string; revision: number; pollSeconds: number; minimumPollSeconds: number
   maximumPollSeconds: number; pollStepSeconds: number; credentials: Record<string, boolean>
+  identifiers: Record<string, string | null>; pendingIdentifierConversion: string[]
 }
 export type ConfigurationView = {
   canEdit: boolean; keyAvailable: boolean; requiresHttps?: boolean; providers: ProviderConfigurationView[]
 }
 export type ProviderConfigurationUpdate = {
   revision: number; pollSeconds: number; replacements: Record<string, string>; remove: string[]
+  identifiers?: Record<string, string>
 }
