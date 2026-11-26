@@ -37,9 +37,9 @@ dotnet user-secrets set "Ewelink:EnableWebSocket" "true" --project src/backend/H
 
 Allow the next scheduled sync or use **Force Refresh** when available. The listener obtains the account key from the OAuth family listing, stores it in the existing encrypted token envelope, and uses the regional CoolKit dispatch service and authenticated `userOnline` handshake with standard TLS certificate validation. Dispatch counts against the existing request budget and respects provider cooldowns. The listener holds one connection for the linked account in the backend process. It reconnects with bounded backoff and uses the token refreshed by scheduled HTTP synchronization. The five-minute poll and Force Refresh remain available. [CoolKit OAuth API and WebSocket handshake](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md#real-time-control-device)
 
-The app accepts recent timestamped device reports for assigned, owned PSF-X67 (UIID 32) and THR320D (UIID 181) devices. It keeps unaffected fields intact and rejects older or duplicate values per field. Verified observations are written through the existing telemetry store and delivered to the assigned property via SignalR. Cards display the reading time and mark recent push data **Live**. Older push data appears as **Last known**. Electrical readings returned by ordinary HTTP discovery appear as cloud snapshots. Relay push reports are for monitoring. The existing HTTP readback and audit pipeline continue to confirm manual commands.
+The app accepts recent timestamped device reports for assigned, owned power-detection devices (UIID 5 or 32, such as the PSF-X67) and THR320D (UIID 181) devices. It keeps unaffected fields intact and rejects older or duplicate values per field. Verified observations are written through the existing telemetry store and delivered to the assigned property via SignalR. Cards display the reading time and mark recent push data **Live**. Older push data appears as **Last known**. Electrical readings returned by ordinary HTTP discovery appear as cloud snapshots. Relay push reports are for monitoring. The existing HTTP readback and audit pipeline continue to confirm manual commands.
 
-CoolKit also sends UIID 32 electrical updates without a timestamp. For an authenticated device update for an owned, assigned, online PSF-X67, the backend uses UTC receipt time for the electrical fields when `ts`, `d_seq` and `sequence` are absent. The card labels these times **Server received**, and MySQL stores the provenance on each such sample. Fresh provider-timestamped readings retain priority. Each field keeps its ordering watermark, and unchanged receive-time values are deduplicated. Frames with an invalid, stale or future timestamp are rejected. Relay processing still requires the original provider sequence timestamp. [CoolKit device-update envelope](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/UIIDProtocol.md)
+CoolKit also sends UIID 32 electrical updates without a timestamp. For an authenticated device update for an owned, assigned, online UIID 5 or 32 meter, the backend uses UTC receipt time for the electrical fields when `ts`, `d_seq` and `sequence` are absent. The card labels these times **Server received**, and MySQL stores the provenance on each such sample. Fresh provider-timestamped readings retain priority. Each field keeps its ordering watermark, and unchanged receive-time values are deduplicated. Frames with an invalid, stale or future timestamp are rejected. Relay processing still requires the original provider sequence timestamp. [CoolKit device-update envelope](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/UIIDProtocol.md)
 
 Apply migration 010 using the [existing Windows migration workflow](../../README.md#apply-migrations-and-provision-a-viewer) with `--migrate` alone. This adds nullable `telemetry_samples.timestamp_source` for receipt-timed history. Existing reports and polling remain available before migration; the WebSocket trace records `reject.receiveTimeSchemaRequired` if a receipt-timed sample arrives before the migration.
 
@@ -57,9 +57,60 @@ Live electrical activation defaults to off. With `Ewelink:EnableWebSocket` enabl
 dotnet user-secrets set "Ewelink:EnableLiveElectricalReporting" "true" --project src/backend/HomeAutomation.Api
 ```
 
-Open the eWeLink page as the linked account's authorized operator. The backend sends only `{"uiActive":60}` to eligible owned, assigned and recently seen online PSF-X67 devices (UIID 32). It reuses the account socket, limits activation to eight meters and renews each meter approximately every 50 seconds. Visible tabs renew a shared server-side viewing lease every 10 seconds. Leaving or hiding the page releases that tab's lease. If the stop message is lost, the lease expires after 25 seconds and any existing device activation expires naturally. Provider commands are paced and charged to the shared regional budget. The last 5,000 requests in that budget are reserved for existing operations, including HTTP reconciliation. Five-minute polling, manual relay permissions and inverter protection stay in place. [CoolKit activation parameters](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/UIIDProtocol.md#uiid5-power-detection-single-channel-plug) · [CoolKit WebSocket update and acknowledgement](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md#websocket-update-device-status)
+Open the eWeLink page as the linked account's authorized operator. The backend sends only `{"uiActive":60}` to eligible owned, assigned and recently seen online UIID 5 or 32 meters, such as the PSF-X67. It reuses the account socket, limits activation to eight meters and renews each meter approximately every 50 seconds. Visible tabs renew a shared server-side viewing lease every 10 seconds. Leaving or hiding the page releases that tab's lease. If the stop message is lost, the lease expires after 25 seconds and any existing device activation expires naturally. Provider commands are paced and charged to the shared regional budget. The last 5,000 requests in that budget are reserved for existing operations, including HTTP reconciliation. Since Milestone 7D, electrical activations also pause until the next UTC midnight once a day reaches 1,406 requests. Five-minute polling, manual relay permissions and inverter protection stay in place. [CoolKit activation parameters](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/UIIDProtocol.md#uiid5-power-detection-single-channel-plug) · [CoolKit WebSocket update and acknowledgement](https://github.com/CoolKit-Technologies/eWeLink-API/blob/main/en/OAuth2.0.md#websocket-update-device-status)
 
-An accepted activation can remain **Waiting for a measurement change**. CoolKit documents change thresholds of 2 W, 5 V and 0.03 A. A fresh timestamped report updates the applicable rows and leaves the other rows intact. Cached electrical snapshots appear as last known. If CoolKit rejects an activation, the card and backend log show the provider code and activation stops for the backend process. An unacknowledged command also stops activation. Review the result before restarting with activation enabled. Setting `Ewelink:EnableLiveElectricalReporting` to `false` leaves passive WebSocket telemetry available. The activation path was verified with mock responses. Live acceptance for the installed meters remains unverified.
+An accepted activation can remain **Waiting for a measurement change**. CoolKit documents change thresholds of 2 W, 5 V and 0.03 A. A fresh timestamped report updates the applicable rows and leaves the other rows intact. Cached electrical snapshots appear as last known. CoolKit code 504 ("the device does not respond") now backs off only that meter. Any other rejection is shown on the card and in the backend log with the provider code, and activation stops for the backend process. Without background collection, an unacknowledged command also stops activation. Review the result before restarting with activation enabled. Setting `Ewelink:EnableLiveElectricalReporting` to `false` leaves passive WebSocket telemetry available. The activation path was verified with mock responses. Live acceptance for the installed meters remains unverified.
+
+### Background electrical collection (Milestone 7D)
+
+Before Milestone 7D, electrical history was recorded only while an operator kept the eWeLink page open, because only that page caused `uiActive` to be sent. Meters report power, voltage and current only during those windows, and HTTP inventory values carry no measurement time. With background collection enabled, the backend itself opens one 60-second reporting window per eligible meter per interval over the existing account socket, with or without a browser. The [design note](../architecture/13-ewelink-electrical-collection.md) covers the root cause, budget table, retries, timestamps and coverage.
+
+Collection is off by default. It sends only `{"uiActive":60}`, never relay or energy-counter commands, and stores only device-originated reports. With one window every 15 minutes, history coverage stays partial and estimated energy is marked partial. That reflects what the meters report; nothing is interpolated.
+
+**Deploy safely**, with explicit approval and during a planned restart:
+
+1. Back up as usual. No migration is needed beyond 010, which the receipt-time samples already require.
+2. Keep `Ewelink:EnableWebSocket=true`. Set `Ewelink:ContinuousElectricalCollection=true` and, optionally, `Ewelink:ElectricalCollectionSeconds` (300–3,600, default 900).
+   - With legacy configuration, use User Secrets or environment variables, for example:
+
+     ```powershell
+     dotnet user-secrets set "Ewelink:ContinuousElectricalCollection" "true" --project src/backend/HomeAutomation.Api
+     ```
+
+   - With a vault-backed eWeLink profile, set the value in the legacy configuration and repeat the documented [vault import](../architecture/09-configuration-vault.md) as a dry run first. Profiles imported before 7D load with collection off.
+3. Restart the backend at a planned time. Close every browser tab for the property.
+
+**Verify over 24 hours with no browser connected.** These checks read only local logs and the local database; they make no provider calls and show no credentials.
+
+1. Confirm `eWeLink electrical collection mode backgroundWindows` and then `eWeLink WebSocket authenticated` in the API output.
+2. Every 15 minutes, `eWeLink electrical collection summary` reports:
+   - eligible meters, and meters with a persisted observation in the period;
+   - the effective interval and the seconds since the last accepted activation;
+   - each meter's last-observation age, plus `activationAccepted`, `deviceUnavailable` and `electricalSamplesPersisted` counters.
+
+   Growing `activationAccepted` with `electricalSamplesPersisted=0` means the meters accept windows but send no reports, for example because the load is steady.
+3. With a read-only MySQL account, count the receipt-timed electrical samples per device for the last 24 hours:
+
+   ```sql
+   SELECT d.name, s.metric, COUNT(*) AS samples, MAX(h.observed_at_utc) AS latest_utc
+   FROM telemetry_samples h
+   JOIN telemetry_series s ON s.id = h.series_id
+   JOIN device_endpoints e ON e.id = s.endpoint_id
+   JOIN devices d ON d.id = e.device_id
+   WHERE s.source_key = 'ewelink' AND s.metric IN ('ActivePower','Voltage','Current')
+     AND h.observed_at_utc >= UTC_TIMESTAMP() - INTERVAL 24 HOUR
+   GROUP BY d.name, s.metric ORDER BY d.name, s.metric;
+   ```
+
+4. Confirm the daily request count stays under the share. The total includes HTTP polling.
+
+   ```sql
+   SELECT region, day_utc, requests FROM ewelink_request_days ORDER BY day_utc DESC LIMIT 3;
+   ```
+
+5. Open History only after the 24-hour window and check that gaps and partial coverage appear between windows.
+
+To roll back, set `Ewelink:ContinuousElectricalCollection=false` (or remove it) and restart. Stored samples remain.
 
 ### Trace electrical reports
 

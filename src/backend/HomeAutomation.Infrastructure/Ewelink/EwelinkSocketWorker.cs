@@ -119,11 +119,19 @@ public sealed partial class EwelinkService
 }
 
 internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOptions options, TimeProvider clock,
-    EwelinkElectricalReporting electrical, ILogger<EwelinkSocketWorker> logger) : BackgroundService
+    EwelinkElectricalReporting electrical, EwelinkCollectionStats stats, ILogger<EwelinkSocketWorker> logger) : BackgroundService
 {
+    private bool Activates => options.LiveElectricalConfigured || options.ElectricalCollectionConfigured;
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        if (!options.IsConfigured || !options.EnableWebSocket) return;
+        if (!options.IsConfigured) return;
+        if (options.ContinuousElectricalCollection && !options.ElectricalCollectionConfigured)
+            logger.LogWarning("eWeLink continuous electrical collection is disabled: it requires EnableWebSocket and ElectricalCollectionSeconds from 300 to 3600.");
+        if (!options.EnableWebSocket) return;
+        logger.LogInformation("eWeLink electrical collection mode {Mode}, requested interval {IntervalSeconds}s, live viewing {LiveViewing}.",
+            options.ElectricalCollectionConfigured ? "backgroundWindows" : options.LiveElectricalConfigured ? "viewerOnly" : "passive",
+            options.ElectricalCollectionConfigured ? options.ElectricalCollectionSeconds : null, options.LiveElectricalConfigured);
         using var transport = new HttpMessageInvoker(new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false });
         var failures = 0;
         while (!ct.IsCancellationRequested)
@@ -148,7 +156,7 @@ internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOp
                         () => logger.LogInformation("eWeLink WebSocket authenticated."),
                         (id, parameters, at, token) => ReceiveAsync(active.Identity, id, parameters, at, token, trace),
                         token => CheckIdentityAsync(active.Identity, token), ct,
-                        options.LiveElectricalConfigured ? (channel, token) => ActivateAsync(active.Identity, channel, token, trace) : null,
+                        Activates ? (channel, token) => ActivateAsync(active.Identity, channel, token, trace) : null,
                         trace, logger);
                     failures = 0;
                     delay = EwelinkSocketProtocol.ReconnectDelay(1);
@@ -173,57 +181,32 @@ internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOp
         }
     }
 
-    private async Task ActivateAsync(EwelinkSocketIdentity identity, EwelinkActivationChannel channel, CancellationToken ct,
-        EwelinkSocketTrace? trace)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2), clock);
-        DateTimeOffset? retryAt = null;
-        do
-        {
-            if (electrical.IsStopped || retryAt > clock.GetUtcNow() || electrical.ViewedProperties(identity.Owner).Length == 0)
-                continue;
-            await using var scope = scopes.CreateAsyncScope();
-            var service = scope.ServiceProvider.GetRequiredService<EwelinkService>();
-            var notifier = scope.ServiceProvider.GetRequiredService<IEwelinkLiveNotifier>();
-            foreach (var target in await service.ElectricalTargetsAsync(identity, ct))
-            {
-                try
-                {
-                    var reply = await service.SendElectricalActivationAsync(identity, target, channel, ct);
-                    if (reply is null) continue;
-                    trace?.Count("activationSent");
-                    var code = await reply.WaitAsync(TimeSpan.FromSeconds(4), clock, ct);
-                    if (code != 0)
-                    {
-                        await StopActivatingAsync("activationRejected", code);
-                        break;
-                    }
-                    electrical.Accepted(target.ExternalId);
-                    trace?.Count("activationAccepted");
-                    await notifier.ChangedAsync(target.PropertyId!.Value, ct);
-                }
-                catch (TimeoutException)
-                {
-                    await StopActivatingAsync("activationUnconfirmed", null);
-                    break;
-                }
-                catch (EwelinkFailure failure) when (failure.Status is "quotaExceeded" or "syncDeferred")
-                {
-                    retryAt = failure.RetryAt ?? clock.GetUtcNow().AddMinutes(1);
-                    logger.LogWarning("eWeLink electrical activation deferred with {Status} until {RetryAt}.", failure.Status, retryAt);
-                    break;
-                }
-            }
+    private Task ActivateAsync(EwelinkSocketIdentity identity, EwelinkActivationChannel channel, CancellationToken ct,
+        EwelinkSocketTrace? trace) =>
+        new EwelinkElectricalCollector(electrical, stats, clock, logger)
+            .RunAsync(identity.Owner, new ScopedActivationHost(scopes, identity, stats), channel, ct, trace);
 
-            async Task StopActivatingAsync(string reason, int? providerCode)
-            {
-                electrical.Stop(reason, providerCode);
-                trace?.Count(reason);
-                logger.LogWarning("eWeLink electrical activation stopped with {Status}, CoolKit code {ProviderCode}.", reason, providerCode);
-                foreach (var property in electrical.ViewedProperties(identity.Owner))
-                    await notifier.ChangedAsync(property, ct);
-            }
-        } while (await timer.WaitForNextTickAsync(ct));
+    private sealed class ScopedActivationHost(IServiceScopeFactory scopes, EwelinkSocketIdentity identity, EwelinkCollectionStats stats)
+        : IEwelinkActivationHost
+    {
+        public async Task<IReadOnlyList<EwelinkRow>> TargetsAsync(CancellationToken ct)
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<EwelinkService>().ElectricalTargetsAsync(identity, ct, stats);
+        }
+
+        public async Task<Task<int>?> SendAsync(EwelinkRow target, EwelinkActivationChannel channel, CancellationToken ct)
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<EwelinkService>()
+                .SendElectricalActivationAsync(identity, target, channel, ct);
+        }
+
+        public async Task NotifyAsync(long property, CancellationToken ct)
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            await scope.ServiceProvider.GetRequiredService<IEwelinkLiveNotifier>().ChangedAsync(property, ct);
+        }
     }
 
     private async Task<bool> CheckIdentityAsync(EwelinkSocketIdentity identity, CancellationToken ct)
@@ -241,16 +224,19 @@ internal sealed class EwelinkSocketWorker(IServiceScopeFactory scopes, EwelinkOp
         var result = await service.IngestSocketEventAsync(identity, id, parameters, time, ct, trace);
         if (result is { } assigned)
         {
+            if (assigned.ElectricalSamples > 0) stats.Persisted(id, assigned.ElectricalSamples);
             var notifier = scope.ServiceProvider.GetRequiredService<IEwelinkLiveNotifier>();
             try
             {
                 await notifier.ChangedAsync(assigned.Property, ct, assigned.ElectricalSamples > 0);
                 if (assigned.ElectricalSamples > 0) trace?.Count("signalRSent");
             }
-            catch when (!ct.IsCancellationRequested)
+            catch (Exception error) when (!ct.IsCancellationRequested)
             {
+                // History is already persisted; a browser notification failure must not end the collection session.
                 if (assigned.ElectricalSamples > 0) trace?.Count("failure.signalRSend");
-                throw;
+                stats.Count("failure.signalRSend");
+                logger.LogWarning("eWeLink live notification failed with {ErrorType}; telemetry was already stored.", error.GetType().Name);
             }
         }
     }

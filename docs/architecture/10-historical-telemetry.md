@@ -59,7 +59,7 @@ Measured and estimated energy are separate fields and are never added together.
   - A step within the hold is spread across the hours it spans. A longer step keeps its measured total in the hour of its closing observation and is flagged `counterGap`.
   - Status is `measured` only for complete buckets without counter flags. Otherwise it is `incomplete`.
 - **Growatt.** Per-inverter counters stay per inverter. The existing mapper writes installation-level `PvPower` (only when both inverters report at the same instant) and the master's whole-site `HouseholdPower`. History never sums device series. Shared-battery and site totals come only from their own series.
-- **eWeLink and Tuya.** Both report W, not kWh, so their energy is always estimated. eWeLink electrical frames arrive only while a viewer has live reporting active, so their estimates normally show low coverage.
+- **eWeLink and Tuya.** Both report W, not kWh, so their energy is always estimated. eWeLink electrical frames arrive only during an activation window: from an operator's live view or, since Milestone 7D, from optional [background collection](13-ewelink-electrical-collection.md). The 2-minute hold is unchanged, so their estimates normally show partial coverage.
 
 ## Calendar days
 
@@ -104,13 +104,13 @@ Raw rows take about 100 bytes on disk including the primary key. Hourly rows tak
 | One series every 5 minutes (Growatt) | 105,120 rows, about 10 MB | 8,760 rows, about 1.5 MB |
 | One series every 30 minutes (Tuya) | 17,520 rows, about 1.8 MB | about 1.5 MB |
 | 40 Growatt series and 20 Tuya/eWeLink series | about 440 MB | about 90 MB |
-| eWeLink live electrical frames | about 3,600 rows per metric per viewed hour | at most 8,760 rows per metric |
+| eWeLink live electrical frames | about 3,600 rows per metric per viewed hour; background windows add a few rows per meter per window | at most 8,760 rows per metric |
 
 Measure actual growth before choosing retention.
 
 ## Limitations and deferred decisions
 
-- eWeLink temperature and electrical values reach history only from WebSocket frames. HTTP synchronization persists relay state only. Tuya relay state that has not changed keeps its original status time, so long ON periods appear as `incomplete` coverage rather than inferred ON time.
+- eWeLink temperature and electrical values reach history only from WebSocket frames (see [continuous eWeLink electrical collection](13-ewelink-electrical-collection.md)). HTTP synchronization persists relay state only. Tuya relay state that has not changed keeps its original status time, so long ON periods appear as `incomplete` coverage rather than inferred ON time.
 - The hold policy is code-defined from provider options. Changing an option changes later rollups. Rerun the backfill to apply it to older hours.
 - Late observations older than the 72-hour window are not picked up automatically.
 - No property-wide energy total is calculated. Installation totals remain the explicit installation-level series.

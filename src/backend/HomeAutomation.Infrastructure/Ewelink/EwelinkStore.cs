@@ -80,13 +80,19 @@ internal sealed class EwelinkStore(Database database, Migrations migrations) : I
                 SELECT COALESCE(SUM(requests),0) FROM ewelink_request_days WHERE region=@Region AND day_utc>=@Cutoff
                 """, ct, args));
             // Leave the final 5,000 calls in the shared budget available for HTTP reconciliation and other existing operations.
-            if (count >= (electrical ? 45_000 : 50_000))
+            if (count >= (electrical ? EwelinkCollectionBudget.ElectricalCeiling : EwelinkCollectionBudget.MonthlyQuota))
             {
                 var oldest = await db.ExecuteScalarAsync<DateTime>(Query("""
                     SELECT MIN(day_utc) FROM ewelink_request_days WHERE region=@Region AND day_utc>=@Cutoff
                     """, ct, args));
                 throw new EwelinkFailure("quotaExceeded", new DateTimeOffset(oldest, TimeSpan.Zero).AddDays(32));
             }
+            // Electrical activations also stop for the rest of the UTC day once that day's bucket reaches an even share
+            // of the electrical ceiling, so viewers or a large meter count cannot spend the rolling budget in a few days.
+            if (electrical && await db.ExecuteScalarAsync<long>(Query("""
+                    SELECT COALESCE(SUM(requests),0) FROM ewelink_request_days WHERE region=@Region AND day_utc=@Day
+                    """, ct, args)) >= EwelinkCollectionBudget.DailyElectricalShare)
+                throw new EwelinkFailure("quotaExceeded", new DateTimeOffset(now.UtcDateTime.Date.AddDays(1), TimeSpan.Zero));
             await db.ExecuteAsync(Query("""
                 INSERT INTO ewelink_request_days(region,day_utc,requests) VALUES(@Region,@Day,1)
                 ON DUPLICATE KEY UPDATE requests=ewelink_request_days.requests+1

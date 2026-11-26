@@ -21,6 +21,12 @@ public sealed class EwelinkOptions
     public bool WebSocketDiagnostics { get; set; }
     public bool EnableLiveElectricalReporting { get; set; }
     public bool LiveElectricalConfigured => EnableWebSocket && EnableLiveElectricalReporting;
+    /// <summary>Backend-owned electrical activation windows, independent of any open browser. Off by default.</summary>
+    public bool ContinuousElectricalCollection { get; set; }
+    /// <summary>Requested spacing of one 60-second activation window per eligible meter. The budget can stretch it.</summary>
+    public int ElectricalCollectionSeconds { get; set; } = 900;
+    public bool ValidElectricalCollectionInterval => ElectricalCollectionSeconds is >= 300 and <= 3600;
+    public bool ElectricalCollectionConfigured => EnableWebSocket && ContinuousElectricalCollection && ValidElectricalCollectionInterval;
     public bool EnableWrites { get; set; }
     public Dictionary<string, bool> RelayWriteDevices { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool IsConfigured => !string.IsNullOrWhiteSpace(AppId) && !AppId.Any(char.IsControl) &&

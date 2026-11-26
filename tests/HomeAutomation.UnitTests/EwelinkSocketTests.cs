@@ -109,8 +109,9 @@ public sealed class EwelinkSocketTests
         Assert.Empty(EwelinkMapping.MergeEvent(first, olderReport.RootElement, Now).Samples);
         Assert.Empty(ApplyUntimed(Meter() with { Model = "THR320D", Uiid = 181 }, Now).Samples);
 
+        // Three minutes later the frame is a new report, so the repeated voltage is a current reading and is kept.
         var afterExpiry = ApplyUntimed(first, Now.AddMinutes(3));
-        Assert.Equal(Metric.ActivePower, Assert.Single(afterExpiry.Samples).Metric);
+        Assert.Equal([Metric.ActivePower, Metric.Voltage], afterExpiry.Samples.Select(sample => sample.Metric).ToArray());
         Assert.Contains("reject.freshProviderTimestamp", trace.Drain(), StringComparison.Ordinal);
 
         (EwelinkDevice Snapshot, IReadOnlyList<Sample> Samples) ApplyUntimed(EwelinkDevice device, DateTimeOffset at) =>

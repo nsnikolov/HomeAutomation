@@ -37,6 +37,7 @@ public sealed class ProviderOptionMappingTests
                 AppId = "fixture-app", AppSecret = "fixture-ewelink-secret", OperatorEmail = "operator@example.test",
                 RedirectUri = "https://example.test/api/v1/ewelink/callback", PollMinutes = 7, InventoryDiagnostics = true,
                 EnableWebSocket = true, WebSocketDiagnostics = true, EnableLiveElectricalReporting = true, EnableWrites = true,
+                ContinuousElectricalCollection = true, ElectricalCollectionSeconds = 1200,
                 RelayWriteDevices = new(StringComparer.OrdinalIgnoreCase) { ["Stable-Relay"] = true },
             },
             _ => new TuyaOptions

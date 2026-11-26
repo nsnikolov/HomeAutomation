@@ -45,6 +45,8 @@ internal sealed record EwelinkDevice(string ExternalId, string Name, string Mode
 internal static class EwelinkMapping
 {
     internal static readonly string[] ElectricalFields = ["power", "voltage", "current"];
+    /// <summary>One documented activation window; see <see cref="EwelinkElectricalReporting.ActivationSeconds"/>.</summary>
+    internal static readonly TimeSpan ReceiptDuplicateWindow = TimeSpan.FromSeconds(EwelinkElectricalReporting.ActivationSeconds);
 
     public static bool HasElectricalFields(JsonElement parameters) =>
         ElectricalFields.Any(key => Node(parameters, key).ValueKind != JsonValueKind.Undefined);
@@ -139,8 +141,16 @@ internal static class EwelinkMapping
         }
 
         var measurements = device.Measurements?.ToDictionary() ?? [];
-        foreach (var (metric, reading) in ReadMeasurements(device.Uiid, climate, device.SensorType, parameters, at, trace, meter)
-                     ?? Enumerable.Empty<KeyValuePair<Metric, EwelinkMeasurement>>())
+        var readings = ReadMeasurements(device.Uiid, climate, device.SensorType, parameters, at, trace, meter)
+            ?? new Dictionary<Metric, EwelinkMeasurement>();
+        // A receipt-timed frame has no provider identity. Within one activation window the device reports only threshold
+        // changes, so a frame whose every field repeats the previous receipt-timed values inside that window is a repeated
+        // delivery. A device report is otherwise current, and all of its fields are kept even when one value is unchanged.
+        // Fields already superseded by a fresh provider-timestamped report are ignored for this comparison.
+        var repeatedDelivery = source == EwelinkSocketTimeSource.ServerReceived && readings.Count > 0 && readings.All(item =>
+            measurements.TryGetValue(item.Key, out var last) && (FreshProviderReading(last, at) ||
+                last.UntimedSocketValue == item.Value.Value && last.SocketTime is { } previousAt && at - previousAt < ReceiptDuplicateWindow));
+        foreach (var (metric, reading) in readings)
         {
             var electrical = meter && EwelinkElectricalReporting.IsElectrical(metric);
             measurements.TryGetValue(metric, out var previous);
@@ -153,12 +163,12 @@ internal static class EwelinkMapping
             var serverReceived = source == EwelinkSocketTimeSource.ServerReceived;
             if (serverReceived && previous is { } last)
             {
-                if (last is { FromSocket: true, ServerReceived: false } && at - last.ReceivedAt <= EwelinkSocketProtocol.Freshness)
+                if (FreshProviderReading(last, at))
                 {
                     trace?.Count("reject.freshProviderTimestamp");
                     continue;
                 }
-                if (last.UntimedSocketValue == reading.Value)
+                if (repeatedDelivery)
                 {
                     trace?.Count("reject.serverReceivedDuplicate");
                     continue;
@@ -176,6 +186,9 @@ internal static class EwelinkMapping
         }
         return (device with { Measurements = measurements }, samples);
     }
+
+    private static bool FreshProviderReading(EwelinkMeasurement last, DateTimeOffset at) =>
+        last is { FromSocket: true, ServerReceived: false } && at - last.ReceivedAt <= EwelinkSocketProtocol.Freshness;
 
     public static int? Uiid(JsonElement data) => Integer(Node(data, "extra"), "uiid");
     public static bool IsProtectedRelayName(string name) =>

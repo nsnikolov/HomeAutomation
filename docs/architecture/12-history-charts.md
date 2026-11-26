@@ -65,7 +65,7 @@ These additions are backwards-compatible and need no migration:
 
 ## Deferred
 
-- Continuous eWeLink electrical collection: eWeLink power history shows its real, often low, coverage.
+- Continuous eWeLink electrical collection is delivered by [Milestone 7D](13-ewelink-electrical-collection.md) and is off by default. eWeLink power history still shows its real, often partial, coverage.
 - Brush or zoom interactions beyond range selection.
 - Export, and comparisons across different metrics.
 - Physical-series history without a logical device.

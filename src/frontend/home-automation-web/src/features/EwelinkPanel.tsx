@@ -15,6 +15,8 @@ const electricalStatuses = {
   receivingReports: 'Receiving live electrical reports.',
   activationRejected: 'CoolKit rejected electrical reporting.',
   activationUnconfirmed: 'CoolKit did not acknowledge electrical reporting.',
+  scheduledCollection: 'Background collection is on. The next electrical reporting window is scheduled.',
+  deviceUnavailable: 'The device did not respond to electrical reporting. Retrying later.',
 }
 
 const measurementRows = [

@@ -219,6 +219,8 @@ Only property Owners and Admins can replace devices. Replacing a Growatt inverte
 
 Open **History** in the navigation, or **View history** on a logical device on the Devices page. Choose a logical device, a measurement and a range (last 24 hours, 7 days, 30 days, 12 months or custom). The page shows averages with minimum and maximum bands, measured and estimated energy separately, relay ON time, data coverage, and device replacement markers, and can compare up to four logical devices. History needs migrations 017 and 018, aggregated data (the 7A backfill and worker) and logical devices (the 7B initialization). Until then it shows "History is not available yet" and other pages keep working. See [history charts](docs/architecture/12-history-charts.md).
 
+eWeLink power, voltage and current history needs an electrical reporting window. To collect it without an open browser, enable the optional [background electrical collection](docs/integrations/ewelink-cloud.md#background-electrical-collection-milestone-7d) (`Ewelink:ContinuousElectricalCollection`, off by default) and restart the backend. It stays within the shared CoolKit request budget, so coverage is partial. See [eWeLink electrical collection](docs/architecture/13-ewelink-electrical-collection.md).
+
 ## Growatt read-only monitoring
 
 Sign in and choose **Live Growatt** in the property sidebar to open the inverter detail page. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.

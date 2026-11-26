@@ -81,6 +81,7 @@ public sealed partial class EwelinkService
         services.AddSingleton<EwelinkPace>();
         services.AddSingleton<EwelinkVault>();
         services.AddSingleton<EwelinkElectricalReporting>();
+        services.AddSingleton<EwelinkCollectionStats>();
         services.AddScoped<IEwelinkStore, EwelinkStore>();
         services.AddScoped<IEwelinkRelayAudit, EwelinkRelayAudit>();
         services.AddHttpClient<EwelinkClient>(http =>
@@ -125,7 +126,8 @@ public sealed partial class EwelinkService
                     RequiresRelayConfirmation = device.RequiresRelayConfirmation,
                     RelayCommand = control == "enabled" ? await relayAudit.LatestAsync(row.Id, property, ct) : null,
                     RelayControlStatus = control,
-                    ElectricalReporting = options.LiveElectricalConfigured && EwelinkElectricalReporting.IsMeter(device)
+                    ElectricalReporting = (options.LiveElectricalConfigured || options.ElectricalCollectionConfigured) &&
+                        EwelinkElectricalReporting.IsMeter(device)
                         ? electrical?.Status(device) : null
                 };
             }

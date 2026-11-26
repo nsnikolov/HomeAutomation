@@ -42,6 +42,31 @@ it('submits presence only while visible and distinguishes acceptance from live m
   }
 })
 
+it('shows background collection status without the page activating reporting', async () => {
+  const time = '2026-11-26T08:00:00Z'
+  const device = { name: 'Boiler', model: 'PSF-X67', roomId: 1, connectivity: 'online' as const,
+    seenAt: time, quality: 'fresh' as const, hasRelay: true, relay: false, relayAt: time, relayQuality: 'fresh' as const }
+  const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
+    status: 'connected', manage: true, lastSuccess: time, nextSync: null, unassigned: [], canViewLiveElectrical: false,
+    devices: [
+      { ...device, id: 'scheduled', electricalReporting: { status: 'scheduledCollection' } },
+      { ...device, id: 'unavailable', name: 'Pump', electricalReporting: { status: 'deviceUnavailable', providerCode: 504 } },
+    ],
+  })
+  const rooms = vi.spyOn(api, 'rooms').mockResolvedValue([])
+  const prepare = vi.spyOn(api, 'prepareEwelinkElectricalViewer')
+  try {
+    view()
+    expect(await screen.findByText(/Background collection is on/)).toBeInTheDocument()
+    expect(screen.getByText(/did not respond to electrical reporting.*CoolKit code 504/)).toBeInTheDocument()
+    expect(prepare).not.toHaveBeenCalled()
+  } finally {
+    status.mockRestore()
+    rooms.mockRestore()
+    prepare.mockRestore()
+  }
+})
+
 it('distinguishes live measurements from last-known values and retains their timestamps', async () => {
   const time = '2026-11-23T08:00:00Z'
   const status = vi.spyOn(api, 'ewelink').mockResolvedValue({

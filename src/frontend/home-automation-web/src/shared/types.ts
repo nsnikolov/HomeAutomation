@@ -60,7 +60,7 @@ export type EwelinkDevice = {
   socketMetrics?: Metric[]
   serverReceivedMetrics?: Metric[]
   observedRelay?: boolean | null; observedRelayAt?: string | null; observedRelayQuality?: Quality
-  electricalReporting?: { status: 'waitingForActivation' | 'awaitingReport' | 'receivingReports' | 'activationRejected' | 'activationUnconfirmed'; providerCode?: number | null } | null
+  electricalReporting?: { status: 'waitingForActivation' | 'awaitingReport' | 'receivingReports' | 'activationRejected' | 'activationUnconfirmed' | 'scheduledCollection' | 'deviceUnavailable'; providerCode?: number | null } | null
   canWriteRelay?: boolean; requiresRelayConfirmation?: boolean; relayCommand?: EwelinkRelayOutcome | null
   relayControlStatus?: 'enabled' | 'deviceDisabled' | 'globalDisabled' | 'awaitingDiscovery' | 'unsupported' | null
 }

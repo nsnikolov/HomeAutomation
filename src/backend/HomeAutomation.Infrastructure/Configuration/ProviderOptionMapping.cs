@@ -39,7 +39,9 @@ internal static class ProviderOptionMapping
         int DailyLimit, int ManualReserve, int FreshMinutes);
     private sealed record EwelinkSettings(string? RedirectUri, string? OperatorEmail, bool InventoryDiagnostics,
         bool EnableWebSocket, bool WebSocketDiagnostics, bool EnableLiveElectricalReporting, bool EnableWrites,
-        Dictionary<string, bool> RelayWriteDevices);
+        Dictionary<string, bool> RelayWriteDevices,
+        // Milestone 7D. Optional so profiles imported before these settings existed still load with collection off.
+        bool ContinuousElectricalCollection = false, int ElectricalCollectionSeconds = 900);
     private sealed record TuyaSettings(string? DataCenter, string? OperatorEmail, int HistoryReadsPerPoll);
 
     public static object ReadLegacy(string provider, IConfiguration configuration)
@@ -73,7 +75,8 @@ internal static class ProviderOptionMapping
                 new DaikinSettings(o.RedirectUri, o.OperatorEmail, o.UsePkce, o.EnableWrites, o.DailyLimit, o.ManualReserve, o.FreshMinutes)),
             EwelinkOptions o => Pack(o.PollMinutes * 60, o.AppSecret!, new() { ["appId"] = o.AppId! }, Identity(o),
                 new EwelinkSettings(o.RedirectUri, o.OperatorEmail, o.InventoryDiagnostics, o.EnableWebSocket, o.WebSocketDiagnostics,
-                    o.EnableLiveElectricalReporting, o.EnableWrites, o.RelayWriteDevices)),
+                    o.EnableLiveElectricalReporting, o.EnableWrites, o.RelayWriteDevices,
+                    o.ContinuousElectricalCollection, o.ElectricalCollectionSeconds)),
             TuyaOptions o => Pack(o.PollMinutes * 60, o.AccessSecret!,
                 new() { ["accessId"] = o.AccessId!, ["userId"] = o.UserId! }, Identity(o),
                 new TuyaSettings(o.DataCenter, o.OperatorEmail, o.HistoryReadsPerPoll)),
@@ -109,7 +112,9 @@ internal static class ProviderOptionMapping
                     OperatorEmail = o.OperatorEmail, PollMinutes = minutes, InventoryDiagnostics = o.InventoryDiagnostics,
                     EnableWebSocket = o.EnableWebSocket, WebSocketDiagnostics = o.WebSocketDiagnostics,
                     EnableLiveElectricalReporting = o.EnableLiveElectricalReporting, EnableWrites = o.EnableWrites,
-                    RelayWriteDevices = new(o.RelayWriteDevices, StringComparer.OrdinalIgnoreCase)
+                    RelayWriteDevices = new(o.RelayWriteDevices, StringComparer.OrdinalIgnoreCase),
+                    ContinuousElectricalCollection = o.ContinuousElectricalCollection,
+                    ElectricalCollectionSeconds = o.ElectricalCollectionSeconds
                 },
                 "tuya" when saved.Settings.Deserialize<TuyaSettings>(Json) is { } o => new TuyaOptions
                 {
@@ -168,6 +173,7 @@ internal static class ProviderOptionMapping
                 "ApiToken, SiteKey, MasterId, SlaveId, BatterySourceId, TimeZone, PollSeconds, FreshnessSeconds, TimeoutSeconds",
             DaikinOptions o when !o.IsConfigured => "RedirectUri, Daikin:TokenKey, PollMinutes, FreshMinutes, DailyLimit, ManualReserve",
             EwelinkOptions o when !o.IsConfigured => "AppId, RedirectUri, PollMinutes",
+            EwelinkOptions o when !o.ValidElectricalCollectionInterval => "ElectricalCollectionSeconds",
             TuyaOptions o when !o.IsConfigured || o.HistoryReadsPerPoll is < 0 or > 4 =>
                 "DataCenter, AccessId, UserId, PollMinutes, HistoryReadsPerPoll",
             _ => null
