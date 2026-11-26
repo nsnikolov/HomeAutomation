@@ -76,6 +76,56 @@ it('flags encrypted legacy identifiers and omits them from submissions', async (
     { revision: 2, pollSeconds: 1800, replacements: {}, remove: [], identifiers: { userId: 'edited-user' } }))
 })
 
+it('shows installation-wide accounts stored globally as configured on a property page without revealing values', async () => {
+  // The reported state: Growatt in property 3, Daikin, eWeLink and Tuya stored only in the global scope.
+  const profile = (provider: string, slot: string, ids: string[], global: boolean) => ({
+    ...data.providers[0], provider, revision: 0, credentials: { [slot]: false },
+    identifiers: Object.fromEntries(ids.map(id => [id, null])), installationWide: true,
+    global: global ? { revision: 1, credentials: { [slot]: true }, identifiers: Object.fromEntries(ids.map(id => [id, true])) } : null,
+  })
+  vi.spyOn(api, 'configuration').mockImplementation(async property => {
+    if (property === null) throw new ApiError(404)
+    return { ...data, providers: [
+      { ...data.providers[0], installationWide: false, global: null },
+      profile('daikin', 'clientSecret', ['clientId'], true),
+      profile('ewelink', 'appSecret', ['appId'], true),
+      profile('tuya', 'accessSecret', ['accessId', 'userId'], false),
+    ] }
+  })
+  show()
+  const growatt = (await screen.findByRole('heading', { name: 'Growatt' })).closest('.monitor-grid-item') as HTMLElement
+  expect(within(growatt).getByText('Staged configuration complete')).toBeInTheDocument()
+
+  const ewelink = screen.getByRole('heading', { name: 'eWeLink' }).closest('.monitor-grid-item') as HTMLElement
+  expect(within(ewelink).getByText('Installation-wide profile complete')).toBeInTheDocument()
+  const stored = ewelink.querySelector('dl[aria-label="eWeLink installation-wide profile"]') as HTMLElement
+  expect(stored).not.toBeNull()
+  expect(within(stored).getByText('App secret').nextElementSibling).toHaveTextContent('Configured')
+  expect(within(stored).getByText('App ID').nextElementSibling).toHaveTextContent('Configured')
+  expect(within(ewelink).getByText(/does not replace it/)).toBeInTheDocument()
+  expect(within(ewelink).getByText('Not staged for this property')).toBeInTheDocument()
+  expect(within(ewelink).queryByText('Staged configuration incomplete')).not.toBeInTheDocument()
+  expect(within(ewelink).getByLabelText('App ID')).toHaveValue('')
+
+  const daikin = screen.getByRole('heading', { name: 'Daikin ONECTA' }).closest('.monitor-grid-item') as HTMLElement
+  expect(within(daikin).getByText('Installation-wide profile complete')).toBeInTheDocument()
+  const tuya = screen.getByRole('heading', { name: 'Smart Life / Tuya' }).closest('.monitor-grid-item') as HTMLElement
+  expect(within(tuya).getByText('No installation-wide profile')).toBeInTheDocument()
+  expect(within(tuya).getByText(/no global profile is stored/)).toBeInTheDocument()
+})
+
+it('keeps the global configuration section unchanged for the installation administrator', async () => {
+  vi.spyOn(api, 'configuration').mockImplementation(async property => property === null
+    ? { ...data, providers: [{ ...data.providers[0], provider: 'ewelink', credentials: { appSecret: true },
+      identifiers: { appId: 'global-app' }, installationWide: true, global: null }] }
+    : { ...data, providers: [] })
+  show()
+  const section = (await screen.findByRole('heading', { name: 'Global configuration' })).closest('section') as HTMLElement
+  expect(within(section).getByText('Staged configuration complete')).toBeInTheDocument()
+  expect(within(section).getByLabelText('App ID')).toHaveValue('global-app')
+  expect(within(section).queryByText(/installation-wide account/)).not.toBeInTheDocument()
+})
+
 it('keeps viewer configuration read-only', async () => {
   vi.spyOn(api, 'configuration').mockImplementation(async property => {
     if (property === null) throw new ApiError(404)

@@ -15,14 +15,16 @@ public sealed class ConfigurationStorageException : Exception;
 public sealed partial class ProviderConfigurationStore(Database database, Migrations migrations, ConfigurationVaultOptions options,
     TimeProvider clock) : IProviderConfiguration
 {
+    /// <param name="InstallationWide">One account for the installation, imported into the global scope; a property profile is
+    /// staged separately and cannot substitute for it (see the configuration vault guide).</param>
     private sealed record Definition(string Provider, int Default, int Minimum, int Maximum, int Step,
-        string SecretSlot, string[] Identifiers);
+        string SecretSlot, string[] Identifiers, bool InstallationWide);
     private static readonly Definition[] Providers =
     [
-        new("growatt", 300, 300, 1800, 1, "apiToken", []),
-        new("daikin", 900, 300, 86400, 60, "clientSecret", ["clientId"]),
-        new("ewelink", 300, 300, 86400, 60, "appSecret", ["appId"]),
-        new("tuya", 1800, 1800, 86400, 60, "accessSecret", ["accessId", "userId"])
+        new("growatt", 300, 300, 1800, 1, "apiToken", [], false),
+        new("daikin", 900, 300, 86400, 60, "clientSecret", ["clientId"], true),
+        new("ewelink", 300, 300, 86400, 60, "appSecret", ["appId"], true),
+        new("tuya", 1800, 1800, 86400, 60, "accessSecret", ["accessId", "userId"], true)
     ];
     private const string Profiles = """
         SELECT scope_id AS Scope, provider AS Provider, revision AS Revision, poll_seconds AS PollSeconds,
@@ -43,8 +45,13 @@ public sealed partial class ProviderConfigurationStore(Database database, Migrat
         var role = await RoleAsync(db, tx, property, actor, ct);
         if (role is null) return null;
         await EnsureSchemaAsync(ct);
-        var rows = (await db.QueryAsync<Profile>(Query(Profiles + " WHERE scope_id=@scope", ct,
-            new { scope = property ?? 0 }, tx))).ToDictionary(row => row.Provider, StringComparer.Ordinal);
+        // The requested scope is read as before. A property read also loads the global rows, but only to report their presence:
+        // property and global profiles stay independent, and global values are never returned outside the global scope.
+        var all = (await db.QueryAsync<Profile>(Query(Profiles + " WHERE scope_id IN (@scope, 0)", ct,
+            new { scope = property ?? 0 }, tx))).ToList();
+        var rows = all.Where(row => row.Scope == (property ?? 0)).ToDictionary(row => row.Provider, StringComparer.Ordinal);
+        var global = property is null ? new Dictionary<string, Profile>(StringComparer.Ordinal)
+            : all.Where(row => row.Scope == 0).ToDictionary(row => row.Provider, StringComparer.Ordinal);
         var views = Providers.Select(provider =>
         {
             var row = rows.GetValueOrDefault(provider.Provider);
@@ -56,11 +63,24 @@ public sealed partial class ProviderConfigurationStore(Database database, Migrat
                 provider.Identifiers.ToDictionary(name => name,
                     name => envelopes?.ContainsKey(name) == true ? null : identifiers?.GetValueOrDefault(name),
                     StringComparer.Ordinal),
-                provider.Identifiers.Where(name => envelopes?.ContainsKey(name) == true).ToArray());
+                provider.Identifiers.Where(name => envelopes?.ContainsKey(name) == true).ToArray(),
+                provider.InstallationWide, global.GetValueOrDefault(provider.Provider) is { } shared ? Presence(provider, shared) : null);
         }).ToArray();
         await tx.CommitAsync(ct);
         var canEdit = MayEdit(role);
         return new(canEdit, canEdit && keys.Available(), views);
+    }
+
+    /// <summary>Which slots and identifiers the global profile holds. An identifier saved in the previous encrypted format counts as present.</summary>
+    private static GlobalProfileStatus Presence(Definition provider, Profile row)
+    {
+        var envelopes = ReadFields<CredentialEnvelope>(row.Credentials);
+        var identifiers = ReadFields<string>(row.Identifiers);
+        return new(row.Revision,
+            new Dictionary<string, bool>(StringComparer.Ordinal) { [provider.SecretSlot] = envelopes?.ContainsKey(provider.SecretSlot) == true },
+            provider.Identifiers.ToDictionary(name => name,
+                name => envelopes?.ContainsKey(name) == true || !string.IsNullOrWhiteSpace(identifiers?.GetValueOrDefault(name)),
+                StringComparer.Ordinal));
     }
 
     public async Task<ConfigurationSaveResult> SaveAsync(long? property, string actor, string provider,

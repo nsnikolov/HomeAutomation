@@ -208,6 +208,10 @@ export type ProviderConfigurationView = {
   provider: string; revision: number; pollSeconds: number; minimumPollSeconds: number
   maximumPollSeconds: number; pollStepSeconds: number; credentials: Record<string, boolean>
   identifiers: Record<string, string | null>; pendingIdentifierConversion: string[]
+  /** Daikin, eWeLink and Tuya use one installation-wide account configured in the global scope. */
+  installationWide?: boolean
+  /** Presence of the global profile, reported on property views only. Values are never included. */
+  global?: { revision: number; credentials: Record<string, boolean>; identifiers: Record<string, boolean> } | null
 }
 export type ConfigurationView = {
   canEdit: boolean; keyAvailable: boolean; requiresHttps?: boolean; providers: ProviderConfigurationView[]

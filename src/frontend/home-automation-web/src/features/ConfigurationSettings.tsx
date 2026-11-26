@@ -58,6 +58,13 @@ function ProviderSettings({ profile, property, canEdit, keyAvailable, refresh }:
   const slots = Object.entries(profile.credentials)
   const identifiers = Object.entries(profile.identifiers)
   const provisioned = slots.every(([, configured]) => configured) && identifiers.every(([, value]) => Boolean(value))
+  // On a property page, an installation-wide account (Daikin, eWeLink, Tuya) lives in the global profile. Property fields stage a
+  // separate profile that does not replace it, so the card's status reflects the global profile's presence flags.
+  const installationWide = property !== null && profile.installationWide === true
+  const global = property !== null ? profile.global ?? null : null
+  const globalComplete = global !== null && Object.values(global.credentials).every(Boolean) && Object.values(global.identifiers).every(Boolean)
+  const status = !installationWide ? (provisioned ? 'Staged configuration complete' : 'Staged configuration incomplete')
+    : globalComplete ? 'Installation-wide profile complete' : global ? 'Installation-wide profile incomplete' : 'No installation-wide profile'
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -99,7 +106,15 @@ function ProviderSettings({ profile, property, canEdit, keyAvailable, refresh }:
 
   return <Card className="monitor-grid-item" aria-labelledby={id}>
     <h3 id={id}>{name}</h3>
-    <Badge>{provisioned ? 'Staged configuration complete' : 'Staged configuration incomplete'}</Badge>
+    <Badge>{status}</Badge>
+    {global && <dl className="device-readings" aria-label={`${name} installation-wide profile`}>
+      {[...Object.entries(global.identifiers), ...Object.entries(global.credentials)].map(([field, present]) => <div key={field}>
+        <dt>{fieldNames[field] ?? field}</dt><dd>{present ? 'Configured' : 'Not configured'}</dd>
+      </div>)}
+    </dl>}
+    {installationWide && <p className="muted">{global
+      ? `${name} uses one installation-wide account, shown above. The fields below stage a separate profile for this property, which does not replace it.`
+      : `${name} uses one installation-wide account, and no global profile is stored. An installation administrator imports or edits it in the global configuration.`}</p>}
     <form aria-label={`${name} settings`} onSubmit={submit} className="settings-form" key={profile.revision}>
       <fieldset disabled={!canEdit || pending}>
         <label htmlFor={`${id}-interval`}>Polling interval (seconds)</label>
@@ -118,7 +133,7 @@ function ProviderSettings({ profile, property, canEdit, keyAvailable, refresh }:
         })}
         {slots.map(([slot, configured]) => <div key={slot}>
           <label htmlFor={`${id}-${slot}`}>{fieldNames[slot] ?? slot}</label>
-          {' '}<Badge>{configured ? 'Configured' : 'Not configured'}</Badge>
+          {' '}<Badge>{configured ? 'Configured' : installationWide ? 'Not staged for this property' : 'Not configured'}</Badge>
           {canEdit && <Input id={`${id}-${slot}`} name={slot} type="password" disabled={!keyAvailable}
             autoComplete="new-password" maxLength={4096} />}
           {canEdit && configured && <label>

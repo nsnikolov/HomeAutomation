@@ -32,7 +32,7 @@ Updated 2026-11-26. [AGENTS.md](../AGENTS.md) contains the shared development ru
   - **Provisioning:** a provider-neutral sweep (`LogicalDevices:AutoProvision`, default on, every 5 min) creates one `automatic` identity per never-assigned device with a measurement, only in properties that already use logical devices. Assignments start at the history origin, as initialization does. The property lock and unique origin key make it run exactly once; failures back off per property.
   - **Resolution:** hardware used by another identity is released only when the user names it, at an explicit time, with confirmation when readings would stay behind; the auto-created identity can be archived. Telemetry, rollups and widgets are never rewritten.
   - See [logical device management](architecture/14-logical-device-management.md).
-- Settings stages provider settings in a global or property profile. Property Owner/Admin may edit their own scope. Global access requires an explicitly designated Identity account. Settings reads ordinary identifiers and polling intervals. Genuine secrets are write-only and stored with an external AES-256-GCM key. Since Milestone 6B, each provider can load a complete imported vault snapshot at startup when explicitly selected. Existing deployments use Legacy by default and OAuth grants stay in their existing encrypted stores. See the [configuration and cutover guide](architecture/09-configuration-vault.md).
+- Settings stages provider settings in a global or property profile. Property Owner/Admin may edit their own scope. Global access requires an explicitly designated Identity account. Settings reads ordinary identifiers and polling intervals. Genuine secrets are write-only and stored with an external AES-256-GCM key. Since Milestone 6B, each provider can load a complete imported vault snapshot at startup when explicitly selected. Existing deployments use Legacy by default and OAuth grants stay in their existing encrypted stores. See the [configuration and cutover guide](architecture/09-configuration-vault.md). Property Settings pages show installation-wide (global) Daikin, eWeLink and Tuya profile presence; property profiles never inherit global values.
 
 | Integration | Shipped behavior and evidence |
 | --- | --- |
@@ -45,7 +45,8 @@ Updated 2026-11-26. [AGENTS.md](../AGENTS.md) contains the shared development ru
 
 | Commit | Change |
 | --- | --- |
-| Simulator removal | Opt-in simulator, provider-only readers and Energy page, explicit dry-run-first simulator cleanup command. See [prompt 0061](prompts/0061-remove-runtime-simulation-data.md). |
+| Settings global profile visibility | Property Settings report installation-wide (global) Daikin, eWeLink and Tuya profile presence without values or inheritance. See [prompt 0062](prompts/0062-configuration-vault-global-profile-visibility.md). |
+| `b64028a` | Opt-in simulator, provider-only readers and Energy page, explicit dry-run-first simulator cleanup command. See [prompt 0061](prompts/0061-remove-runtime-simulation-data.md). |
 | `ef4348d` | Logical device management UI, automatic provisioning, migration 019, unassign/restore and explicit release of auto-created identities. See [prompt 0060](prompts/0060-automatic-logical-device-management.md). |
 | `73bc40a` | Optional background eWeLink electrical collection, budget daily share, per-meter back-off and receipt-time duplicate fix. See [prompt 0059](prompts/0059-continuous-ewelink-power-telemetry.md). |
 | `33a2c5c` | History page with logical-device charts, energy provenance, quality, replacement markers and comparisons. See [prompt 0058](prompts/0058-historical-charts-and-energy.md). |
