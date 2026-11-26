@@ -111,6 +111,10 @@ public sealed class LogicalDeviceMySqlTests
         Assert.Equal(ewelink, detail.Device.Current.Single().DeviceId);
         Assert.Equal(Cutover, detail.Device.Current.Single().ValidFrom);
         Assert.Equal(Cutover, detail.Device.Previous.Single().ValidTo);
+        Assert.Equal(new[] { (Metric.Temperature, true), (Metric.Humidity, false) }.OrderBy(item => item.Item1),
+            detail.Device.Metrics!.Select(item => (item.Metric, item.Current)).OrderBy(item => item.Metric));
+        Assert.All(detail.Device.Metrics!, item => Assert.Equal("main", item.ChannelKey));
+        Assert.Equal("%", detail.Device.Metrics!.Single(item => item.Metric == Metric.Humidity).Unit);
         var audit = detail.Audit.First();
         Assert.Equal(("replaced", tuya, ewelink, Cutover, "Sensor A battery failed", fixture.Owner),
             (audit.Action, audit.OldDeviceId!.Value, audit.NewDeviceId!.Value, audit.EffectiveAt!.Value, audit.Reason, audit.Actor));
@@ -124,6 +128,7 @@ public sealed class LogicalDeviceMySqlTests
         Assert.Equal(raw.Points!.OrderBy(point => point.ObservedAt), raw.Points);
         Assert.Equal("tuya-sensor-report", raw.Segments[0].Source);
         Assert.NotEmpty(raw.Segments[0].AlternativeSeriesIds);
+        Assert.Equal([65 * 60d, 7 * 60d], raw.Segments.Select(segment => segment.MaximumHoldSeconds!.Value));
 
         var paged = (await store.HistoryAsync(fixture.Property, logical, "main", Metric.Temperature,
             new(new(null, null, null, null, Metric.Temperature), HistoryResolution.Raw, hour, hour.AddHours(1), Limit: 8), default)).Result!;

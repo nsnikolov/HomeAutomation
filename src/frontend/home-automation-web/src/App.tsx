@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from 'react'
+import { lazy, Suspense, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowUpRight, ChartNoAxesCombined, ChevronDown, CircuitBoard, House, LayoutGrid, LogOut, Settings, Snowflake, Zap } from 'lucide-react'
+import { ArrowUpRight, ChartNoAxesCombined, ChevronDown, CircuitBoard, History as HistoryIcon, House, LayoutGrid, LogOut, Settings, Snowflake, Zap } from 'lucide-react'
 import { Link, NavLink, Navigate, Route, Routes, useMatch, useNavigate, useParams, useSearchParams } from 'react-router'
 import { api } from './shared/api'
 import { useLiveUpdates } from './shared/live'
@@ -13,6 +13,8 @@ import { EwelinkPanel } from './features/EwelinkPanel'
 import { TuyaPanel } from './features/TuyaPanel'
 import { Devices, DevicePage } from './features/Devices'
 import { Energy } from './features/Energy'
+// History is loaded on demand so its charts do not enlarge the initial bundle.
+const HistoryPage = lazy(() => import('./features/history/HistoryPage').then(module => ({ default: module.HistoryPage })))
 import { ConfigurationSettings } from './features/ConfigurationSettings'
 
 export function App() {
@@ -91,6 +93,7 @@ const links = [
   { path: '/tuya', label: 'Smart Life / Tuya', icon: CircuitBoard },
   { path: '/devices', label: 'Devices', icon: CircuitBoard },
   { path: '/energy', label: 'Energy', icon: ChartNoAxesCombined },
+  { path: '/history', label: 'History', icon: HistoryIcon },
   { path: '/automations', label: 'Automations', icon: Zap },
   { path: '/settings', label: 'Settings', icon: Settings },
 ]
@@ -157,6 +160,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
           <Route path="devices" element={<Devices property={property} devices={snapshot.data?.devices} />} />
           <Route path="devices/:deviceId" element={<DevicePage property={property} />} />
           <Route path="energy" element={<Energy property={property} state={snapshot.data} pollSeconds={health.data?.pollSeconds ?? 10} />} />
+          <Route path="history" element={<Suspense fallback={<p role="status">Loading history…</p>}><HistoryPage property={property} /></Suspense>} />
           <Route path="automations" element={<Placeholder title="Automations" description="Automation rules will appear here when rule execution is available." />} />
           <Route path="settings" element={<ConfigurationSettings property={property} />} />
           <Route path="*" element={<Navigate to={root} replace />} />

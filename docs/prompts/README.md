@@ -59,3 +59,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 55. 2026-11-25 · [HomeAutomation — Milestone 6C: Startup Diagnostics and Configuration Verification](0055-startup-diagnostics-and-verification.md)
 56. 2026-11-25 · [HomeAutomation — Milestone 7A: Historical Telemetry, Aggregation and History APIs](0056-historical-telemetry-aggregation.md)
 57. 2026-11-26 · [HomeAutomation — Milestone 7B: Logical Devices, Physical Device Replacement and Continuous History](0057-logical-devices-and-replacement.md)
+58. 2026-11-26 · [HomeAutomation — Milestone 7C: Historical Charts, Energy Visualization and Device Comparisons](0058-historical-charts-and-energy.md)

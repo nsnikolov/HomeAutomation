@@ -1,7 +1,13 @@
 import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePageKey, DevicePreferences, EwelinkRelayOutcome, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, SensorHistory, SensorPeriod, TuyaState } from './types'
 import type { DashboardGroup, DashboardSnapshot, DashboardSource } from './types'
 import type { ConfigurationView, ProviderConfigurationUpdate } from './types'
-import type { LogicalBindingReview, LogicalDeviceList, ReplaceDeviceRequest, ReplacementCandidate } from './types'
+import type { LogicalBindingReview, LogicalDeviceList, LogicalHistory, ReplaceDeviceRequest, ReplacementCandidate } from './types'
+
+/** Bounded logical history request. Raw and hourly use UTC instants; daily uses property-local calendar dates. */
+export type LogicalHistoryRequest = {
+  channel: string; metric: string; resolution: 'raw' | 'hour' | 'day'
+  from?: string; to?: string; fromDate?: string; toDate?: string; limit?: number
+}
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code?: string, public readonly detail?: string) {
@@ -157,6 +163,11 @@ export const api = {
     logicalRequest<ReplacementCandidate[]>(`/properties/${id}/logical-devices/${logical}/candidates?channel=${encodeURIComponent(channel)}`, { signal }),
   replaceDevice: (id: number, logical: number, body: ReplaceDeviceRequest) =>
     logicalPost<{ id: number }>(`/properties/${id}/logical-devices/${logical}/replace`, body),
+  logicalHistory: (id: number, logical: number, request: LogicalHistoryRequest, signal?: AbortSignal) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(request)) if (value !== undefined && value !== null) params.set(key, String(value))
+    return logicalRequest<LogicalHistory>(`/properties/${id}/logical-devices/${logical}/history?${params}`, { signal })
+  },
   logicalBindings: (id: number, signal?: AbortSignal) =>
     logicalRequest<LogicalBindingReview>(`/properties/${id}/dashboard/logical-bindings`, { signal }),
   convertLogicalBindings: (id: number, revision: string, valueIds: string[]) =>

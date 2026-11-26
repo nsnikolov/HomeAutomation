@@ -272,3 +272,50 @@ h3 { font-size: .98rem; font-weight: 650; }
 .settings-form fieldset > div { display: grid; gap: .25rem; }
 .settings-form .badge { justify-self: start; }
 .settings-form button { justify-self: start; }
+
+/* History (Milestone 7C) */
+.history-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 14px; margin-bottom: 14px; }
+.history-filters label, .history-custom label { display: grid; gap: 4px; font-size: .78rem; font-weight: 650; color: var(--muted); min-width: 0; }
+.history-filters .select-input { min-width: 190px; max-width: 100%; }
+.history-custom { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; flex-basis: 100%; }
+.history-custom p { flex-basis: 100%; font-size: .76rem; }
+.history-card { padding: 16px; margin-bottom: 14px; display: grid; gap: 12px; }
+.history-card h3 { font-size: .9rem; margin-top: 8px; }
+.history-chart { width: 100%; min-width: 0; }
+.history-tooltip { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: .78rem; display: grid; gap: 3px;
+  box-shadow: 0 4px 14px rgb(25 37 54 / .12); max-width: 280px; }
+.history-tooltip-name { font-weight: 650; }
+.history-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .76rem; color: var(--muted); }
+.history-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.legend-line { display: inline-block; width: 22px; border-top: 2px solid #0b705d; }
+.legend-line-1 { border-top: 2px dashed #5373c7; }
+.legend-line-2 { border-top: 2px dotted #b4531c; }
+.legend-line-3 { border-top: 2px dashed #7a4fb3; }
+.legend-swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.legend-band { background: rgb(11 112 93 / .16); }
+.legend-on { background: #0b705d; }
+.legend-off { background: #c9d3dd; }
+.legend-unknown, .quality-notAggregated { background: repeating-radial-gradient(circle at 2px 2px, #8b96a6 0 1px, #f2f4f7 1px 5px); }
+.history-quality { display: grid; gap: 6px; }
+.history-quality-strip { display: flex; gap: 1px; height: 10px; }
+.history-quality-strip .quality-cell { flex: 1 1 0; min-width: 1px; height: 100%; }
+.history-quality-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .74rem; color: var(--muted); }
+.history-quality-legend li { display: inline-flex; align-items: center; gap: 6px; cursor: help; }
+.history-quality-legend .quality-cell { width: 14px; height: 10px; display: inline-block; }
+.quality-complete { background: #0b705d; }
+.quality-incomplete { background: repeating-linear-gradient(45deg, #e8a33b 0 3px, #fff1d2 3px 6px); }
+.quality-noData { background: #fff; outline: 1px solid #c9d3dd; outline-offset: -1px; }
+.quality-notReported { background: repeating-linear-gradient(90deg, #c9d3dd 0 2px, #fff 2px 5px); }
+.history-replacements { display: grid; gap: 4px; font-size: .8rem; color: #805108; }
+.history-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; }
+.history-summary dt { font-size: .74rem; color: var(--muted); }
+.history-summary dd { font-size: 1.05rem; font-weight: 700; display: grid; }
+.history-summary small { font-size: .7rem; font-weight: 500; color: var(--muted); }
+.history-sources summary, .history-compare-summary { font-size: .8rem; color: var(--muted); }
+.history-compare { padding: 14px; }
+.history-compare fieldset { display: grid; gap: 6px; }
+.history-compare legend { font-weight: 650; margin-bottom: 4px; }
+@media (max-width: 640px) {
+  .history-filters .select-input { min-width: 0; width: 100%; }
+  .history-filters label { flex: 1 1 100%; }
+}

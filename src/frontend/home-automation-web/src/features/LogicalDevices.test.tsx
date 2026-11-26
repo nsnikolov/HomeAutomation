@@ -41,7 +41,7 @@ afterEach(() => {
 
 function view() {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <LogicalDevices property={property} />
+    <MemoryRouter><LogicalDevices property={property} /></MemoryRouter>
   </QueryClientProvider>)
 }
 
@@ -60,6 +60,14 @@ describe('logical devices', () => {
     expect(screen.getByText(/Old meter · Smart Life \/ Tuya/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Replace device/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Dashboard bindings' })).not.toBeInTheDocument()
+  })
+
+  it('links a logical device with recorded measurements to its history', async () => {
+    const data = list(false)
+    data.devices[0].metrics = [{ channelKey: 'main', metric: 'activePower', unit: 'W', aggregation: 'gauge', current: true }]
+    vi.spyOn(api, 'logicalDevices').mockResolvedValue(data)
+    view()
+    expect(await screen.findByRole('link', { name: 'View history' })).toHaveAttribute('href', '/properties/3/history?device=4')
   })
 
   it('explains the database upgrade when logical devices are not yet available', async () => {

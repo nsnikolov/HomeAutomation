@@ -149,7 +149,7 @@ public sealed class TelemetryHistoryReader(Database database, Migrations migrati
         var series = status == "available" ? preferred.Single() : null;
         var segment = new LogicalHistorySegment(assignment.Id, assignment.DeviceId, assignment.DeviceName, assignment.EndpointId,
             Utc(interval.Start), assignment.ValidTo is null ? null : Utc(interval.End), status, series?.SeriesId, series?.Source,
-            series is null ? [] : Alternatives(all, series));
+            series is null ? [] : Alternatives(all, series), series?.MaximumHoldSeconds);
         return (segment, series, interval, assignment);
     }
 

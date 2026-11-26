@@ -23,6 +23,10 @@ public sealed class LogicalDeviceApiTests(ApiTests.Host host) : IClassFixture<Ap
         using var json = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
         Assert.False(json.RootElement.GetProperty("canManage").GetBoolean());
         Assert.Equal("Heat pump meter", json.RootElement.GetProperty("devices")[0].GetProperty("name").GetString());
+        var metrics = json.RootElement.GetProperty("devices")[0].GetProperty("metrics");
+        Assert.Equal(("activePower", "W", "gauge", true), (metrics[0].GetProperty("metric").GetString(), metrics[0].GetProperty("unit").GetString(),
+            metrics[0].GetProperty("aggregation").GetString(), metrics[0].GetProperty("current").GetBoolean()));
+        Assert.False(metrics[1].GetProperty("current").GetBoolean());
         Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync(Route + "/99")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await viewer.GetAsync(Route + "/4/candidates")).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await viewer.GetAsync(Route + "/4/candidates?channel=Bad Channel")).StatusCode);
@@ -78,6 +82,7 @@ public sealed class LogicalDeviceApiTests(ApiTests.Host host) : IClassFixture<Ap
         var segments = json.RootElement.GetProperty("segments").EnumerateArray().ToArray();
         Assert.Equal("2026-11-26T14:37:00+00:00", segments[0].GetProperty("to").GetString());
         Assert.Equal("2026-11-26T14:37:00+00:00", segments[1].GetProperty("from").GetString());
+        Assert.Equal(420, segments[1].GetProperty("maximumHoldSeconds").GetDouble());
         Assert.Contains("deviceReplaced", json.RootElement.GetProperty("buckets")[0].GetProperty("flags").EnumerateArray().Select(flag => flag.GetString()));
     }
 
@@ -119,7 +124,8 @@ public sealed class LogicalDeviceApiTests(ApiTests.Host host) : IClassFixture<Ap
         private static readonly LogicalAssignmentView Current = new(21, "main", 9, "Sonoff POW", "ewelink", "Sonoff", "POWR3", null, null,
             Cutover, null, "logical-owner", Cutover, "Meter failed", [Capability.PowerMeasurement]);
         private static readonly LogicalDeviceView Device = new(4, "Heat pump meter", "SmartSwitch", null, null, Cutover, Cutover, null,
-            [Current], []);
+            [Current], [], [new("main", Metric.ActivePower, "W", MetricAggregation.Gauge, true),
+                new("main", Metric.Voltage, "V", MetricAggregation.Gauge, false)]);
 
         public Task<bool> SchemaReadyAsync(CancellationToken ct) => Task.FromResult(true);
         public Task<LogicalDeviceList> ListAsync(long property, string user, bool includeArchived, CancellationToken ct) =>
@@ -147,8 +153,8 @@ public sealed class LogicalDeviceApiTests(ApiTests.Host host) : IClassFixture<Ap
             return Task.FromResult(new LogicalHistoryRead(HistoryReadStatus.Found, new(id, "Living room", channel, metric, "°C",
                 MetricAggregation.Gauge, query.Resolution, query.From, query.To, "Europe/Sofia", 0.8,
                 [
-                    new(20, 7, "Tuya A", null, hour.AddDays(-30), Cutover, "available", 31, "tuya-sensor-report", [30]),
-                    new(21, 9, "eWeLink B", null, Cutover, null, "available", 40, "ewelink", [])
+                    new(20, 7, "Tuya A", null, hour.AddDays(-30), Cutover, "available", 31, "tuya-sensor-report", [30], 3900),
+                    new(21, 9, "eWeLink B", null, Cutover, null, "available", 40, "ewelink", [], 420)
                 ], null,
                 [new(hour, hour.AddHours(1), null, 3600, "complete", 1, 3600, 12, 20, 22, 21, 21, hour, hour.AddMinutes(55), 22, null, null,
                     null, false, ["deviceReplaced"], [31, 40])], null)));

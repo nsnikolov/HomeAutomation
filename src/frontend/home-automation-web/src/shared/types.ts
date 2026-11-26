@@ -138,9 +138,37 @@ export type LogicalAssignment = {
 }
 export type LogicalDevice = {
   id: number; name: string; kind: string; roomId: number | null; description: string | null; createdAt: string; updatedAt: string
-  archivedAt: string | null; current: LogicalAssignment[]; previous: LogicalAssignment[]
+  archivedAt: string | null; current: LogicalAssignment[]; previous: LogicalAssignment[]; metrics?: LogicalMetric[] | null
 }
 export type LogicalDeviceList = { canManage: boolean; devices: LogicalDevice[] }
+export type MetricAggregation = 'gauge' | 'boolean' | 'status' | 'dailyResetCounter' | 'cumulativeCounter'
+export type LogicalMetric = { channelKey: string; metric: Metric; unit: string | null; aggregation: MetricAggregation; current: boolean }
+export type HistoryQuality = 'complete' | 'incomplete' | 'noData' | 'notAggregated'
+export type HistoryEnergy = {
+  status: 'measured' | 'estimated' | 'incomplete' | 'noData'; basis: 'counter' | 'powerIntegration'
+  wh: number | null; positiveWh: number | null; negativeWh: number | null
+}
+export type HistoryBucket = {
+  start: string; end: string; date: string | null; durationSeconds: number; quality: HistoryQuality; coverage: number
+  coveredSeconds: number; sampleCount: number; minimum: number | null; maximum: number | null; average: number | null
+  mean: number | null; firstObservedAt: string | null; lastObservedAt: string | null; lastValue: number | null
+  onSeconds: number | null; transitions: number | null; energy: HistoryEnergy | null; provisional: boolean; flags: string[]
+  seriesIds?: number[] | null
+}
+export type LogicalHistorySegment = {
+  assignmentId: number; deviceId: number; deviceName: string; endpointId: number | null; from: string; to: string | null
+  status: 'available' | 'unsupported' | 'ambiguous'; seriesId: number | null; source: string | null
+  alternativeSeriesIds: number[]; maximumHoldSeconds?: number | null
+}
+export type LogicalRawPoint = {
+  observedAt: string; receivedAt: string; number: number | null; flag: boolean | null; code: string | null
+  timestampSource: string; seriesId: number; assignmentId: number
+}
+export type LogicalHistory = {
+  logicalDeviceId: number; name: string; channelKey: string; metric: Metric; unit: string | null; aggregation: MetricAggregation
+  resolution: 'raw' | 'hour' | 'day'; from: string; to: string; timeZone: string; incompleteBelowCoverage: number
+  segments: LogicalHistorySegment[]; points: LogicalRawPoint[] | null; buckets: HistoryBucket[] | null; nextAfter: string | null
+}
 export type ReplacementCandidate = {
   deviceId: number; name: string; provider: string; manufacturer: string; model: string; kind: string; roomId: number | null
   endpoints: { id: number; name: string; capabilities: string[] }[]; capabilities: string[]; shared: string[]; missing: string[]

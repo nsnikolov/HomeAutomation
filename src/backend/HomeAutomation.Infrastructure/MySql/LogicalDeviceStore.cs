@@ -394,7 +394,8 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         }).ToList();
         return new(logical.Id, logical.Name, logical.Kind, logical.RoomId, logical.Description, Utc(logical.CreatedAt), Utc(logical.UpdatedAt),
             Utc(logical.ArchivedAt), assignments.Where(item => item.ValidTo is null).Select(item => item.View).OrderBy(item => item.ChannelKey).ToList(),
-            assignments.Where(item => item.ValidTo is not null).Select(item => item.View).OrderByDescending(item => item.ValidFrom).ToList());
+            assignments.Where(item => item.ValidTo is not null).Select(item => item.View).OrderByDescending(item => item.ValidFrom).ToList(),
+            Metrics(state, logical.Id));
     }
 
     private static async Task<State> LoadAsync(MySqlConnection db, MySqlTransaction? tx, long property, CancellationToken ct)
@@ -415,6 +416,9 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
                    valid_from_utc AS ValidFrom, valid_to_utc AS ValidTo, assigned_by AS AssignedBy, assigned_at_utc AS AssignedAt, reason AS Reason
             FROM logical_device_assignments WHERE property_id=@property ORDER BY valid_from_utc, id;
             SELECT id FROM rooms WHERE property_id=@property;
+            SELECT DISTINCT e.device_id AS DeviceId, s.endpoint_id AS EndpointId, s.metric AS MetricName
+            FROM telemetry_series s JOIN device_endpoints e ON e.id=s.endpoint_id AND e.property_id=s.property_id
+            WHERE s.property_id=@property;
             """, ct, new { property }, tx));
         var devices = (await rows.ReadAsync<DeviceRow>()).ToList();
         var endpoints = (await rows.ReadAsync<EndpointRow>()).ToList();
@@ -425,11 +429,27 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
             ValidFrom = Kind(row.ValidFrom), ValidTo = row.ValidTo is { } to ? Kind(to) : null, AssignedAt = Kind(row.AssignedAt)
         }).ToList();
         var rooms = (await rows.ReadAsync<long>()).ToHashSet();
+        var series = (await rows.ReadAsync<SeriesMetricRow>()).Where(row => row.Metric is not null).ToList();
         var byDevice = endpoints.ToLookup(endpoint => endpoint.DeviceId);
         return new(devices.ToDictionary(device => device.Id, device => new PhysicalDevice(device.Id, device.Name, device.Kind, device.Manufacturer,
             device.Model, device.RoomId, device.Provider, byDevice[device.Id].Select(endpoint => new PhysicalEndpoint(endpoint.Id, endpoint.Name,
                 endpoint.EndpointKey, capabilities[endpoint.Id].Select(item => Enum.TryParse<Capability>(item.Code, out var code) && Enum.IsDefined(code)
-                    ? code : (Capability?)null).OfType<Capability>().Distinct().ToList())).ToList())), logical, assignments, rooms);
+                    ? code : (Capability?)null).OfType<Capability>().Distinct().ToList())).ToList())), logical, assignments, rooms, series);
+    }
+
+    /// <summary>Metrics with recorded series on any device assigned to each channel, marking those the active device records.</summary>
+    private static List<LogicalMetric> Metrics(State state, long logicalId)
+    {
+        bool Reports(AssignmentRow assignment, SeriesMetricRow row) =>
+            row.DeviceId == assignment.DeviceId && (assignment.EndpointId is null || row.EndpointId == assignment.EndpointId);
+        return state.Assignments.Where(item => item.LogicalDeviceId == logicalId).GroupBy(item => item.ChannelKey)
+            .SelectMany(channel =>
+            {
+                var active = channel.FirstOrDefault(item => item.ValidTo is null);
+                return state.Series.Where(row => channel.Any(assignment => Reports(assignment, row))).Select(row => row.Metric!.Value)
+                    .Distinct().Order().Select(metric => new LogicalMetric(channel.Key, metric, Telemetry.Unit(metric), TelemetryAggregation.Kind(metric),
+                        active is not null && state.Series.Any(row => row.Metric == metric && Reports(active, row))));
+            }).ToList();
     }
 
     private static async Task<string?> RoleAsync(MySqlConnection db, MySqlTransaction? tx, long property, string user, CancellationToken ct) =>
@@ -453,7 +473,12 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
 
     private sealed record Context(MySqlConnection Db, MySqlTransaction Tx, long Property, string User, DateTime Now, State State, CancellationToken Ct);
     private sealed record State(Dictionary<long, PhysicalDevice> Devices, Dictionary<long, LogicalRow> Logical, List<AssignmentRow> Assignments,
-        HashSet<long> Rooms);
+        HashSet<long> Rooms, List<SeriesMetricRow> Series);
+
+    private sealed record SeriesMetricRow(long DeviceId, long EndpointId, string MetricName)
+    {
+        public Metric? Metric => Enum.TryParse<Metric>(MetricName, out var metric) && Enum.IsDefined(metric) ? metric : null;
+    }
 
     private sealed record PhysicalDevice(long Id, string Name, string Kind, string Manufacturer, string Model, long? RoomId, string Provider,
         IReadOnlyList<PhysicalEndpoint> Endpoints)

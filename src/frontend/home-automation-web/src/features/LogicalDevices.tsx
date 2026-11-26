@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router'
 import { api, LogicalApiError } from '../shared/api'
 import type { LogicalAssignment, LogicalDevice, Property, ReplacementCandidate } from '../shared/types'
 import { Badge, Button, Card, Input } from '../shared/ui'
@@ -41,6 +42,8 @@ export function LogicalDevices({ property }: { property: Property }) {
     {devices.map(device => <Card className="detail-card" key={device.id}>
       <div className="card-heading">
         <div><h3>{device.name}</h3><p>{humanize(device.kind)}{device.archivedAt ? ' · Archived' : ''}</p></div>
+        {(device.metrics ?? []).some(metric => metric.aggregation !== 'status') &&
+          <Link className="text-link" to={`/properties/${property.id}/history?device=${device.id}`}>View history</Link>}
       </div>
       {device.current.length === 0 && <p className="muted">No physical device is currently assigned.</p>}
       {device.current.map(assignment => <div key={assignment.id}>

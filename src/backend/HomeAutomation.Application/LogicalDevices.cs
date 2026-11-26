@@ -7,9 +7,14 @@ public sealed record LogicalAssignmentView(
     long? EndpointId, string? EndpointName, DateTimeOffset ValidFrom, DateTimeOffset? ValidTo, string AssignedBy,
     DateTimeOffset AssignedAt, string? Reason, IReadOnlyList<Capability> Capabilities);
 
+/// <summary>A canonical metric recorded for a logical channel by at least one of its assigned devices.</summary>
+/// <param name="Current">The active device of the channel has a telemetry series for this metric.</param>
+public sealed record LogicalMetric(string ChannelKey, Metric Metric, string? Unit, MetricAggregation Aggregation, bool Current);
+
 public sealed record LogicalDeviceView(
     long Id, string Name, string Kind, long? RoomId, string? Description, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
-    DateTimeOffset? ArchivedAt, IReadOnlyList<LogicalAssignmentView> Current, IReadOnlyList<LogicalAssignmentView> Previous);
+    DateTimeOffset? ArchivedAt, IReadOnlyList<LogicalAssignmentView> Current, IReadOnlyList<LogicalAssignmentView> Previous,
+    IReadOnlyList<LogicalMetric>? Metrics = null);
 
 public sealed record LogicalDeviceList(bool CanManage, IReadOnlyList<LogicalDeviceView> Devices);
 
@@ -52,9 +57,10 @@ public sealed record LogicalChangeResult(LogicalChangeStatus Status, string? Mes
 
 /// <summary>One assignment interval of a logical channel resolved to a physical series for a metric.</summary>
 /// <param name="Status">available, unsupported (the device does not report the metric) or ambiguous (several endpoints report it).</param>
+/// <param name="MaximumHoldSeconds">How long one observation of the segment's series may represent the value; raw charts break lines at longer gaps.</param>
 public sealed record LogicalHistorySegment(
     long AssignmentId, long DeviceId, string DeviceName, long? EndpointId, DateTimeOffset From, DateTimeOffset? To, string Status,
-    long? SeriesId, string? Source, IReadOnlyList<long> AlternativeSeriesIds);
+    long? SeriesId, string? Source, IReadOnlyList<long> AlternativeSeriesIds, double? MaximumHoldSeconds = null);
 
 public sealed record LogicalRawPoint(
     DateTimeOffset ObservedAt, DateTimeOffset ReceivedAt, double? Number, bool? Flag, string? Code, string TimestampSource,
