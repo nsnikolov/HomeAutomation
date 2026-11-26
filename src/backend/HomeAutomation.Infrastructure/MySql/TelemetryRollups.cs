@@ -438,6 +438,11 @@ public static class TelemetryHistoryRegistration
         services.AddScoped<LogicalDeviceStore>();
         services.AddScoped<ILogicalDevices>(provider => provider.GetRequiredService<LogicalDeviceStore>());
         services.AddHostedService<TelemetryRollupWorker>();
+        services.AddOptions<LogicalDeviceOptions>().BindConfiguration("LogicalDevices")
+            .Validate(options => options.IsValid, "Invalid LogicalDevices provisioning interval.").ValidateOnStart();
+        services.AddSingleton(provider => provider.GetRequiredService<IOptions<LogicalDeviceOptions>>().Value);
+        services.AddSingleton<LogicalProvisioning>();
+        services.AddHostedService<LogicalProvisioningWorker>();
         return services;
     }
 }

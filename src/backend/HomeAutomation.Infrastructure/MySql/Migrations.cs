@@ -71,6 +71,7 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
     private static readonly string[] StagingMigrations = ConfigurationMigrations[..^1];
     private const string TelemetryRollupMigration = ".017_telemetry_rollups.sql";
     private const string LogicalDeviceMigration = ".018_logical_devices.sql";
+    private const string LogicalManagementMigration = ".019_logical_device_management.sql";
     private volatile bool receiveTimeReady;
     private volatile bool telemetryHistoryReady;
     private volatile bool logicalDevicesReady;
@@ -83,11 +84,11 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
         return telemetryHistoryReady;
     }
 
-    /// <summary>Logical devices need migrations 017 and 018. Other readiness checks ignore both.</summary>
+    /// <summary>Logical devices need migrations 017, 018 and 019. Other readiness checks ignore them.</summary>
     public async Task<bool> VerifyLogicalDevicesAsync(CancellationToken ct)
     {
         if (logicalDevicesReady) return true;
-        logicalDevicesReady = await RecordedAsync([TelemetryRollupMigration, LogicalDeviceMigration], ct);
+        logicalDevicesReady = await RecordedAsync([TelemetryRollupMigration, LogicalDeviceMigration, LogicalManagementMigration], ct);
         return logicalDevicesReady;
     }
 
@@ -132,6 +133,7 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
                 !name.EndsWith(EwelinkReceiveTimeMigration, StringComparison.Ordinal) &&
                 !name.EndsWith(TelemetryRollupMigration, StringComparison.Ordinal) &&
                 !name.EndsWith(LogicalDeviceMigration, StringComparison.Ordinal) &&
+                !name.EndsWith(LogicalManagementMigration, StringComparison.Ordinal) &&
                 !ConfigurationMigrations.Contains(name, StringComparer.Ordinal) &&
                 (includeTuya || !name.EndsWith(".005_tuya_cloud.sql", StringComparison.Ordinal)) &&
                 (includeDashboard || !name.EndsWith(".011_monitoring_dashboard.sql", StringComparison.Ordinal)) &&

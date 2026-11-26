@@ -19,3 +19,12 @@ Capability interfaces on every device would provide compile-time behavior at the
 **Status** Accepted.
 
 A logical device gives a monitored role a stable identity independent of hardware. Its channels are assigned to physical devices over half-open intervals, and metrics resolve by canonical `Metric` across the assigned device's endpoints. An endpoint is pinned only when one measurement capability repeats across endpoints. Assignments never move or rewrite physical history: series, samples and rollups stay owned by the physical device, and logical history uses only observations inside each assignment. Changes are serialized per property, validated for interval overlap in the application, and audited. The alternatives were endpoint-level assignment, which cannot follow Tuya's per-data-point endpoints to a single-endpoint eWeLink sensor, and re-keying series to logical identities, which would rewrite history and blur provenance. [Logical devices](../11-logical-devices.md)
+
+## Addendum — Automatic logical identities (Milestone 7E)
+
+**Status** Accepted.
+
+- **Decision.** Newly discovered hardware of a property that already uses logical devices gets one automatic logical identity. Provisioning is a provider-neutral sweep over the accepted inventory, kept out of ingestion. It runs at most once per physical device, enforced by the property row lock and the unique origin key. Hardware that has ever been assigned is never provisioned again.
+- **Replacement remains an explicit user decision.** An automatic identity is released only when the user names it, at an explicit time and with confirmation when it would keep readings. Raw telemetry, rollups and dashboard bindings are not rewritten.
+- **Consequence.** Users decide afterwards whether new hardware is new equipment or a replacement. The trade-off is a short-lived duplicate identity until they resolve it.
+- See [logical device management](../14-logical-device-management.md).

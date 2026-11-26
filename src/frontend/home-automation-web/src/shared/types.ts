@@ -139,6 +139,7 @@ export type LogicalAssignment = {
 export type LogicalDevice = {
   id: number; name: string; kind: string; roomId: number | null; description: string | null; createdAt: string; updatedAt: string
   archivedAt: string | null; current: LogicalAssignment[]; previous: LogicalAssignment[]; metrics?: LogicalMetric[] | null
+  creation?: LogicalCreation
 }
 export type LogicalDeviceList = { canManage: boolean; devices: LogicalDevice[] }
 export type MetricAggregation = 'gauge' | 'boolean' | 'status' | 'dailyResetCounter' | 'cumulativeCounter'
@@ -173,11 +174,29 @@ export type ReplacementCandidate = {
   deviceId: number; name: string; provider: string; manufacturer: string; model: string; kind: string; roomId: number | null
   endpoints: { id: number; name: string; capabilities: string[] }[]; capabilities: string[]; shared: string[]; missing: string[]
   added: string[]; compatible: boolean; requiresEndpoint: boolean; assignedLogicalDeviceId: number | null
-  assignedLogicalDeviceName: string | null; current: boolean
+  assignedLogicalDeviceName: string | null; current: boolean; assignedLogicalCreation?: LogicalCreation | null
 }
 export type ReplaceDeviceRequest = {
   channelKey: string; expectedAssignmentId: number; deviceId: number; endpointId: number | null; effectiveAt: string
   reason: string | null; acceptMissingCapabilities: boolean
+} & ReleaseOptions
+/** Explicitly ends another logical device's use of the hardware at the effective time. */
+export type ReleaseOptions = { releaseFrom?: number | null; acceptReleasedHistory?: boolean; archiveReleased?: boolean }
+export type AssignDeviceRequest = {
+  channelKey: string; deviceId: number; endpointId: number | null; effectiveAt: string | null; reason: string | null
+} & ReleaseOptions
+export type LogicalCreation = 'manual' | 'initialized' | 'automatic'
+export type LogicalDeviceInput = { name: string; kind: string; roomId: number | null; description: string | null }
+export type PhysicalDevice = {
+  id: number; name: string; provider: string; manufacturer: string; model: string; kind: string; roomId: number | null
+  capabilities: string[]; endpoints: { id: number; name: string; capabilities: string[] }[]; requiresEndpoint: boolean
+  logicalDeviceId: number | null; logicalDeviceName: string | null; logicalCreation: LogicalCreation | null; everAssigned: boolean
+}
+export type PhysicalDeviceList = { canManage: boolean; devices: PhysicalDevice[] }
+export type ReleasePreview = {
+  logicalDeviceId: number; name: string; creation: LogicalCreation; channels: string[]; readings: number
+  firstReading: string | null; lastReading: string | null; leavesUnassigned: boolean; hasOtherHardwareHistory: boolean
+  dashboardReferences: number
 }
 export type LogicalBindingReview = {
   revision: string

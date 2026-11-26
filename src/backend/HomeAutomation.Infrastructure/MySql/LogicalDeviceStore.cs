@@ -22,6 +22,8 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
     : ILogicalDevices
 {
     internal const string InitializationActor = "system:initialize";
+    internal const string ProvisioningActor = "system:provision";
+    internal const int MaximumProvisionedPerRun = 100;
     private static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(2);
 
     /// <summary>Test seam invoked before a mutation commits.</summary>
@@ -71,7 +73,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
                 device.Endpoints.Select(endpoint => new CandidateEndpoint(endpoint.Id, endpoint.Name, Measurements(endpoint.Capabilities))).ToList(),
                 capabilities, comparison.Shared, comparison.Missing, comparison.Added, reference is null || comparison.Compatible,
                 device.RequiresEndpoint, owner?.LogicalDeviceId, owner is null ? null : state.Logical[owner.LogicalDeviceId].Name,
-                reference?.ValidTo is null && reference?.DeviceId == device.Id);
+                reference?.ValidTo is null && reference?.DeviceId == device.Id, owner is null ? null : state.Logical[owner.LogicalDeviceId].Creation);
         }).OrderByDescending(item => item.Compatible).ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -82,15 +84,22 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
             var channel = command.ChannelKey ?? LogicalDeviceRules.DefaultChannel;
             if (!LogicalDeviceRules.ValidChannel(channel)) return Invalid("Use a lower-case channel key of up to 64 letters, digits, '-', '_' or '.'.");
             if (Effective(command.EffectiveAt, context.Now, out var effective) is { } time) return time;
-            if (Target(context, command.DeviceId, command.EndpointId) is { } target) return target;
-            if (Conflict(context, command.DeviceId, command.EndpointId, effective, null, []) is { } busy) return busy;
+            if (command.DeviceId is { } deviceId)
+            {
+                if (Target(context, deviceId, command.EndpointId) is { } target) return target;
+                if (Conflict(context, deviceId, command.EndpointId, effective, null, []) is { } busy) return busy;
+            }
+            else if (command.EndpointId is not null) return Invalid("Choose a physical device for the endpoint.");
             var id = await context.Db.ExecuteScalarAsync<long>(Query("""
-                INSERT INTO logical_devices(property_id,name,kind,room_id,description,created_at_utc,updated_at_utc)
-                VALUES(@property,@Name,@Kind,@RoomId,@Description,@now,@now); SELECT LAST_INSERT_ID();
+                INSERT INTO logical_devices(property_id,name,kind,room_id,description,created_at_utc,updated_at_utc,creation)
+                VALUES(@property,@Name,@Kind,@RoomId,@Description,@now,@now,'manual'); SELECT LAST_INSERT_ID();
                 """, context.Ct, new { property, command.Name, command.Kind, command.RoomId, Description = Blank(command.Description), now = context.Now },
                 context.Tx));
-            await InsertAssignmentAsync(context, id, channel, command.DeviceId, command.EndpointId, effective, Blank(command.Reason));
-            await AuditAsync(context, id, "created", channel, null, command.DeviceId, effective, Blank(command.Reason));
+            // An identity without hardware has no assignment, so it shows no readings until a device is assigned.
+            if (command.DeviceId is { } assigned)
+                await InsertAssignmentAsync(context, id, channel, assigned, command.EndpointId, effective, Blank(command.Reason));
+            await AuditAsync(context, id, "created", command.DeviceId is null ? null : channel, null, command.DeviceId,
+                command.DeviceId is null ? null : effective, Blank(command.Reason));
             return LogicalChangeResult.Done(id);
         });
 
@@ -99,6 +108,9 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         {
             if (Active(context, id) is { } missing) return missing;
             if (Metadata(context, command.Name, command.Kind, command.RoomId, command.Description) is { } invalid) return invalid;
+            if (command.ExpectedUpdatedAt is { } expected &&
+                Microseconds(expected.UtcDateTime) != Kind(Microseconds(context.State.Logical[id].UpdatedAt)))
+                return Fail(LogicalChangeStatus.Conflict, "Someone else changed this logical device since it was loaded. Reload and try again.");
             await context.Db.ExecuteAsync(Query("""
                 UPDATE logical_devices SET name=@Name, kind=@Kind, room_id=@RoomId, description=@Description, updated_at_utc=@now
                 WHERE property_id=@property AND id=@id
@@ -120,6 +132,8 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
             if (channel.Count > 0 && channel.Max(item => item.ValidTo!.Value) > effective)
                 return Invalid("The start must not be earlier than the end of the channel's previous assignment.");
             if (Target(context, command.DeviceId, command.EndpointId) is { } target) return target;
+            if (await ReleaseAsync(context, id, command.DeviceId, command.EndpointId, effective, command.ReleaseFrom,
+                    command.AcceptReleasedHistory, command.ArchiveReleased) is { } release) return release;
             if (Conflict(context, command.DeviceId, command.EndpointId, effective, null, []) is { } busy) return busy;
             await InsertAssignmentAsync(context, id, command.ChannelKey, command.DeviceId, command.EndpointId, effective, Blank(command.Reason));
             await AuditAsync(context, id, "assigned", command.ChannelKey, null, command.DeviceId, effective, Blank(command.Reason));
@@ -151,6 +165,8 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
             if (comparison.Missing.Count > 0 && !command.AcceptMissingCapabilities)
                 return Fail(LogicalChangeStatus.MissingCapabilities,
                     "The replacement does not report every measurement of the current device. Confirm to continue without them.", comparison.Missing);
+            if (await ReleaseAsync(context, id, command.DeviceId, command.EndpointId, effective, command.ReleaseFrom,
+                    command.AcceptReleasedHistory, command.ArchiveReleased) is { } release) return release;
             if (Conflict(context, command.DeviceId, command.EndpointId, effective, null, [current.Id]) is { } busy) return busy;
             var closed = await context.Db.ExecuteAsync(Query("""
                 UPDATE logical_device_assignments SET valid_to_utc=@effective
@@ -214,6 +230,72 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
             return LogicalChangeResult.Done(id);
         });
 
+    public Task<LogicalChangeResult> UnassignAsync(long property, string user, long id, UnassignPhysicalDevice command, CancellationToken ct) =>
+        MutateAsync(property, user, ct, async context =>
+        {
+            if (Active(context, id) is { } missing) return missing;
+            if (!LogicalDeviceRules.ValidChannel(command.ChannelKey)) return Invalid("Use a valid channel key.");
+            var current = context.State.Assignments.SingleOrDefault(item =>
+                item.LogicalDeviceId == id && item.ChannelKey == command.ChannelKey && item.ValidTo is null);
+            if (current is null) return Fail(LogicalChangeStatus.Conflict, "This channel has no active device.");
+            if (current.Id != command.ExpectedAssignmentId)
+                return Fail(LogicalChangeStatus.Conflict, "The active device changed since this page was loaded. Reload and try again.");
+            if (Effective(command.EffectiveAt, context.Now, out var effective) is { } time) return time;
+            if (effective <= current.ValidFrom) return Invalid("The end time must be after the device's assignment started.");
+            if (await CloseAsync(context, current, effective) is { } changed) return changed;
+            await AuditAsync(context, id, "unassigned", command.ChannelKey, current.DeviceId, null, effective, Blank(command.Reason));
+            await TouchAsync(context, id);
+            return LogicalChangeResult.Done(id);
+        });
+
+    /// <summary>Returns an archived logical device to the active list. No earlier assignment is reopened.</summary>
+    public Task<LogicalChangeResult> RestoreAsync(long property, string user, long id, RestoreLogicalDevice command, CancellationToken ct) =>
+        MutateAsync(property, user, ct, async context =>
+        {
+            if (!context.State.Logical.TryGetValue(id, out var logical)) return Fail(LogicalChangeStatus.NotFound, "The logical device does not exist.");
+            if (logical.ArchivedAt is null) return Fail(LogicalChangeStatus.Conflict, "The logical device is not archived.");
+            await context.Db.ExecuteAsync(Query("""
+                UPDATE logical_devices SET archived_at_utc=NULL, updated_at_utc=@Now WHERE property_id=@Property AND id=@id AND archived_at_utc IS NOT NULL
+                """, context.Ct, new { context.Now, context.Property, id }, context.Tx));
+            await AuditAsync(context, id, "restored", null, null, null, null, Blank(command.Reason));
+            return LogicalChangeResult.Done(id);
+        });
+
+    public async Task<PhysicalDeviceList> PhysicalDevicesAsync(long property, string user, CancellationToken ct)
+    {
+        await using var db = await database.OpenAsync(ct);
+        var state = await LoadAsync(db, null, property, ct);
+        var role = await RoleAsync(db, null, property, user, ct);
+        var origins = state.Logical.Values.Where(item => item.OriginDeviceId is not null).Select(item => item.OriginDeviceId!.Value).ToHashSet();
+        return new(CanManage(role), state.Devices.Values.Select(device =>
+        {
+            var owner = state.Assignments.FirstOrDefault(item => item.DeviceId == device.Id && item.ValidTo is null);
+            var logical = owner is null ? null : state.Logical[owner.LogicalDeviceId];
+            return new PhysicalDeviceView(device.Id, device.Name, device.Provider, device.Manufacturer, device.Model, device.Kind, device.RoomId,
+                Measurements(device.Capabilities(null)),
+                device.Endpoints.Select(endpoint => new CandidateEndpoint(endpoint.Id, endpoint.Name, Measurements(endpoint.Capabilities))).ToList(),
+                device.RequiresEndpoint, logical?.Id, logical?.Name, logical?.Creation,
+                origins.Contains(device.Id) || state.Assignments.Any(item => item.DeviceId == device.Id));
+        }).OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.Id).ToList());
+    }
+
+    public async Task<ReleasePreview?> ReleasePreviewAsync(long property, long target, long deviceId, long? endpointId, DateTimeOffset effectiveAt,
+        CancellationToken ct)
+    {
+        await using var db = await database.OpenAsync(ct);
+        var state = await LoadAsync(db, null, property, ct);
+        if (!state.Logical.ContainsKey(target) || !state.Devices.ContainsKey(deviceId)) return null;
+        var effective = Microseconds(effectiveAt.UtcDateTime);
+        if (Releasable(state, target, deviceId, endpointId, effective) is not { } clashes) return null;
+        var owner = state.Logical[clashes[0].LogicalDeviceId];
+        var readings = await ReadingsAsync(db, null, property, clashes, effective, ct);
+        return new(owner.Id, owner.Name, owner.Creation, clashes.Select(item => item.ChannelKey).Distinct().ToList(), readings.Count,
+            Utc(readings.First), Utc(readings.Last),
+            !state.Assignments.Any(item => item.LogicalDeviceId == owner.Id && item.ValidTo is null && !clashes.Contains(item)),
+            state.Assignments.Any(item => item.LogicalDeviceId == owner.Id && item.DeviceId != deviceId),
+            await DashboardReferencesAsync(db, property, owner.Id, ct));
+    }
+
     public Task<LogicalHistoryRead> HistoryAsync(long property, long id, string channel, Metric metric, HistoryQuery query, CancellationToken ct) =>
         history.ReadLogicalAsync(property, id, channel, metric, query, ct);
 
@@ -241,20 +323,94 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         foreach (var item in plan.Work)
         {
             var device = context.State.Devices[item.DeviceId];
-            var id = await db.ExecuteScalarAsync<long>(Query("""
-                INSERT INTO logical_devices(property_id,name,kind,room_id,origin_device_id,created_at_utc,updated_at_utc)
-                VALUES(@property,@Name,@Kind,@RoomId,@DeviceId,@now,@now); SELECT LAST_INSERT_ID();
-                """, ct, new { property, Name = device.Name.Length > 128 ? device.Name[..128] : device.Name,
-                Kind = device.Kind.Length > 32 ? device.Kind[..32] : device.Kind, device.RoomId, item.DeviceId, now }, tx));
-            foreach (var channel in item.Channels)
-                await InsertAssignmentAsync(context, id, channel.ChannelKey, item.DeviceId, channel.EndpointId, LogicalDeviceRules.HistoryOrigin,
-                    "Initial logical identity for the device's recorded history");
-            await AuditAsync(context, id, "initialized", null, null, item.DeviceId, LogicalDeviceRules.HistoryOrigin, null);
+            await CreateIdentityAsync(context, item, device.Name, "initialized", "initialized", null);
             created++;
         }
         if (BeforeCommit is { } hook) await hook(ct);
         await tx.CommitAsync(ct);
         return created;
+    }
+
+    /// <summary>
+    /// Properties with at least one physical device that has never had a logical identity or assignment. Only properties that
+    /// already use logical devices take part, so the explicit, dry-run-first initialization remains the onboarding step.
+    /// </summary>
+    public async Task<IReadOnlyList<long>> ProvisioningCandidatesAsync(CancellationToken ct)
+    {
+        if (!await SchemaReadyAsync(ct)) return [];
+        await using var db = await database.OpenAsync(ct);
+        return (await db.QueryAsync<long>(Query("""
+            SELECT DISTINCT d.property_id FROM devices d
+            WHERE EXISTS (SELECT 1 FROM logical_devices l WHERE l.property_id=d.property_id)
+              AND NOT EXISTS (SELECT 1 FROM logical_devices o WHERE o.property_id=d.property_id AND o.origin_device_id=d.id)
+              AND NOT EXISTS (SELECT 1 FROM logical_device_assignments a WHERE a.property_id=d.property_id AND a.device_id=d.id)
+            ORDER BY d.property_id
+            """, ct))).ToList();
+    }
+
+    /// <summary>
+    /// Creates one automatic logical identity per accepted physical device of the property that has never had one, using the same
+    /// plan and assignment semantics as initialization. The property row lock and the unique origin key make repeated or concurrent
+    /// runs create each identity exactly once; existing identities, names, rooms and intervals are never changed.
+    /// </summary>
+    public async Task<int> ProvisionAsync(long property, CancellationToken ct)
+    {
+        if (!await SchemaReadyAsync(ct)) return 0;
+        await using var db = await database.OpenAsync(ct);
+        await using var tx = await db.BeginTransactionAsync(ct);
+        if (await db.QuerySingleOrDefaultAsync<long?>(Query("SELECT id FROM properties WHERE id=@property FOR UPDATE", ct, new { property }, tx)) is null)
+            return 0;
+        var state = await LoadAsync(db, tx, property, ct);
+        if (state.Logical.Count == 0) return 0;
+        var plan = await PlanAsync(db, tx, property, ct);
+        var context = new Context(db, tx, property, ProvisioningActor, Microseconds(clock.GetUtcNow().UtcDateTime), state, ct);
+        var names = state.Logical.Values.Where(item => item.ArchivedAt is null).Select(item => item.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var created = 0;
+        foreach (var item in plan.Work.Where(item => item.Channels.Count > 0 &&
+                     state.Devices[item.DeviceId].Capabilities(null).Any(LogicalDeviceRules.IsMeasurement)).Take(MaximumProvisionedPerRun))
+        {
+            var name = DefaultName(state.Devices[item.DeviceId], names);
+            names.Add(name);
+            await CreateIdentityAsync(context, item, name, "automatic", "provisioned", "Created automatically for a newly discovered device");
+            created++;
+        }
+        if (created == 0) return 0;
+        if (BeforeCommit is { } hook) await hook(ct);
+        await tx.CommitAsync(ct);
+        return created;
+    }
+
+    /// <summary>Inventory name when it is unique among active logical devices; otherwise qualified by model, then by device number.</summary>
+    internal static string DefaultName(string name, string manufacturer, string kind, string model, long id, IReadOnlySet<string> taken)
+    {
+        static string Clip(string value) => value.Length > 128 ? value[..128].TrimEnd() : value;
+        var label = string.Concat(kind.Select((character, index) => index > 0 && char.IsUpper(character) ? " " + character : character.ToString()));
+        var basis = !string.IsNullOrWhiteSpace(name) ? name.Trim()
+            : $"{manufacturer.Trim()} {(kind == "SmartSwitch" ? "Relay" : kind == "Unknown" ? "Device" : label)}".Trim();
+        if (basis.Length == 0) basis = "Device";
+        var candidates = new[] { basis, string.IsNullOrWhiteSpace(model) ? null : $"{basis} ({model.Trim()})", $"{basis} #{id}" };
+        return Clip(candidates.OfType<string>().FirstOrDefault(candidate => !taken.Contains(Clip(candidate))) ?? $"{basis} #{id}");
+    }
+
+    private static string DefaultName(PhysicalDevice device, IReadOnlySet<string> taken) =>
+        DefaultName(device.Name, device.Manufacturer, device.Kind, device.Model, device.Id, taken);
+
+    private static async Task CreateIdentityAsync(Context context, InitializationItem item, string name, string creation, string action,
+        string? reason)
+    {
+        var device = context.State.Devices[item.DeviceId];
+        var id = await context.Db.ExecuteScalarAsync<long>(Query("""
+            INSERT INTO logical_devices(property_id,name,kind,room_id,origin_device_id,created_at_utc,updated_at_utc,creation)
+            VALUES(@Property,@Name,@Kind,@RoomId,@DeviceId,@Now,@Now,@creation); SELECT LAST_INSERT_ID();
+            """, context.Ct, new { context.Property, Name = name.Length > 128 ? name[..128] : name,
+            Kind = device.Kind.Length > 32 ? device.Kind[..32] : device.Kind, device.RoomId, item.DeviceId, context.Now, creation }, context.Tx));
+        context.State.Logical[id] = new(id, name, device.Kind, device.RoomId, null, item.DeviceId, creation, context.Now, context.Now, null);
+        // Starting at the history origin keeps every recorded observation of the device attributed to it; no observation time is invented.
+        foreach (var channel in item.Channels)
+            await InsertAssignmentAsync(context, id, channel.ChannelKey, item.DeviceId, channel.EndpointId, LogicalDeviceRules.HistoryOrigin,
+                "Initial logical identity for the device's recorded history");
+        await AuditAsync(context, id, action, null, null, item.DeviceId, LogicalDeviceRules.HistoryOrigin, reason);
     }
 
     private async Task<InitializationPlan> PlanAsync(MySqlConnection db, MySqlTransaction? tx, long property, CancellationToken ct)
@@ -290,7 +446,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
     private async Task<LogicalChangeResult> MutateAsync(long property, string user, CancellationToken ct,
         Func<Context, Task<LogicalChangeResult>> action)
     {
-        if (!await SchemaReadyAsync(ct)) return Fail(LogicalChangeStatus.SchemaPending, "Logical devices require migrations 017 and 018.");
+        if (!await SchemaReadyAsync(ct)) return Fail(LogicalChangeStatus.SchemaPending, "Logical devices require migrations 017, 018 and 019.");
         await using var db = await database.OpenAsync(ct);
         await using var tx = await db.BeginTransactionAsync(ct);
         if (await db.QuerySingleOrDefaultAsync<long?>(Query("SELECT id FROM properties WHERE id=@property FOR UPDATE", ct, new { property }, tx)) is null)
@@ -360,6 +516,108 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
             $"The device is already assigned to \"{context.State.Logical[clash.LogicalDeviceId].Name}\" for an overlapping time.");
     }
 
+    /// <summary>
+    /// The open assignments of another logical device that the hardware would leave at <paramref name="effective"/>. Null unless every
+    /// overlapping assignment is open, belongs to one other logical device and started before the effective time; any other
+    /// overlap remains a conflict.
+    /// </summary>
+    private static List<AssignmentRow>? Releasable(State state, long target, long deviceId, long? endpointId, DateTime effective)
+    {
+        var clashes = state.Assignments.Where(item => item.LogicalDeviceId != target &&
+            LogicalDeviceRules.SameSource(item.DeviceId, item.EndpointId, deviceId, endpointId) &&
+            LogicalDeviceRules.Overlaps(item.ValidFrom, item.ValidTo, effective, null)).ToList();
+        return clashes.Count > 0 && clashes.All(item => item.ValidTo is null && item.ValidFrom < effective &&
+            item.LogicalDeviceId == clashes[0].LogicalDeviceId && state.Logical[item.LogicalDeviceId].ArchivedAt is null) ? clashes : null;
+    }
+
+    /// <summary>
+    /// Ends another logical device's use of the hardware at the effective time when the caller named that device explicitly. Readings
+    /// before the effective time stay with it and need confirmation; nothing is deleted, and archiving it is the caller's choice.
+    /// </summary>
+    private async Task<LogicalChangeResult?> ReleaseAsync(Context context, long target, long deviceId, long? endpointId, DateTime effective,
+        long? releaseFrom, bool acceptHistory, bool archive)
+    {
+        var clashes = Releasable(context.State, target, deviceId, endpointId, effective);
+        if (clashes is null)
+            return releaseFrom is null ? null : Fail(LogicalChangeStatus.Conflict,
+                "The selected device is not the active device of that logical device at this time. Reload and try again.");
+        var owner = context.State.Logical[clashes[0].LogicalDeviceId];
+        if (releaseFrom is null)
+            return Fail(LogicalChangeStatus.ReleaseRequired,
+                $"The device is the active device of \"{owner.Name}\". Choose it as a replacement to end that assignment at this time.");
+        if (releaseFrom != owner.Id)
+            return Fail(LogicalChangeStatus.Conflict, $"The device is now used by \"{owner.Name}\". Reload and try again.");
+        var readings = await ReadingsAsync(context.Db, context.Tx, context.Property, clashes, effective, context.Ct);
+        if (readings.Count > 0 && !acceptHistory)
+            return Fail(LogicalChangeStatus.HistoryConfirmation,
+                $"{readings.Count} readings recorded before this time stay with \"{owner.Name}\". Confirm to continue.");
+        foreach (var clash in clashes)
+        {
+            if (await CloseAsync(context, clash, effective) is { } changed) return changed;
+            await AuditAsync(context, owner.Id, "resolved", clash.ChannelKey, clash.DeviceId, null, effective,
+                $"Hardware moved to logical device {target}");
+        }
+        if (archive && !context.State.Assignments.Any(item => item.LogicalDeviceId == owner.Id && item.ValidTo is null))
+        {
+            await context.Db.ExecuteAsync(Query("""
+                UPDATE logical_devices SET archived_at_utc=@Now, updated_at_utc=@Now WHERE property_id=@Property AND id=@id
+                """, context.Ct, new { context.Now, context.Property, id = owner.Id }, context.Tx));
+            await AuditAsync(context, owner.Id, "archived", null, deviceId, null, effective, $"Resolved into logical device {target}");
+            context.State.Logical[owner.Id] = owner with { ArchivedAt = context.Now };
+        }
+        else await TouchAsync(context, owner.Id);
+        return null;
+    }
+
+    private static async Task<LogicalChangeResult?> CloseAsync(Context context, AssignmentRow assignment, DateTime effective)
+    {
+        var closed = await context.Db.ExecuteAsync(Query("""
+            UPDATE logical_device_assignments SET valid_to_utc=@effective
+            WHERE property_id=@Property AND id=@Id AND valid_to_utc IS NULL
+            """, context.Ct, new { context.Property, assignment.Id, effective }, context.Tx));
+        if (closed != 1) return Fail(LogicalChangeStatus.Conflict, "The active device changed. Reload and try again.");
+        context.State.Assignments[context.State.Assignments.IndexOf(assignment)] = assignment with { ValidTo = effective };
+        return null;
+    }
+
+    /// <summary>Readings of the hardware that the assignments attribute to their logical device before <paramref name="effective"/>.</summary>
+    private static async Task<(long Count, DateTime? First, DateTime? Last)> ReadingsAsync(MySqlConnection db, MySqlTransaction? tx,
+        long property, IReadOnlyList<AssignmentRow> assignments, DateTime effective, CancellationToken ct)
+    {
+        (long Count, DateTime? First, DateTime? Last) total = (0, null, null);
+        foreach (var assignment in assignments)
+        {
+            var row = await db.QuerySingleAsync<(long Count, DateTime? First, DateTime? Last)>(Query("""
+                SELECT COUNT(*), MIN(h.observed_at_utc), MAX(h.observed_at_utc)
+                FROM telemetry_samples h
+                JOIN telemetry_series s ON s.id=h.series_id
+                JOIN device_endpoints e ON e.id=s.endpoint_id AND e.property_id=s.property_id
+                WHERE s.property_id=@property AND e.device_id=@DeviceId AND (@EndpointId IS NULL OR s.endpoint_id=@EndpointId)
+                  AND h.observed_at_utc>=@ValidFrom AND h.observed_at_utc<@effective
+                """, ct, new { property, assignment.DeviceId, assignment.EndpointId, assignment.ValidFrom, effective }, tx));
+            total = (total.Count + row.Count, Min(total.First, row.First), Max(total.Last, row.Last));
+        }
+        return total;
+
+        static DateTime? Min(DateTime? a, DateTime? b) => a is null ? b : b is null ? a : a < b ? a : b;
+        static DateTime? Max(DateTime? a, DateTime? b) => a is null ? b : b is null ? a : a > b ? a : b;
+    }
+
+    /// <summary>Dashboard measurements bound to the logical device. They are reported for review and never changed here.</summary>
+    private static async Task<int> DashboardReferencesAsync(MySqlConnection db, long property, long logical, CancellationToken ct)
+    {
+        try
+        {
+            return await db.ExecuteScalarAsync<int>(Query("""
+                SELECT COUNT(*) FROM dashboard_values WHERE property_id=@property AND source_key LIKE @prefix
+                """, ct, new { property, prefix = $"logical:{logical}:%" }));
+        }
+        catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.NoSuchTable)
+        {
+            return 0;
+        }
+    }
+
     private static async Task InsertAssignmentAsync(Context context, long logicalId, string channel, long deviceId, long? endpointId,
         DateTime from, string? reason)
     {
@@ -395,7 +653,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         return new(logical.Id, logical.Name, logical.Kind, logical.RoomId, logical.Description, Utc(logical.CreatedAt), Utc(logical.UpdatedAt),
             Utc(logical.ArchivedAt), assignments.Where(item => item.ValidTo is null).Select(item => item.View).OrderBy(item => item.ChannelKey).ToList(),
             assignments.Where(item => item.ValidTo is not null).Select(item => item.View).OrderByDescending(item => item.ValidFrom).ToList(),
-            Metrics(state, logical.Id));
+            Metrics(state, logical.Id), logical.Creation);
     }
 
     private static async Task<State> LoadAsync(MySqlConnection db, MySqlTransaction? tx, long property, CancellationToken ct)
@@ -409,7 +667,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
             SELECT id AS Id, device_id AS DeviceId, name AS Name, endpoint_key AS EndpointKey FROM device_endpoints WHERE property_id=@property ORDER BY id;
             SELECT cap.endpoint_id AS EndpointId, cap.capability_code AS Code FROM device_capabilities cap
             JOIN device_endpoints e ON e.id=cap.endpoint_id WHERE e.property_id=@property AND cap.readable;
-            SELECT id AS Id, name AS Name, kind AS Kind, room_id AS RoomId, description AS Description, origin_device_id AS OriginDeviceId,
+            SELECT id AS Id, name AS Name, kind AS Kind, room_id AS RoomId, description AS Description, origin_device_id AS OriginDeviceId, creation AS Creation,
                    created_at_utc AS CreatedAt, updated_at_utc AS UpdatedAt, archived_at_utc AS ArchivedAt
             FROM logical_devices WHERE property_id=@property;
             SELECT id AS Id, logical_device_id AS LogicalDeviceId, channel_key AS ChannelKey, device_id AS DeviceId, endpoint_id AS EndpointId,
@@ -492,7 +750,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
     private sealed record DeviceRow(long Id, string Name, string Kind, string Manufacturer, string Model, long? RoomId, string Provider);
     private sealed record EndpointRow(long Id, long DeviceId, string Name, string EndpointKey);
     private sealed record CapabilityRow(long EndpointId, string Code);
-    private sealed record LogicalRow(long Id, string Name, string Kind, long? RoomId, string? Description, long? OriginDeviceId,
+    private sealed record LogicalRow(long Id, string Name, string Kind, long? RoomId, string? Description, long? OriginDeviceId, string Creation,
         DateTime CreatedAt, DateTime UpdatedAt, DateTime? ArchivedAt);
     private sealed record AssignmentRow(long Id, long LogicalDeviceId, string ChannelKey, long DeviceId, long? EndpointId, DateTime ValidFrom,
         DateTime? ValidTo, string AssignedBy, DateTime AssignedAt, string? Reason);

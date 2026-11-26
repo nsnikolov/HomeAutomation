@@ -4,7 +4,7 @@ Milestone 7B separates the stable identity of a monitored role, such as "Heat pu
 
 ## Model
 
-Migration `018_logical_devices.sql` adds three tables. Every row is scoped to one property through composite foreign keys, so a logical device can only reference devices, rooms and endpoints of its own property.
+Migration `018_logical_devices.sql` adds three tables. Every row is scoped to one property through composite foreign keys, so a logical device can only reference devices, rooms and endpoints of its own property. Milestone 7E adds management, migration 019 and automatic provisioning; see [logical device management](14-logical-device-management.md).
 
 | Table | Purpose |
 | --- | --- |

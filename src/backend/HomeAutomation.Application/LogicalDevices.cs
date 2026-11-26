@@ -14,7 +14,7 @@ public sealed record LogicalMetric(string ChannelKey, Metric Metric, string? Uni
 public sealed record LogicalDeviceView(
     long Id, string Name, string Kind, long? RoomId, string? Description, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
     DateTimeOffset? ArchivedAt, IReadOnlyList<LogicalAssignmentView> Current, IReadOnlyList<LogicalAssignmentView> Previous,
-    IReadOnlyList<LogicalMetric>? Metrics = null);
+    IReadOnlyList<LogicalMetric>? Metrics = null, string Creation = "manual");
 
 public sealed record LogicalDeviceList(bool CanManage, IReadOnlyList<LogicalDeviceView> Devices);
 
@@ -31,20 +31,49 @@ public sealed record ReplacementCandidate(
     long DeviceId, string Name, string Provider, string Manufacturer, string Model, string Kind, long? RoomId,
     IReadOnlyList<CandidateEndpoint> Endpoints, IReadOnlyList<Capability> Capabilities, IReadOnlyList<Capability> Shared,
     IReadOnlyList<Capability> Missing, IReadOnlyList<Capability> Added, bool Compatible, bool RequiresEndpoint,
-    long? AssignedLogicalDeviceId, string? AssignedLogicalDeviceName, bool Current);
+    long? AssignedLogicalDeviceId, string? AssignedLogicalDeviceName, bool Current, string? AssignedLogicalCreation = null);
 
-public sealed record CreateLogicalDevice(string Name, string Kind, long? RoomId, string? Description, long DeviceId,
+/// <summary>A physical device of the property with the logical device that currently uses it, if any.</summary>
+/// <param name="EverAssigned">The device has had a logical assignment, so automatic provisioning never creates one for it again.</param>
+public sealed record PhysicalDeviceView(
+    long Id, string Name, string Provider, string Manufacturer, string Model, string Kind, long? RoomId,
+    IReadOnlyList<Capability> Capabilities, IReadOnlyList<CandidateEndpoint> Endpoints, bool RequiresEndpoint,
+    long? LogicalDeviceId, string? LogicalDeviceName, string? LogicalCreation, bool EverAssigned);
+
+public sealed record PhysicalDeviceList(bool CanManage, IReadOnlyList<PhysicalDeviceView> Devices);
+
+/// <summary>
+/// What assigning hardware to another logical device would do to the logical device that uses it now. Readings of the hardware
+/// before the effective time stay with that logical device; dashboard measurements that reference it are counted, never changed.
+/// </summary>
+public sealed record ReleasePreview(
+    long LogicalDeviceId, string Name, string Creation, IReadOnlyList<string> Channels, long Readings, DateTimeOffset? FirstReading,
+    DateTimeOffset? LastReading, bool LeavesUnassigned, bool HasOtherHardwareHistory, int DashboardReferences);
+
+public sealed record CreateLogicalDevice(string Name, string Kind, long? RoomId, string? Description, long? DeviceId,
     long? EndpointId, string? ChannelKey, DateTimeOffset? EffectiveAt, string? Reason);
-public sealed record UpdateLogicalDevice(string Name, string Kind, long? RoomId, string? Description);
-public sealed record AssignPhysicalDevice(string ChannelKey, long DeviceId, long? EndpointId, DateTimeOffset? EffectiveAt, string? Reason);
+/// <param name="ExpectedUpdatedAt">The device's <c>updatedAt</c> when the form was loaded; a newer save is reported as a conflict.</param>
+public sealed record UpdateLogicalDevice(string Name, string Kind, long? RoomId, string? Description, DateTimeOffset? ExpectedUpdatedAt = null);
+/// <param name="ReleaseFrom">Another logical device whose open assignment of the same hardware ends at the effective time.</param>
+/// <param name="AcceptReleasedHistory">Confirms that readings recorded before the effective time stay with <paramref name="ReleaseFrom"/>.</param>
+/// <param name="ArchiveReleased">Archives <paramref name="ReleaseFrom"/> when it is left without an active device.</param>
+public sealed record AssignPhysicalDevice(string ChannelKey, long DeviceId, long? EndpointId, DateTimeOffset? EffectiveAt, string? Reason,
+    long? ReleaseFrom = null, bool AcceptReleasedHistory = false, bool ArchiveReleased = false);
 public sealed record ReplacePhysicalDevice(string ChannelKey, long ExpectedAssignmentId, long DeviceId, long? EndpointId,
-    DateTimeOffset? EffectiveAt, string? Reason, bool AcceptMissingCapabilities);
+    DateTimeOffset? EffectiveAt, string? Reason, bool AcceptMissingCapabilities, long? ReleaseFrom = null, bool AcceptReleasedHistory = false,
+    bool ArchiveReleased = false);
+public sealed record UnassignPhysicalDevice(string ChannelKey, long ExpectedAssignmentId, DateTimeOffset? EffectiveAt, string? Reason);
+public sealed record RestoreLogicalDevice(string? Reason);
 public sealed record CorrectAssignmentStart(DateTimeOffset EffectiveAt, string Reason);
 public sealed record ArchiveLogicalDevice(string? Reason);
 
 public enum LogicalChangeStatus
 {
-    Done, NotFound, Forbidden, Invalid, Conflict, Incompatible, MissingCapabilities, AmbiguousEndpoint, SchemaPending
+    Done, NotFound, Forbidden, Invalid, Conflict, Incompatible, MissingCapabilities, AmbiguousEndpoint, SchemaPending,
+    /// <summary>The hardware is the active device of another logical device; the caller must name it to release it.</summary>
+    ReleaseRequired,
+    /// <summary>Releasing leaves recorded readings with the other logical device; the caller must confirm.</summary>
+    HistoryConfirmation
 }
 
 public sealed record LogicalChangeResult(LogicalChangeStatus Status, string? Message = null, long? Id = null,
@@ -87,5 +116,11 @@ public interface ILogicalDevices
     Task<LogicalChangeResult> CorrectAsync(long property, string user, long id, long assignment, CorrectAssignmentStart command,
         CancellationToken ct);
     Task<LogicalChangeResult> ArchiveAsync(long property, string user, long id, ArchiveLogicalDevice command, CancellationToken ct);
+    Task<PhysicalDeviceList> PhysicalDevicesAsync(long property, string user, CancellationToken ct);
+    /// <summary>Null when the hardware is not the active device of another logical device at <paramref name="effectiveAt"/>.</summary>
+    Task<ReleasePreview?> ReleasePreviewAsync(long property, long target, long deviceId, long? endpointId, DateTimeOffset effectiveAt,
+        CancellationToken ct);
+    Task<LogicalChangeResult> UnassignAsync(long property, string user, long id, UnassignPhysicalDevice command, CancellationToken ct);
+    Task<LogicalChangeResult> RestoreAsync(long property, string user, long id, RestoreLogicalDevice command, CancellationToken ct);
     Task<LogicalHistoryRead> HistoryAsync(long property, long id, string channel, Metric metric, HistoryQuery query, CancellationToken ct);
 }

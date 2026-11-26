@@ -20,6 +20,12 @@ Updated 2026-11-26. [AGENTS.md](../AGENTS.md) contains the shared development ru
   - **Samples:** they come only from device frames, use receipt-time provenance, and never come from timers or cached HTTP values. The 2-minute hold is unchanged, so coverage stays honestly partial.
   - **Unchanged:** no migration, no new worker, no vault schema change beyond two optional fields.
   - See [eWeLink electrical collection](architecture/13-ewelink-electrical-collection.md).
+- Milestone 7E makes logical devices manageable from **Devices** and covers new hardware automatically.
+  - **UI:** filters; create (with or without hardware), edit, assign, replace, unassign, archive and restore; an **Unassigned and new hardware** view.
+  - **Migration 019:** `logical_devices.creation` and new audit actions. No grant change.
+  - **Provisioning:** a provider-neutral sweep (`LogicalDevices:AutoProvision`, default on, every 5 min) creates one `automatic` identity per never-assigned device with a measurement, only in properties that already use logical devices. Assignments start at the history origin, as initialization does. The property lock and unique origin key make it run exactly once; failures back off per property.
+  - **Resolution:** hardware used by another identity is released only when the user names it, at an explicit time, with confirmation when readings would stay behind; the auto-created identity can be archived. Telemetry, rollups and widgets are never rewritten.
+  - See [logical device management](architecture/14-logical-device-management.md).
 - Settings stages provider settings in a global or property profile. Property Owner/Admin may edit their own scope. Global access requires an explicitly designated Identity account. Settings reads ordinary identifiers and polling intervals. Genuine secrets are write-only and stored with an external AES-256-GCM key. Since Milestone 6B, each provider can load a complete imported vault snapshot at startup when explicitly selected. Existing deployments use Legacy by default and OAuth grants stay in their existing encrypted stores. See the [configuration and cutover guide](architecture/09-configuration-vault.md).
 
 | Integration | Shipped behavior and evidence |
@@ -33,7 +39,8 @@ Updated 2026-11-26. [AGENTS.md](../AGENTS.md) contains the shared development ru
 
 | Commit | Change |
 | --- | --- |
-| Milestone 7D | Optional background eWeLink electrical collection, budget daily share, per-meter back-off and receipt-time duplicate fix. See [prompt 0059](prompts/0059-continuous-ewelink-power-telemetry.md). |
+| Milestone 7E | Logical device management UI, automatic provisioning, migration 019, unassign/restore and explicit release of auto-created identities. See [prompt 0060](prompts/0060-automatic-logical-device-management.md). |
+| `73bc40a` | Optional background eWeLink electrical collection, budget daily share, per-meter back-off and receipt-time duplicate fix. See [prompt 0059](prompts/0059-continuous-ewelink-power-telemetry.md). |
 | `33a2c5c` | History page with logical-device charts, energy provenance, quality, replacement markers and comparisons. See [prompt 0058](prompts/0058-historical-charts-and-energy.md). |
 | `35838fa` | Milestone 7B logical devices, replacement, continuous logical history, logical dashboard sources and the Devices replacement UI. See [prompt 0057](prompts/0057-logical-devices-and-replacement.md). |
 | `754615e` | Milestone 7A hourly rollups, local-day history, energy provenance, history API and backfill CLI. See [prompt 0056](prompts/0056-historical-telemetry-aggregation.md). |
@@ -49,7 +56,7 @@ Updated 2026-11-26. [AGENTS.md](../AGENTS.md) contains the shared development ru
 - [Backend boundaries](architecture/02-backend-architecture.md) and the [modular monolith ADR](architecture/adr/0001-modular-monolith.md) describe Domain and Application contracts, Infrastructure adapters and persistence, and API composition in [Program.cs](../src/backend/HomeAutomation.Api/Program.cs). The [capability and binding ADR](architecture/adr/0007-device-capabilities-and-provider-bindings.md) describes device identity and provider boundaries.
 - [Frontend](architecture/03-frontend-architecture.md) uses React, TypeScript, Vite, TanStack Query, and SignalR to invalidate property-scoped reads. Dashboard presentation is in [Dashboard.tsx](../src/frontend/home-automation-web/src/features/Dashboard.tsx) and [DashboardWidgets.tsx](../src/frontend/home-automation-web/src/features/DashboardWidgets.tsx). Layout and source queries are in [MonitoringDashboardStore.cs](../src/backend/HomeAutomation.Infrastructure/MySql/MonitoringDashboardStore.cs).
 - Dapper and MySqlConnector store normalized telemetry in MySQL. Preserve source observation time, receipt time, provenance, unit and device identity. Use SignalR to notify authorized browsers of persisted updates. See the [data model](architecture/04-data-model.md) and [telemetry ADR](architecture/adr/0006-telemetry-storage.md).
-- The [migration runner](../src/backend/HomeAutomation.Infrastructure/MySql/Migrations.cs) applies embedded scripts from [database/migrations](../database/migrations/), serializes execution, and records successful names and SHA-256 checksums in `schema_migrations`. Current version is [018](../database/migrations/018_logical_devices.sql). Settings staging requires 014/015. Provider import and vault activation require 014–016. Historical rollups and hourly or daily history require 017. Logical devices require 017 and 018. Readiness and raw history require neither. Keep the runtime account separate from the migration account.
+- The [migration runner](../src/backend/HomeAutomation.Infrastructure/MySql/Migrations.cs) applies embedded scripts from [database/migrations](../database/migrations/), serializes execution, and records successful names and SHA-256 checksums in `schema_migrations`. Current version is [019](../database/migrations/019_logical_device_management.sql). Settings staging requires 014/015. Provider import and vault activation require 014–016. Historical rollups and hourly or daily history require 017. Logical devices, provisioning and logical history require 017, 018 and 019. Readiness and raw history require none of them. Keep the runtime account separate from the migration account.
 
 ## Windows development and deployment
 
@@ -101,7 +108,8 @@ Keep manual commands on provider pages and behind explicit authorization. Record
 - Daikin continues to use its original external `Daikin:TokenKey` and eWeLink its original ASP.NET Data Protection key ring. Roll back the source selector without reverting the database so both providers can read the most recent grant envelopes. The vault does not import or copy grant data. Tuya's short-lived access token remains in its guarded process cache.
 - The last read-only live Dashboard audit confirmed that the 012/013 schema changes were present but their two ledger records were missing. The [record-only repair](../README.md#configurable-monitoring-dashboard) restored HTTP 200 on isolated MySQL. The live schema was left untouched by the audit, and there is no recorded confirmation that the operator subsequently applied the ledger repair. If the 503 persists, verify the current ledger and schema before using the documented repair. See the [diagnosis](prompts/0049-dashboard-schema-503.md).
 - The last documented eWeLink inventory included six devices, while CoolKit reported seven things. Pagination now follows a safe advancing cursor after a short page. The live availability of the missing thermostat is still unverified. Use normal polling and sanitized diagnostics to investigate within quota.
-- Milestones 7A, 7B and 7C are implemented but **not deployed**. Until migrations 017 and 018 are applied, the History page shows "History is not available yet" and other pages are unaffected. Migrations 017 and 018 have not been applied to the live database, no backfill or initialization has run there, and the running backend has not been restarted. Follow the approved [deployment sequence](../README.md#logical-devices-and-device-replacement): backup, migrate, restart, 7A backfill dry run then execute, logical initialization dry run then execute, then validation. No grant change is needed.
+- Milestones 7A, 7B and 7C are implemented but **not deployed**. Until migrations 017, 018 and 019 are applied, the History page shows "History is not available yet" and other pages are unaffected. Migrations 017 and 018 have not been applied to the live database, no backfill or initialization has run there, and the running backend has not been restarted. Follow the approved [deployment sequence](../README.md#logical-devices-and-device-replacement): backup, migrate, restart, 7A backfill dry run then execute, logical initialization dry run then execute, then validation. No grant change is needed.
+- Milestone 7E is implemented but **not deployed**. Migration 019 has not been applied anywhere live. After the approved 017–019 migration, restart, backfill and dry-run-first initialization, provisioning covers new hardware automatically; set `LogicalDevices:AutoProvision=false` to keep it off.
 - Milestone 7D is implemented but **not deployed or enabled**.
   - **Deployment:** it needs no migration beyond 010. After an approved restart with `Ewelink:ContinuousElectricalCollection=true`, follow the [24-hour no-browser verification](integrations/ewelink-cloud.md#background-electrical-collection-milestone-7d). For a vault-backed eWeLink profile, the setting requires a dry-run-first re-import.
   - **Open questions, answerable only on real hardware:**
@@ -109,11 +117,22 @@ Keep manual commands on provider pages and behind explicit authorization. Record
     - whether CoolKit counts WebSocket updates against its quota;
     - whether non-PSF-X67 UIID 5/32 models accept `uiActive`.
 - Growatt inverter replacement needs a separate configuration workflow because the Growatt identity guard rejects bindings that differ from the configured serials. It was intentionally not weakened.
-- Deferred from 7B: creating logical devices, channels and corrections from the UI (the API supports them), automatic identities for devices discovered after initialization, and the Growatt hardware workflow. Deferred from 7C: zoom and brush interactions, export, cross-metric comparisons, and charts for physical series without a logical device.
+- Deferred from 7B: editing channel keys and assignment corrections from the UI (the API supports corrections), and the Growatt hardware workflow. Deferred from 7C: zoom and brush interactions, export, cross-metric comparisons, and charts for physical series without a logical device. 7E limits: provisioning reacts within its sweep interval, and a new identity for hardware used elsewhere must go through Assign or Replace with an explicit release.
 - Use the [roadmap](architecture/08-implementation-roadmap.md) for new work when requested. Do not treat its future architecture as deployed.
 
 ## Verification baseline
 
+- **Milestone 7E**:
+  - **Backend:** the Release build passed with zero warnings. Tests reported 302 passes and 11 opt-in skips with the history, logical and dashboard fixtures on disposable MySQL 8.0.46, twice in a row; without fixtures, 281 passes and 32 skips. The logical tests run as the DML-only `logical_runtime` account and share one xUnit collection, because some of them reshape the fixture schema.
+  - **New MySQL tests:**
+    - upgrading a populated 018 schema with the `initialized`/`manual` backfill;
+    - provisioning: opt-in, multiple endpoints, several streams, status-only devices, concurrent sweeps, restart idempotence, existing history, no re-provisioning after unassign, cross-property isolation, and failure with back-off and retry;
+    - management: empty identity, edit conflict, room, assign, unassign, archive with readable history, restore without reactivation, viewer denial and audit order;
+    - resolution: release required, preview, history confirmation, exact-instant continuity, the temporary identity keeping its readings and being archived, unchanged raw counts, and a preserved widget showing archived;
+    - relay replacement with a reported capability loss, and default names.
+  - **API tests:** cover the new routes and status codes.
+  - **Frontend:** the production build passed, and Vitest reported 90 passes, including 7 new management tests.
+  - **Not touched:** the live database, the running backend and the providers.
 - **Milestone 7D**:
   - **Backend:** the Release build passed with zero warnings. Tests reported 287 passes and 11 opt-in skips with the history, logical and dashboard fixtures on disposable MySQL 8.0.46, twice in a row. Without fixtures, they reported 272 passes and 26 skips.
   - **New unit tests (21):**

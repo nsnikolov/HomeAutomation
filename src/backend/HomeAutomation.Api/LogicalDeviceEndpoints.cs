@@ -22,7 +22,7 @@ internal static class LogicalDeviceEndpoints
             }
             return await http.RequestServices.GetRequiredService<ILogicalDevices>().SchemaReadyAsync(http.RequestAborted)
                 ? await next(context)
-                : Results.Problem(statusCode: 503, title: "Logical devices require migrations 017 and 018.");
+                : Results.Problem(statusCode: 503, title: "Logical devices require migrations 017, 018 and 019.");
         });
 
         logical.MapGet("", (long propertyId, bool? includeArchived, HttpContext http, ILogicalDevices store, CancellationToken ct) =>
@@ -36,6 +36,21 @@ internal static class LogicalDeviceEndpoints
             return await store.CandidatesAsync(propertyId, id, channel, ct) is { } candidates ? Results.Ok(candidates) : Results.NotFound();
         });
         logical.MapGet("/{id:long}/history", HistoryAsync);
+        logical.MapGet("/physical-devices", (long propertyId, HttpContext http, ILogicalDevices store, CancellationToken ct) =>
+            store.PhysicalDevicesAsync(propertyId, MonitoringEndpoints.UserId(http.User), ct));
+        logical.MapGet("/{id:long}/release-preview", async (long propertyId, long id, long? deviceId, long? endpointId,
+            DateTimeOffset? effectiveAt, TimeProvider clock, ILogicalDevices store, CancellationToken ct) =>
+        {
+            if (deviceId is null) return Invalid("Choose a physical device.");
+            var preview = await store.ReleasePreviewAsync(propertyId, id, deviceId.Value, endpointId, effectiveAt ?? clock.GetUtcNow(), ct);
+            return preview is null ? Results.NoContent() : Results.Ok(preview);
+        });
+        logical.MapPost("/{id:long}/unassign", (long propertyId, long id, UnassignPhysicalDevice command, HttpContext http,
+            ILogicalDevices store, IMonitoringDashboardNotifier notifier, CancellationToken ct) =>
+            ChangeAsync(propertyId, notifier, () => store.UnassignAsync(propertyId, MonitoringEndpoints.UserId(http.User), id, command, ct), ct));
+        logical.MapPost("/{id:long}/restore", (long propertyId, long id, RestoreLogicalDevice command, HttpContext http,
+            ILogicalDevices store, IMonitoringDashboardNotifier notifier, CancellationToken ct) =>
+            ChangeAsync(propertyId, notifier, () => store.RestoreAsync(propertyId, MonitoringEndpoints.UserId(http.User), id, command, ct), ct));
 
         logical.MapPost("", (long propertyId, CreateLogicalDevice command, HttpContext http, ILogicalDevices store,
             IMonitoringDashboardNotifier notifier, CancellationToken ct) =>
@@ -75,7 +90,7 @@ internal static class LogicalDeviceEndpoints
             HistoryReadStatus.Unsupported => Invalid("Status metrics are available at raw resolution only."),
             HistoryReadStatus.InvalidTimeZone => Results.Problem(statusCode: 409, title: "The property or counter time zone is not recognized on this server."),
             HistoryReadStatus.TooLarge => Invalid("The selected range needs too many raw observations. Request a shorter range."),
-            HistoryReadStatus.SchemaPending => Results.Problem(statusCode: 503, title: "Logical history requires migrations 017 and 018."),
+            HistoryReadStatus.SchemaPending => Results.Problem(statusCode: 503, title: "Logical history requires migrations 017, 018 and 019."),
             _ => Results.Problem(statusCode: 500)
         };
     }
@@ -99,6 +114,8 @@ internal static class LogicalDeviceEndpoints
             LogicalChangeStatus.MissingCapabilities => (400, "missingCapabilities"),
             LogicalChangeStatus.AmbiguousEndpoint => (400, "ambiguousEndpoint"),
             LogicalChangeStatus.SchemaPending => (503, "schemaPending"),
+            LogicalChangeStatus.ReleaseRequired => (409, "releaseRequired"),
+            LogicalChangeStatus.HistoryConfirmation => (400, "historyConfirmation"),
             _ => (400, "invalid")
         };
         return Results.Problem(statusCode: status, title: result.Message, extensions: new Dictionary<string, object?>

@@ -1,7 +1,10 @@
 import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePageKey, DevicePreferences, EwelinkRelayOutcome, EwelinkState, GrowattState, Health, Metric, Point, Property, PropertyState, Room, SensorHistory, SensorPeriod, TuyaState } from './types'
 import type { DashboardGroup, DashboardSnapshot, DashboardSource } from './types'
 import type { ConfigurationView, ProviderConfigurationUpdate } from './types'
-import type { LogicalBindingReview, LogicalDeviceList, LogicalHistory, ReplaceDeviceRequest, ReplacementCandidate } from './types'
+import type {
+  AssignDeviceRequest, LogicalBindingReview, LogicalDeviceInput, LogicalDeviceList, LogicalHistory, PhysicalDeviceList, ReleasePreview,
+  ReplaceDeviceRequest, ReplacementCandidate,
+} from './types'
 
 /** Bounded logical history request. Raw and hourly use UTC instants; daily uses property-local calendar dates. */
 export type LogicalHistoryRequest = {
@@ -81,10 +84,10 @@ async function logicalRequest<T>(path: string, options: RequestInit = {}): Promi
   return response.status === 204 ? undefined as T : await response.json() as T
 }
 
-async function logicalPost<T>(path: string, body: object) {
+async function logicalPost<T>(path: string, body: object, method: 'POST' | 'PUT' = 'POST') {
   const { token } = await request<{ token: string }>('/session/csrf')
   return logicalRequest<T>(path, {
-    method: 'POST', headers: { 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method, headers: { 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
 }
 
@@ -158,9 +161,27 @@ export const api = {
     request<Device>(`/properties/${id}/devices/${device}`, { signal }),
   health: (signal?: AbortSignal) => request<Health>('/system/health', { signal }),
   logicalDevices: (id: number, signal?: AbortSignal) =>
-    logicalRequest<LogicalDeviceList>(`/properties/${id}/logical-devices`, { signal }),
+    logicalRequest<LogicalDeviceList>(`/properties/${id}/logical-devices?includeArchived=true`, { signal }),
   replacementCandidates: (id: number, logical: number, channel: string, signal?: AbortSignal) =>
     logicalRequest<ReplacementCandidate[]>(`/properties/${id}/logical-devices/${logical}/candidates?channel=${encodeURIComponent(channel)}`, { signal }),
+  physicalDevices: (id: number, signal?: AbortSignal) =>
+    logicalRequest<PhysicalDeviceList>(`/properties/${id}/logical-devices/physical-devices`, { signal }),
+  createLogicalDevice: (id: number, body: LogicalDeviceInput & { deviceId: number | null; endpointId: number | null }) =>
+    logicalPost<{ id: number }>(`/properties/${id}/logical-devices`, { ...body, channelKey: null, effectiveAt: null, reason: null }),
+  updateLogicalDevice: (id: number, logical: number, body: LogicalDeviceInput & { expectedUpdatedAt: string }) =>
+    logicalPost<{ id: number }>(`/properties/${id}/logical-devices/${logical}`, body, 'PUT'),
+  assignDevice: (id: number, logical: number, body: AssignDeviceRequest) =>
+    logicalPost<{ id: number }>(`/properties/${id}/logical-devices/${logical}/assignments`, body),
+  unassignDevice: (id: number, logical: number, body: { channelKey: string; expectedAssignmentId: number; effectiveAt: string; reason: string | null }) =>
+    logicalPost<{ id: number }>(`/properties/${id}/logical-devices/${logical}/unassign`, body),
+  archiveLogicalDevice: (id: number, logical: number, reason: string | null) =>
+    logicalPost<{ id: number }>(`/properties/${id}/logical-devices/${logical}/archive`, { reason }),
+  restoreLogicalDevice: (id: number, logical: number, reason: string | null) =>
+    logicalPost<{ id: number }>(`/properties/${id}/logical-devices/${logical}/restore`, { reason }),
+  /** What using the hardware here would end elsewhere; null when no other logical device uses it at that time. */
+  releasePreview: async (id: number, logical: number, deviceId: number, endpointId: number | null, effectiveAt: string, signal?: AbortSignal) =>
+    (await logicalRequest<ReleasePreview | undefined>(`/properties/${id}/logical-devices/${logical}/release-preview?${new URLSearchParams({
+      deviceId: String(deviceId), effectiveAt, ...(endpointId === null ? {} : { endpointId: String(endpointId) }) })}`, { signal })) ?? null,
   replaceDevice: (id: number, logical: number, body: ReplaceDeviceRequest) =>
     logicalPost<{ id: number }>(`/properties/${id}/logical-devices/${logical}/replace`, body),
   logicalHistory: (id: number, logical: number, request: LogicalHistoryRequest, signal?: AbortSignal) => {

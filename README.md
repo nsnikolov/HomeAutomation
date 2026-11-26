@@ -189,7 +189,7 @@ Milestone 7B adds stable logical identities that keep one history while physical
 Deployment sequence, to be run only with explicit approval and in a planned window:
 
 1. Back up the database, for example with `mysqldump --single-transaction --routines homeautomation > homeautomation-backup.sql` using an administrative account, and keep the file outside the repository.
-2. Apply all pending migrations, including 017 and 018, with the migration account.
+2. Apply all pending migrations, including 017, 018 and 019, with the migration account. Logical devices need all three; 019 adds no grant.
 
 ```powershell
 dotnet run --project src/backend/HomeAutomation.Api -- --migrate
@@ -213,11 +213,13 @@ dotnet run --project src/backend/HomeAutomation.Api -- --initialize-logical-devi
 6. Validate: open **Devices** and check the Logical devices section; open **Dashboard** and confirm existing widgets still show their readings. Optionally use **Review dashboard bindings** on the Devices page to convert selected measurements to logical sources.
 7. Verify a safe replacement by reading logical history, for example `GET /api/v1/properties/1/logical-devices/{id}/history?metric=Temperature&resolution=hour`, and by replacing a non-critical sensor with a spare that is already added to the property. A replacement only changes database mappings and sends nothing to either device.
 
+8. From then on, newly discovered hardware of an initialized property gets an automatic logical identity within about five minutes (`LogicalDevices:AutoProvision`, default on; `LogicalDevices:ProvisionIntervalMinutes`, default 5). Properties that were never initialized are left alone. On **Devices**, **Unassigned and new hardware** lists it; choose **Create logical device**, or **Use as replacement for an existing logical device** to attach it to an existing identity. See [logical device management](docs/architecture/14-logical-device-management.md).
+
 Only property Owners and Admins can replace devices. Replacing a Growatt inverter needs a separate configuration workflow, because the Growatt identity guard rejects bindings that differ from the configured serials. See [provider boundary](docs/architecture/11-logical-devices.md#provider-boundary).
 
 ## History
 
-Open **History** in the navigation, or **View history** on a logical device on the Devices page. Choose a logical device, a measurement and a range (last 24 hours, 7 days, 30 days, 12 months or custom). The page shows averages with minimum and maximum bands, measured and estimated energy separately, relay ON time, data coverage, and device replacement markers, and can compare up to four logical devices. History needs migrations 017 and 018, aggregated data (the 7A backfill and worker) and logical devices (the 7B initialization). Until then it shows "History is not available yet" and other pages keep working. See [history charts](docs/architecture/12-history-charts.md).
+Open **History** in the navigation, or **View history** on a logical device on the Devices page. Choose a logical device, a measurement and a range (last 24 hours, 7 days, 30 days, 12 months or custom). The page shows averages with minimum and maximum bands, measured and estimated energy separately, relay ON time, data coverage, and device replacement markers, and can compare up to four logical devices. History needs migrations 017, 018 and 019, aggregated data (the 7A backfill and worker) and logical devices (the 7B initialization). Until then it shows "History is not available yet" and other pages keep working. See [history charts](docs/architecture/12-history-charts.md).
 
 eWeLink power, voltage and current history needs an electrical reporting window. To collect it without an open browser, enable the optional [background electrical collection](docs/integrations/ewelink-cloud.md#background-electrical-collection-milestone-7d) (`Ewelink:ContinuousElectricalCollection`, off by default) and restart the backend. It stays within the shared CoolKit request budget, so coverage is partial. See [eWeLink electrical collection](docs/architecture/13-ewelink-electrical-collection.md).
 

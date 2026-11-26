@@ -47,7 +47,7 @@ internal static class LogicalDeviceInitializationCommand
         {
             if (!await app.Services.GetRequiredService<Migrations>().VerifyLogicalDevicesAsync(timeout.Token))
             {
-                logger.LogError("Logical device initialization requires migrations 017 and 018. Apply migrations with the migration account first.");
+                logger.LogError("Logical device initialization requires migrations 017, 018 and 019. Apply migrations with the migration account first.");
                 return 1;
             }
             await using var scope = app.Services.CreateAsyncScope();

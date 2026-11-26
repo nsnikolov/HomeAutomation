@@ -50,7 +50,7 @@ All labels use the property time zone. Instants in tooltips and replacement mark
 
 ## Availability
 
-A 503 from the logical device or history API shows "History is not available yet" (migrations 017 and 018). This is kept separate from "No readings were recorded in this range", "History for this range has not been aggregated yet" and a generic load failure. Without logical devices, the page points to the documented initialization command. Existing pages are unchanged.
+A 503 from the logical device or history API shows "History is not available yet" (migrations 017, 018 and 019). This is kept separate from "No readings were recorded in this range", "History for this range has not been aggregated yet" and a generic load failure. Without logical devices, the page points to the documented initialization command. Existing pages are unchanged.
 
 ## Accessibility
 

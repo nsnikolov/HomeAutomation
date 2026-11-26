@@ -255,7 +255,7 @@ function Legend({ kind, series }: { kind: 'measurement' | 'measured' | 'relay'; 
 function Unavailable({ error }: { error: Error }) {
   if (error instanceof LogicalApiError && error.status === 503)
     return <Card className="placeholder"><p><strong>History is not available yet.</strong></p><p className="muted">The server has not been upgraded
-      for aggregated and logical-device history (migrations 017 and 018). Existing pages keep working.</p></Card>
+      for aggregated and logical-device history (migrations 017, 018 and 019). Existing pages keep working.</p></Card>
   if (error instanceof LogicalApiError && error.status === 409) return <p role="alert">{error.message}</p>
   if (error instanceof LogicalApiError && error.status === 400) return <p role="alert">{error.message}</p>
   return <p role="alert">History could not be loaded. Try again later.</p>

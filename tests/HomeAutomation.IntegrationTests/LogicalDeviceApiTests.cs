@@ -57,6 +57,8 @@ public sealed class LogicalDeviceApiTests(ApiTests.Host host) : IClassFixture<Ap
     [InlineData(13, HttpStatusCode.BadRequest, "ambiguousEndpoint")]
     [InlineData(14, HttpStatusCode.NotFound, "notFound")]
     [InlineData(15, HttpStatusCode.BadRequest, "invalid")]
+    [InlineData(16, HttpStatusCode.Conflict, "releaseRequired")]
+    [InlineData(17, HttpStatusCode.BadRequest, "historyConfirmation")]
     public async Task ReplacementOutcomesMapToDistinctResponses(long device, HttpStatusCode status, string code)
     {
         using var owner = await ClientAsync("logical-owner", csrf: true);
@@ -66,6 +68,44 @@ public sealed class LogicalDeviceApiTests(ApiTests.Host host) : IClassFixture<Ap
         Assert.Equal(status, response.StatusCode);
         Assert.Contains($"\"code\":\"{code}\"", body);
         if (code == "missingCapabilities") Assert.Contains("\"missing\":[\"humidityMeasurement\"]", body);
+    }
+
+    [Fact]
+    public async Task ManagementRoutesReadForMembersAndChangeOnlyForOwnersWithAntiforgery()
+    {
+        using var viewer = await ClientAsync("viewer", csrf: true);
+        using var physical = await viewer.GetAsync(Route + "/physical-devices");
+        Assert.Equal(HttpStatusCode.OK, physical.StatusCode);
+        using (var json = JsonDocument.Parse(await physical.Content.ReadAsStringAsync()))
+        {
+            Assert.False(json.RootElement.GetProperty("canManage").GetBoolean());
+            var device = json.RootElement.GetProperty("devices")[0];
+            Assert.Equal(("Sonoff POW", 4, "manual", true), (device.GetProperty("name").GetString(), device.GetProperty("logicalDeviceId").GetInt32(),
+                device.GetProperty("logicalCreation").GetString(), device.GetProperty("everAssigned").GetBoolean()));
+        }
+        Assert.Equal(HttpStatusCode.NotFound, (await viewer.GetAsync("/api/v1/properties/2/logical-devices/physical-devices")).StatusCode);
+
+        using var preview = await viewer.GetAsync(Route + "/4/release-preview?deviceId=9&effectiveAt=2026-11-26T14:37:00Z");
+        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+        Assert.Contains("\"readings\":12", await preview.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NoContent, (await viewer.GetAsync(Route + "/4/release-preview?deviceId=8")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await viewer.GetAsync(Route + "/4/release-preview")).StatusCode);
+
+        var unassign = new UnassignPhysicalDevice("main", 21, DateTimeOffset.Parse("2026-11-26T15:00:00Z"), "Removed");
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsJsonAsync(Route + "/4/unassign", unassign)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsJsonAsync(Route + "/4/restore", new RestoreLogicalDevice(null))).StatusCode);
+        using var noToken = host.CreateClient();
+        noToken.DefaultRequestHeaders.Add("X-Test-User", "logical-owner");
+        Assert.Equal(HttpStatusCode.BadRequest, (await noToken.PostAsJsonAsync(Route + "/4/unassign", unassign)).StatusCode);
+
+        using var owner = await ClientAsync("logical-owner", csrf: true);
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsJsonAsync(Route + "/4/unassign", unassign)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await owner.PostAsJsonAsync(Route + "/4/unassign", unassign with { ExpectedAssignmentId = 10 })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsJsonAsync(Route + "/4/restore", new RestoreLogicalDevice("Back"))).StatusCode);
+        using var created = await owner.PostAsJsonAsync(Route, new CreateLogicalDevice("Spare probe", "Sensor", null, null, null, null, null, null, null));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Contains(LogicalFixture.Calls, call => call == "unassign:1:logical-owner:4");
+        Assert.Contains(LogicalFixture.Calls, call => call == "restore:1:logical-owner:4");
     }
 
     [Fact]
@@ -135,7 +175,7 @@ public sealed class LogicalDeviceApiTests(ApiTests.Host host) : IClassFixture<Ap
         public Task<IReadOnlyList<ReplacementCandidate>?> CandidatesAsync(long property, long id, string channel, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<ReplacementCandidate>?>(id == 4 ? [] : null);
         public Task<LogicalChangeResult> CreateAsync(long property, string user, CreateLogicalDevice command, CancellationToken ct) =>
-            Task.FromResult(Change(property, user, "create", 4, command.DeviceId));
+            Task.FromResult(Change(property, user, "create", 4, command.DeviceId ?? 0));
         public Task<LogicalChangeResult> UpdateAsync(long property, string user, long id, UpdateLogicalDevice command, CancellationToken ct) =>
             Task.FromResult(Change(property, user, "update", id, 9));
         public Task<LogicalChangeResult> AssignAsync(long property, string user, long id, AssignPhysicalDevice command, CancellationToken ct) =>
@@ -146,6 +186,17 @@ public sealed class LogicalDeviceApiTests(ApiTests.Host host) : IClassFixture<Ap
             CancellationToken ct) => Task.FromResult(Change(property, user, "correct", id, 9));
         public Task<LogicalChangeResult> ArchiveAsync(long property, string user, long id, ArchiveLogicalDevice command, CancellationToken ct) =>
             Task.FromResult(Change(property, user, "archive", id, 9));
+
+        public Task<PhysicalDeviceList> PhysicalDevicesAsync(long property, string user, CancellationToken ct) =>
+            Task.FromResult(new PhysicalDeviceList(user == "logical-owner", [new(9, "Sonoff POW", "ewelink", "Sonoff", "POWR3", "SmartSwitch", null,
+                [Capability.PowerMeasurement], [], false, 4, "Heat pump meter", "manual", true)]));
+        public Task<ReleasePreview?> ReleasePreviewAsync(long property, long target, long deviceId, long? endpointId, DateTimeOffset effectiveAt,
+            CancellationToken ct) => Task.FromResult(deviceId == 9 ? new ReleasePreview(4, "Heat pump meter", "automatic", ["main"], 12,
+                effectiveAt.AddHours(-2), effectiveAt.AddMinutes(-5), true, false, 1) : null);
+        public Task<LogicalChangeResult> UnassignAsync(long property, string user, long id, UnassignPhysicalDevice command, CancellationToken ct) =>
+            Task.FromResult(Change(property, user, "unassign", id, command.ExpectedAssignmentId));
+        public Task<LogicalChangeResult> RestoreAsync(long property, string user, long id, RestoreLogicalDevice command, CancellationToken ct) =>
+            Task.FromResult(Change(property, user, "restore", id, 9));
 
         public Task<LogicalHistoryRead> HistoryAsync(long property, long id, string channel, Metric metric, HistoryQuery query, CancellationToken ct)
         {
@@ -172,6 +223,8 @@ public sealed class LogicalDeviceApiTests(ApiTests.Host host) : IClassFixture<Ap
                 13 => LogicalChangeResult.Fail(LogicalChangeStatus.AmbiguousEndpoint, "Choose an endpoint."),
                 14 => LogicalChangeResult.Fail(LogicalChangeStatus.NotFound, "Not found."),
                 15 => LogicalChangeResult.Fail(LogicalChangeStatus.Invalid, "Invalid time."),
+                16 => LogicalChangeResult.Fail(LogicalChangeStatus.ReleaseRequired, "In use by another logical device."),
+                17 => LogicalChangeResult.Fail(LogicalChangeStatus.HistoryConfirmation, "Readings stay with the other device."),
                 _ => LogicalChangeResult.Done(id)
             };
         }

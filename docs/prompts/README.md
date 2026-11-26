@@ -61,3 +61,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 57. 2026-11-26 · [HomeAutomation — Milestone 7B: Logical Devices, Physical Device Replacement and Continuous History](0057-logical-devices-and-replacement.md)
 58. 2026-11-26 · [HomeAutomation — Milestone 7C: Historical Charts, Energy Visualization and Device Comparisons](0058-historical-charts-and-energy.md)
 59. 2026-11-26 · [HomeAutomation — Milestone 7D: Continuous eWeLink Power Telemetry](0059-continuous-ewelink-power-telemetry.md)
+60. 2026-11-26 · [HomeAutomation — Milestone 7E: Automatic Logical Device Management](0060-automatic-logical-device-management.md)

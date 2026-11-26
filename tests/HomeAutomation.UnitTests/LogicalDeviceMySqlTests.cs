@@ -11,6 +11,7 @@ namespace HomeAutomation.UnitTests;
 /// Opt-in tests against a disposable <c>homeautomation_logical_test</c> schema. The optional runtime connection should use an
 /// account limited to SELECT, INSERT and UPDATE (plus the documented DELETE on dashboard_groups for layout saves).
 /// </summary>
+[Collection(LogicalSchemaCollection.Name)]
 public sealed class LogicalDeviceMySqlTests
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 26, 18, 0, 0, TimeSpan.Zero);
@@ -27,7 +28,7 @@ public sealed class LogicalDeviceMySqlTests
         await using (var db = await admin.OpenAsync(default))
             await db.ExecuteAsync("""
                 DROP TABLE IF EXISTS logical_device_audit, logical_device_assignments, logical_devices;
-                DELETE FROM schema_migrations WHERE name LIKE '%.018_logical_devices.sql';
+                DELETE FROM schema_migrations WHERE name LIKE '%.018_logical_devices.sql' OR name LIKE '%.019_logical_device_management.sql';
                 """);
         var before = await LedgerAsync(admin);
         var rows = await CountsAsync(admin, fixture.Property);
@@ -40,7 +41,8 @@ public sealed class LogicalDeviceMySqlTests
 
         await new Migrations(admin).ApplyAsync(default);
 
-        Assert.Equal(before, (await LedgerAsync(admin)).Where(item => !item.Name.EndsWith(".018_logical_devices.sql")).ToList());
+        Assert.Equal(before, (await LedgerAsync(admin)).Where(item => !item.Name.EndsWith(".018_logical_devices.sql") &&
+            !item.Name.EndsWith(".019_logical_device_management.sql")).ToList());
         Assert.True(await new Migrations(Runtime()).VerifyLogicalDevicesAsync(default));
         Assert.Equal(rows, await CountsAsync(admin, fixture.Property));
     }
@@ -188,7 +190,8 @@ public sealed class LogicalDeviceMySqlTests
         await store.ExecuteInitializationAsync(fixture.Property, default);
         var logical = await LogicalForAsync(fixture, oldMeter);
         var current = (await store.GetAsync(fixture.Property, fixture.Owner, logical, default))!.Device.Current.Single();
-        Assert.Equal(LogicalChangeStatus.Conflict, (await store.ReplaceAsync(fixture.Property, fixture.Owner, logical,
+        // Hardware that is the active device of another logical device must be released explicitly (Milestone 7E).
+        Assert.Equal(LogicalChangeStatus.ReleaseRequired, (await store.ReplaceAsync(fixture.Property, fixture.Owner, logical,
             new("main", current.Id, newMeter, null, cutover, null, false), default)).Status);
         var other = await LogicalForAsync(fixture, newMeter);
         Assert.Equal(LogicalChangeStatus.Done, (await store.ArchiveAsync(fixture.Property, fixture.Owner, other, new("Merged"), default)).Status);
