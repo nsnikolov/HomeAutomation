@@ -4,7 +4,7 @@ Updated 2026-11-26. [AGENTS.md](../AGENTS.md) contains the shared development ru
 
 ## Current implementation
 
-- The foundation ships an authenticated React application, property and room inventory, typed device capabilities, an ASP.NET Core API, MySQL telemetry persistence, health endpoints, and SignalR. The simulator covers parallel inverters, a shared battery, an AC, a metering switch, and a sensor. The backend ingests while browsers are closed.
+- The foundation ships an authenticated React application, property and room inventory, typed device capabilities, an ASP.NET Core API, MySQL telemetry persistence, health endpoints, and SignalR. The backend ingests provider data while browsers are closed. The demonstration simulator is opt-in for isolated development and tests and is off by default (see below).
 - Cookie authentication and server-side property membership protect API operations and SignalR. A bootstrapped account starts as Viewer. Owner, Admin, and Operator can edit a property's shared dashboard. The guarded initial-owner command targets a verified sole Viewer membership. The property creation command provisions the property and its initial Owner together. See [property setup](../README.md#assign-the-initial-owner-of-countryside-house).
 - The monitoring Dashboard supports grouped widgets with cross-provider measurements, configurable widget widths and measurement columns, pointer and keyboard measurement ordering, automatic freshness or fixed colors, observation provenance, and links to authorized device views. The dashboard itself is read-only for equipment. Layout edits are stored in MySQL.
 - Widget Compact/Detailed mode and measurement expansion are independent browser preferences scoped to account, property, and widget. A new widget starts Compact and expanded. Global Compact keeps expansion, and global Detailed expands every widget. A browser reload restores preferences from localStorage. See [widget persistence verification](prompts/0050-persist-dashboard-widget-view.md).
@@ -20,6 +20,12 @@ Updated 2026-11-26. [AGENTS.md](../AGENTS.md) contains the shared development ru
   - **Samples:** they come only from device frames, use receipt-time provenance, and never come from timers or cached HTTP values. The 2-minute hold is unchanged, so coverage stays honestly partial.
   - **Unchanged:** no migration, no new worker, no vault schema change beyond two optional fields.
   - See [eWeLink electrical collection](architecture/13-ewelink-electrical-collection.md).
+- **Runtime simulation removed (2026-11-26).**
+  - **Defaults:** `Simulator:Enabled` defaults to false in code and in `appsettings.json`. The worker no longer registers demo devices in Countryside House, writes observations or broadcasts.
+  - **Readers:** `/state`, `/devices` and `/history` now serve real-provider devices and series. Stored simulator data is hidden from Devices, Energy, the dashboard catalog, 7A history and logical history.
+  - **Logical devices:** initialization, provisioning and new assignments skip simulated hardware.
+  - **Cleanup:** the explicit property-scoped `--cleanup-simulator-data --simulator-property=<id>` command is a dry run by default; deletion needs `--execute --confirm-simulator-data-deletion` and a maintenance account with `SELECT, DELETE` plus `UPDATE` on `properties`. It deletes only provenance-owned rows, preserves and reports mixed records and dashboard references, and never edits layouts. No migration.
+  - See [simulator removal](architecture/15-simulator-removal.md).
 - Milestone 7E makes logical devices manageable from **Devices** and covers new hardware automatically.
   - **UI:** filters; create (with or without hardware), edit, assign, replace, unassign, archive and restore; an **Unassigned and new hardware** view.
   - **Migration 019:** `logical_devices.creation` and new audit actions. No grant change.
@@ -39,7 +45,8 @@ Updated 2026-11-26. [AGENTS.md](../AGENTS.md) contains the shared development ru
 
 | Commit | Change |
 | --- | --- |
-| Milestone 7E | Logical device management UI, automatic provisioning, migration 019, unassign/restore and explicit release of auto-created identities. See [prompt 0060](prompts/0060-automatic-logical-device-management.md). |
+| Simulator removal | Opt-in simulator, provider-only readers and Energy page, explicit dry-run-first simulator cleanup command. See [prompt 0061](prompts/0061-remove-runtime-simulation-data.md). |
+| `ef4348d` | Logical device management UI, automatic provisioning, migration 019, unassign/restore and explicit release of auto-created identities. See [prompt 0060](prompts/0060-automatic-logical-device-management.md). |
 | `73bc40a` | Optional background eWeLink electrical collection, budget daily share, per-meter back-off and receipt-time duplicate fix. See [prompt 0059](prompts/0059-continuous-ewelink-power-telemetry.md). |
 | `33a2c5c` | History page with logical-device charts, energy provenance, quality, replacement markers and comparisons. See [prompt 0058](prompts/0058-historical-charts-and-energy.md). |
 | `35838fa` | Milestone 7B logical devices, replacement, continuous logical history, logical dashboard sources and the Devices replacement UI. See [prompt 0057](prompts/0057-logical-devices-and-replacement.md). |
@@ -109,6 +116,7 @@ Keep manual commands on provider pages and behind explicit authorization. Record
 - The last read-only live Dashboard audit confirmed that the 012/013 schema changes were present but their two ledger records were missing. The [record-only repair](../README.md#configurable-monitoring-dashboard) restored HTTP 200 on isolated MySQL. The live schema was left untouched by the audit, and there is no recorded confirmation that the operator subsequently applied the ledger repair. If the 503 persists, verify the current ledger and schema before using the documented repair. See the [diagnosis](prompts/0049-dashboard-schema-503.md).
 - The last documented eWeLink inventory included six devices, while CoolKit reported seven things. Pagination now follows a safe advancing cursor after a short page. The live availability of the missing thermostat is still unverified. Use normal polling and sanitized diagnostics to investigate within quota.
 - Milestones 7A, 7B and 7C are implemented but **not deployed**. Until migrations 017, 018 and 019 are applied, the History page shows "History is not available yet" and other pages are unaffected. Migrations 017 and 018 have not been applied to the live database, no backfill or initialization has run there, and the running backend has not been restarted. Follow the approved [deployment sequence](../README.md#logical-devices-and-device-replacement): backup, migrate, restart, 7A backfill dry run then execute, logical initialization dry run then execute, then validation. No grant change is needed.
+- The simulator removal is implemented but **not deployed**, and no cleanup has run on live data. The live Countryside House property probably still holds demonstration devices and months of 10-second samples. Follow the [deployment procedure](architecture/15-simulator-removal.md#deployment-procedure-later-with-explicit-approval): backup, restart with the simulator off, dry run, review, approved execution, verification. Run cleanup after any 7B initialization, or initialization first: simulated devices are skipped either way.
 - Milestone 7E is implemented but **not deployed**. Migration 019 has not been applied anywhere live. After the approved 017–019 migration, restart, backfill and dry-run-first initialization, provisioning covers new hardware automatically; set `LogicalDevices:AutoProvision=false` to keep it off.
 - Milestone 7D is implemented but **not deployed or enabled**.
   - **Deployment:** it needs no migration beyond 010. After an approved restart with `Ewelink:ContinuousElectricalCollection=true`, follow the [24-hour no-browser verification](integrations/ewelink-cloud.md#background-electrical-collection-milestone-7d). For a vault-backed eWeLink profile, the setting requires a dry-run-first re-import.
@@ -122,6 +130,15 @@ Keep manual commands on provider pages and behind explicit authorization. Record
 
 ## Verification baseline
 
+- **Simulator removal**:
+  - **Backend:** the Release build passed with zero warnings. Tests reported 320 passes and 11 opt-in skips with disposable MySQL 8.0.46 fixtures, twice in a row; without fixtures, 293 passes and 38 skips.
+  - **New tests:**
+    - shipped configuration and options keep the simulator off, and a default host never invokes the provider or broadcasts;
+    - cleanup argument rules;
+    - on MySQL: hidden simulator data in state, history, catalog and logical management; a no-write dry run with exact counts, conflicts and dashboard references; execution with unchanged real samples, rollups, devices, mixed logical history, dashboards and seeds; idempotent reruns; rollback and recovery; refusal of a stale plan; and a schema without the optional tables.
+  - **CLI smoke on the disposable server:** a dry run with the runtime account, execution with a least-privilege account, an idempotent rerun, and refusal with the runtime account.
+  - **Frontend:** the production build passed, and Vitest reported 93 passes, including 3 Energy tests.
+  - **Not touched:** the live database, the running backend and the providers.
 - **Milestone 7E**:
   - **Backend:** the Release build passed with zero warnings. Tests reported 302 passes and 11 opt-in skips with the history, logical and dashboard fixtures on disposable MySQL 8.0.46, twice in a row; without fixtures, 281 passes and 32 skips. The logical tests run as the DML-only `logical_runtime` account and share one xUnit collection, because some of them reshape the fixture schema.
   - **New MySQL tests:**

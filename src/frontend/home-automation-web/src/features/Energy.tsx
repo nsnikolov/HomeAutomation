@@ -86,7 +86,7 @@ export function HistoryChart({ property, title, curves, hours, pollSeconds, unit
               strokeWidth={2} dot={window ? { r: 2 } : false} isAnimationActive={false} connectNulls={false} />)}
         </ComposedChart>
       </ResponsiveContainer>
-    </div> : <div className="chart-empty" role="status">{pending ? 'Loading readings…' : 'Waiting for recorded readings.'}</div>}
+    </div> : <div className="chart-empty" role="status">{pending ? 'Loading readings…' : 'No provider readings were recorded in this range.'}</div>}
     {ready && <div className="chart-summary"><span>Latest recorded</span>{curves.map(curve => {
       const value = points.findLast(point => typeof point[curve.metric] === 'number')?.[curve.metric]
       return <span key={curve.metric}><strong>{value == null ? '—' : `${value.toLocaleString()} ${unit}`}</strong> {curve.label}</span>
@@ -94,15 +94,19 @@ export function HistoryChart({ property, title, curves, hours, pollSeconds, unit
   </Card>
 }
 
+/**
+ * Recent provider readings only: the installation's solar and household power as the provider reports them, and the battery
+ * power of the device that reports it. Nothing is estimated or summed here; longer ranges and energy are on the History page.
+ */
 export function Energy({ property, state, pollSeconds }: { property: Property; state?: PropertyState; pollSeconds: number }) {
   const [hours, setHours] = useState(1)
-  const meter = state?.devices.find(device => device.kind === 'smartSwitch')?.endpoints[0]?.id
-  const battery = state?.devices.find(device => device.kind === 'battery')?.endpoints[0]?.id
+  const battery = state?.devices.flatMap(device => device.endpoints)
+    .find(endpoint => endpoint.capabilities.some(capability => capability.code === 'batteryPower'))?.id
   const batteryCurves = useMemo<Curve[]>(() => [{ metric: 'batteryPower', label: 'Battery power', color: '#117d80', endpoint: battery }], [battery])
-  const meterCurves = useMemo<Curve[]>(() => [{ metric: 'energy', label: 'Heater meter counter', color: '#5373c7', endpoint: meter }], [meter])
 
   return <>
-    <div className="page-heading page-heading-inline"><div><h1>Energy</h1><p>Historical solar production, household demand and device readings.</p></div>
+    <div className="page-heading page-heading-inline"><div><h1>Energy</h1><p>Recent solar production, household demand and battery power
+      recorded from your providers. Use History for longer ranges and energy totals.</p></div>
       <select className="input select-input" aria-label="History range" value={hours} onChange={event => setHours(Number(event.target.value))}>
         <option value={1}>Last hour</option><option value={6}>Last 6 hours</option>
       </select>
@@ -110,7 +114,7 @@ export function Energy({ property, state, pollSeconds }: { property: Property; s
     <div className="energy-grid">
       <TrendCard property={property} title="Solar and household power" hours={hours} pollSeconds={pollSeconds} />
       {battery !== undefined && <TrendCard property={property} title="Battery power" hours={hours} pollSeconds={pollSeconds} curves={batteryCurves} />}
-      {meter !== undefined && <TrendCard property={property} title="Water heater energy counter" hours={hours} pollSeconds={pollSeconds} unit="kWh" curves={meterCurves} />}
     </div>
+    {state && battery === undefined && <p className="muted">No connected device reports battery power.</p>}
   </>
 }

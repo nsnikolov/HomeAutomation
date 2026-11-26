@@ -36,6 +36,13 @@ public sealed class TelemetryHoldPolicy(GrowattOptions growatt, DaikinOptions da
     public static readonly TimeSpan Fallback = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan Minimum = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan Maximum = TimeSpan.FromHours(24);
+    public const string SimulatorSource = "simulator";
+
+    /// <summary>
+    /// Simulated series and devices are shown only while the opt-in simulator is enabled, so stored demonstration data never
+    /// appears as provider data in normal operation.
+    /// </summary>
+    public bool Shows(string source) => source != SimulatorSource || simulator.Enabled;
 
     public TimeSpan Hold(string source, Metric metric) => Clamp(source switch
     {

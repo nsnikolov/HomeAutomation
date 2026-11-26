@@ -87,3 +87,7 @@ See the [README sequence](../../README.md#logical-devices-and-device-replacement
 - Releasing hardware from an identity that also has other hardware history is allowed; the preview states it, and that identity is archived only if the user chooses and it has no other active device.
 - Creating an identity for hardware that another identity uses requires releasing it through Assign or Replace on an existing identity first.
 - Live behavior on the production inventory is unverified; only disposable databases and mocks were used.
+
+## Simulated hardware
+
+Devices of the opt-in simulator never receive identities from initialization or provisioning, are not offered as candidates or in the physical-device list, and cannot be newly assigned. Existing assignments still display, and their simulated series read as unsupported while the simulator is off. The [simulator cleanup](15-simulator-removal.md) removes logical identities whose every assignment is simulated and keeps those that also have real hardware.

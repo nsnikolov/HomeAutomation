@@ -418,7 +418,7 @@ public sealed class TelemetryHistoryReader(Database database, Migrations migrati
             {join}
             WHERE s.property_id=@propertyId
             ORDER BY s.id
-            """, ct, new { propertyId }))).AsList();
+            """, ct, new { propertyId }))).Where(row => holds.Shows(row.Source)).ToList();
     }
 
     /// <summary>

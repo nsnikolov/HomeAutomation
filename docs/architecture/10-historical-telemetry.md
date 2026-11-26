@@ -4,7 +4,7 @@ Milestone 7A adds provider-neutral history on top of the existing raw store. Eve
 
 ## Raw observations
 
-- `TelemetryWriter.PersistAsync` remains the single ingestion path for Growatt, Daikin, eWeLink, Tuya and the simulator. Ingestion is unchanged.
+- `TelemetryWriter.PersistAsync` remains the single ingestion path for Growatt, Daikin, eWeLink, Tuya and the opt-in simulator. Simulator series are hidden from every history read unless the simulator is enabled; see [simulator removal](15-simulator-removal.md). Ingestion is unchanged.
 - Raw rows are keyed `(series_id, observed_at_utc)`. A repeated observation instant keeps its first stored value. `latest_readings` only advances on a strictly newer observation, so late or out-of-order rows enter history without regressing current state. There is no correction mechanism. A corrected value would need a new explicit, audited path rather than last-write-wins.
 - `observed_at_utc` is the provider time when one exists. `received_at_utc` is the server receipt time. `timestamp_source = 'serverReceived'` marks observations whose only time is receipt, such as timestamp-less eWeLink frames. The raw history API reports this as `timestampSource`.
 - Adapters reject non-finite values before persistence. Aggregation skips any stored value that is unusable for its metric and marks the bucket `invalidValue`. Missing readings are never converted to zero. Tuya re-persists last-known readings with their original timestamps, so the primary key makes them idempotent.

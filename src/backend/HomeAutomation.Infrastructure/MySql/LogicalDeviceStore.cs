@@ -64,7 +64,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         var reference = history.FirstOrDefault(item => item.ValidTo is null) ?? history.LastOrDefault();
         var referenceCapabilities = reference is null ? [] : Measurements(state.Devices[reference.DeviceId].Capabilities(reference.EndpointId));
         var active = state.Assignments.Where(item => item.ValidTo is null && item.LogicalDeviceId != id).ToList();
-        return state.Devices.Values.Select(device =>
+        return state.Devices.Values.Where(device => !device.Simulated).Select(device =>
         {
             var capabilities = Measurements(device.Capabilities(null));
             var comparison = LogicalDeviceRules.Compare(referenceCapabilities, capabilities);
@@ -267,7 +267,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         var state = await LoadAsync(db, null, property, ct);
         var role = await RoleAsync(db, null, property, user, ct);
         var origins = state.Logical.Values.Where(item => item.OriginDeviceId is not null).Select(item => item.OriginDeviceId!.Value).ToHashSet();
-        return new(CanManage(role), state.Devices.Values.Select(device =>
+        return new(CanManage(role), state.Devices.Values.Where(device => !device.Simulated).Select(device =>
         {
             var owner = state.Assignments.FirstOrDefault(item => item.DeviceId == device.Id && item.ValidTo is null);
             var logical = owner is null ? null : state.Logical[owner.LogicalDeviceId];
@@ -344,6 +344,8 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
             WHERE EXISTS (SELECT 1 FROM logical_devices l WHERE l.property_id=d.property_id)
               AND NOT EXISTS (SELECT 1 FROM logical_devices o WHERE o.property_id=d.property_id AND o.origin_device_id=d.id)
               AND NOT EXISTS (SELECT 1 FROM logical_device_assignments a WHERE a.property_id=d.property_id AND a.device_id=d.id)
+              AND NOT EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id=b.connection_id AND c.property_id=b.property_id
+                              WHERE b.device_id=d.id AND b.property_id=d.property_id AND c.provider_code='simulator')
             ORDER BY d.property_id
             """, ct))).ToList();
     }
@@ -427,7 +429,8 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         foreach (var device in state.Devices.Values)
         {
             var count = series.GetValueOrDefault(device.Id);
-            string? skipped = origins.Contains(device.Id) ? "already initialized"
+            string? skipped = device.Simulated ? "simulated device"
+                : origins.Contains(device.Id) ? "already initialized"
                 : state.Assignments.FirstOrDefault(item => item.DeviceId == device.Id) is { } assigned
                     ? $"already assigned to logical device {assigned.LogicalDeviceId}" : null;
             List<InitializationChannel> channels;
@@ -495,7 +498,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
 
     private static LogicalChangeResult? Target(Context context, long deviceId, long? endpointId)
     {
-        if (!context.State.Devices.TryGetValue(deviceId, out var device))
+        if (!context.State.Devices.TryGetValue(deviceId, out var device) || device.Simulated)
             return Fail(LogicalChangeStatus.NotFound, "Choose a physical device of this property.");
         if (endpointId is { } endpoint && device.Endpoints.All(item => item.Id != endpoint))
             return Invalid("Choose an endpoint of the selected device.");
@@ -744,6 +747,8 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         public IEnumerable<Capability> Capabilities(long? endpoint) =>
             Endpoints.Where(item => endpoint is null || item.Id == endpoint).SelectMany(item => item.Capabilities).Distinct();
         public bool RequiresEndpoint => LogicalDeviceRules.RequiresEndpoint(Endpoints.Select(item => item.Capabilities));
+        /// <summary>Demonstration hardware from the opt-in simulator never receives new logical identities or assignments.</summary>
+        public bool Simulated => Provider == TelemetryHoldPolicy.SimulatorSource;
     }
 
     private sealed record PhysicalEndpoint(long Id, string Name, string Key, IReadOnlyList<Capability> Capabilities);

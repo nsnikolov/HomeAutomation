@@ -7,9 +7,12 @@ using static HomeAutomation.Infrastructure.MySql.Database;
 
 namespace HomeAutomation.Infrastructure.MySql;
 
-public sealed class MonitoringReader(Database database, TimeProvider timeProvider, SimulatorOptions simulator, GrowattOptions growatt)
+public sealed class MonitoringReader(Database database, TimeProvider timeProvider, SimulatorOptions simulator, GrowattOptions growatt,
+    TelemetryHoldPolicy? holdPolicy = null)
     : IMonitoringReader, IGrowattMonitoringReader
 {
+    private readonly TelemetryHoldPolicy holds = holdPolicy ?? new(growatt, new(), new(), new(), simulator);
+
     public async Task<IReadOnlyList<PropertySummary>> PropertiesAsync(string userId, CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
@@ -37,11 +40,15 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             cancellationToken, new { PropertyId = propertyId }))).AsList();
     }
 
+    /// <summary>
+    /// Every device of the property bound to a real provider, with its latest provider readings. Simulated devices and series
+    /// appear only while the opt-in simulator is enabled. Missing readings stay missing.
+    /// </summary>
     public Task<PropertyState> StateAsync(long propertyId, CancellationToken cancellationToken) =>
-        ReadStateAsync(propertyId, null, "simulator", cancellationToken);
+        ReadStateAsync(propertyId, null, null, cancellationToken);
 
     public async Task<DeviceDetails?> DeviceAsync(long propertyId, long deviceId, CancellationToken cancellationToken) =>
-        (await ReadStateAsync(propertyId, deviceId, "simulator", cancellationToken)).Devices.SingleOrDefault();
+        (await ReadStateAsync(propertyId, deviceId, null, cancellationToken)).Devices.SingleOrDefault();
 
     public async Task<PropertyState?> GrowattStateAsync(long propertyId, string siteKey, CancellationToken cancellationToken)
     {
@@ -52,21 +59,31 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
         return matches ? await ReadStateAsync(propertyId, null, "growatt", cancellationToken) : null;
     }
 
-    private async Task<PropertyState> ReadStateAsync(long propertyId, long? deviceId, string provider, CancellationToken cancellationToken)
+    /// <param name="provider">One provider's devices and series, or null for every real provider.</param>
+    private async Task<PropertyState> ReadStateAsync(long propertyId, long? deviceId, string? provider, CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
-        using var results = await connection.QueryMultipleAsync(Query(
-            """
-            SELECT d.id AS Id, d.room_id AS RoomId, d.name AS Name, d.kind AS Kind, d.manufacturer AS Manufacturer,
-                   d.model AS Model, s.connectivity AS Connectivity, s.fault_code AS FaultCode,
-                   s.last_contact_utc AS LastContact, s.observed_at_utc AS StatusObserved
-            FROM devices d LEFT JOIN device_state s ON s.device_id = d.id
-            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId)
-              AND (CASE WHEN @Provider = 'simulator' THEN NOT EXISTS (
+        var parameters = new
+        {
+            PropertyId = propertyId, DeviceId = deviceId, Provider = provider,
+            Simulator = simulator.Enabled ? TelemetryHoldPolicy.SimulatorSource : "growatt"
+        };
+        const string bound = """
+            (CASE WHEN @Provider IS NULL THEN EXISTS (
                   SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
-                  WHERE b.device_id = d.id AND c.provider_code IN ('growatt','daikin','ewelink','tuya'))
+                  WHERE b.device_id = d.id AND c.provider_code IN ('growatt','daikin','ewelink','tuya',@Simulator))
               ELSE EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
                            WHERE b.device_id = d.id AND c.provider_code = @Provider) END)
+            """;
+        using var results = await connection.QueryMultipleAsync(Query(
+            $"""
+            SELECT d.id AS Id, d.room_id AS RoomId, d.name AS Name, d.kind AS Kind, d.manufacturer AS Manufacturer,
+                   d.model AS Model, s.connectivity AS Connectivity, s.fault_code AS FaultCode,
+                   s.last_contact_utc AS LastContact, s.observed_at_utc AS StatusObserved,
+                   COALESCE((SELECT c.provider_code FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
+                             WHERE b.device_id = d.id ORDER BY c.provider_code = 'simulator', b.id LIMIT 1), 'unknown') AS Provider
+            FROM devices d LEFT JOIN device_state s ON s.device_id = d.id
+            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId) AND {bound}
             ORDER BY d.id;
 
             SELECT id AS Id, device_id AS DeviceId, name AS Name FROM device_endpoints
@@ -77,32 +94,32 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             WHERE e.property_id = @PropertyId AND (@DeviceId IS NULL OR e.device_id = @DeviceId) ORDER BY c.capability_code;
 
             SELECT t.endpoint_id AS EndpointId, t.metric AS Metric, l.observed_at_utc AS ObservedAt,
-                   l.numeric_value AS Number, l.boolean_value AS Flag, l.status_value AS Code
+                   l.numeric_value AS Number, l.boolean_value AS Flag, l.status_value AS Code, t.source_key AS Source
             FROM telemetry_series t LEFT JOIN latest_readings l ON l.series_id = t.id
             LEFT JOIN device_endpoints e ON e.id = t.endpoint_id
-            WHERE t.property_id = @PropertyId AND t.source_key = @Provider
-                  AND (@DeviceId IS NULL OR e.device_id = @DeviceId) ORDER BY t.metric;
+            WHERE t.property_id = @PropertyId
+                  AND (CASE WHEN @Provider IS NULL THEN t.source_key <> 'simulator' OR t.source_key = @Simulator
+                       ELSE t.source_key = @Provider END)
+                  AND (@DeviceId IS NULL OR e.device_id = @DeviceId) ORDER BY t.metric, t.id;
 
             SELECT a.device_id AS DeviceId, d.name AS DeviceName, a.alert_code AS Code, a.occurred_at_utc AS OccurredAt
             FROM devices d JOIN device_alerts a ON a.device_id = d.id
-            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId)
-              AND (CASE WHEN @Provider = 'simulator' THEN NOT EXISTS (
-                  SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
-                  WHERE b.device_id = d.id AND c.provider_code IN ('growatt','daikin','ewelink','tuya'))
-              ELSE EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
-                           WHERE b.device_id = d.id AND c.provider_code = @Provider) END)
+            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId) AND {bound}
             ORDER BY a.occurred_at_utc DESC, a.id DESC LIMIT 12;
-            """, cancellationToken, new { PropertyId = propertyId, DeviceId = deviceId, Provider = provider }));
+            """, cancellationToken, parameters));
 
         var devices = await results.ReadAsync<DeviceRow>();
         var endpoints = (await results.ReadAsync<EndpointRow>()).ToLookup(row => row.DeviceId);
         var capabilities = (await results.ReadAsync<CapabilityRow>()).ToLookup(row => row.EndpointId);
-        var readings = (await results.ReadAsync<ReadingRow>()).ToLookup(row => row.EndpointId);
+        // Several streams can report one metric for an endpoint (for example Tuya snapshots and sensor reports); show the latest.
+        var readings = (await results.ReadAsync<ReadingRow>()).Where(row => Enum.TryParse<Metric>(row.Metric, out _))
+            .GroupBy(row => (row.EndpointId, row.Metric))
+            .Select(group => group.OrderByDescending(row => row.ObservedAt ?? DateTime.MinValue).First())
+            .ToLookup(row => row.EndpointId);
         var alerts = (await results.ReadAsync<AlertRow>()).Select(row =>
             new DeviceAlert(row.DeviceId, row.DeviceName, row.Code, Utc(row.OccurredAt))).ToArray();
         var now = timeProvider.GetUtcNow();
-        var freshness = TimeSpan.FromSeconds(provider == "growatt" ? growatt.FreshnessSeconds : simulator.FreshnessSeconds);
-        var growattTimeZone = provider == "growatt" ? TimeZoneInfo.FindSystemTimeZoneById(growatt.TimeZone) : null;
+        var growattTimeZone = TelemetryHoldPolicy.Zone(growatt.TimeZone);
 
         return new PropertyState(devices.Select(device =>
         {
@@ -114,6 +131,7 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             var qualities = deviceEndpoints.SelectMany(endpoint => endpoint.Measurements).Select(sample => sample.Quality).ToList();
             var quality = qualities.Contains(ReadingQuality.Fresh) ? ReadingQuality.Fresh
                 : qualities.Contains(ReadingQuality.Stale) ? ReadingQuality.Stale : ReadingQuality.Missing;
+            var freshness = provider == "growatt" ? TimeSpan.FromSeconds(growatt.FreshnessSeconds) : holds.Hold(device.Provider, Metric.SwitchOn);
             var online = Telemetry.Quality(Utc(device.StatusObserved), now, freshness) == ReadingQuality.Fresh
                 && Enum.TryParse<Connectivity>(device.Connectivity, out var status) ? status : Connectivity.Unknown;
             return new DeviceDetails(device.Id, device.RoomId, device.Name, Enum.Parse<DeviceKind>(device.Kind),
@@ -124,7 +142,8 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
         {
             var metric = Enum.Parse<Metric>(row.Metric);
             var observedAt = Utc(row.ObservedAt);
-            if (growattTimeZone is not null && Telemetry.IsDailyEnergyCounter(metric))
+            var freshness = provider == "growatt" ? TimeSpan.FromSeconds(growatt.FreshnessSeconds) : holds.Hold(row.Source, metric);
+            if (row.Source == "growatt" && growattTimeZone is not null && Telemetry.IsDailyEnergyCounter(metric))
             {
                 var quality = Telemetry.DailyEnergyQuality(observedAt, now, freshness, growattTimeZone);
                 return quality == ReadingQuality.Missing
@@ -136,28 +155,39 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
         }
     }
 
+    /// <summary>
+    /// Raw readings of one endpoint or installation metric from its most recently updated provider series. Simulated series are
+    /// used only while the simulator is enabled, and separate series are never merged.
+    /// </summary>
     public async Task<IReadOnlyList<HistoryPoint>> HistoryAsync(long propertyId, long? endpointId,
         Metric metric, DateTimeOffset from, DateTimeOffset to, CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenAsync(cancellationToken);
+        var series = await connection.QuerySingleOrDefaultAsync<long?>(Query(
+            """
+            SELECT s.id FROM telemetry_series s LEFT JOIN latest_readings l ON l.series_id = s.id
+            WHERE s.property_id = @PropertyId AND s.endpoint_id <=> @EndpointId AND s.metric = @Metric
+              AND (s.source_key <> 'simulator' OR @IncludeSimulator)
+            ORDER BY l.observed_at_utc IS NULL, l.observed_at_utc DESC, s.id LIMIT 1
+            """, cancellationToken, new { PropertyId = propertyId, EndpointId = endpointId, Metric = metric.ToString(),
+                IncludeSimulator = simulator.Enabled }));
+        if (series is null) return [];
         var rows = await connection.QueryAsync<HistoryRow>(Query(
             """
-            SELECT h.observed_at_utc AS ObservedAt, h.numeric_value AS Number,
-                   h.boolean_value AS Flag, h.status_value AS Code
-            FROM telemetry_series s JOIN telemetry_samples h ON h.series_id = s.id
-            WHERE s.property_id = @PropertyId AND s.endpoint_id <=> @EndpointId
-              AND s.source_key = 'simulator' AND s.metric = @Metric
-              AND h.observed_at_utc >= @From AND h.observed_at_utc <= @To
-            ORDER BY h.observed_at_utc DESC LIMIT 5000
-            """, cancellationToken, new { PropertyId = propertyId, EndpointId = endpointId, Metric = metric.ToString(), From = from.UtcDateTime, To = to.UtcDateTime }));
+            SELECT observed_at_utc AS ObservedAt, numeric_value AS Number, boolean_value AS Flag, status_value AS Code
+            FROM telemetry_samples
+            WHERE series_id = @Series AND observed_at_utc >= @From AND observed_at_utc <= @To
+            ORDER BY observed_at_utc DESC LIMIT 5000
+            """, cancellationToken, new { Series = series, From = from.UtcDateTime, To = to.UtcDateTime }));
         return rows.Reverse().Select(row => new HistoryPoint(Utc(row.ObservedAt), row.Number, row.Flag, row.Code)).ToArray();
     }
 
     private sealed record DeviceRow(long Id, long? RoomId, string Name, string Kind, string Manufacturer, string Model,
-        string? Connectivity, string? FaultCode, DateTime? LastContact, DateTime? StatusObserved);
+        string? Connectivity, string? FaultCode, DateTime? LastContact, DateTime? StatusObserved, string Provider);
     private sealed record EndpointRow(long Id, long DeviceId, string Name);
     private sealed record CapabilityRow(long EndpointId, string Code, bool Readable);
-    private sealed record ReadingRow(long? EndpointId, string Metric, DateTime? ObservedAt, double? Number, bool? Flag, string? Code);
+    private sealed record ReadingRow(long? EndpointId, string Metric, DateTime? ObservedAt, double? Number, bool? Flag, string? Code,
+        string Source);
     private sealed record AlertRow(long DeviceId, string DeviceName, string Code, DateTime OccurredAt);
     private sealed record HistoryRow(DateTime ObservedAt, double? Number, bool? Flag, string? Code);
 }

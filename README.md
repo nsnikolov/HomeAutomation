@@ -85,7 +85,7 @@ At the next planned restart, `.estart-backend.ps1` captures fresh logs. It stop
 | --- | --- |
 | Missing database setting | Set the named key in Development User Secrets or in the process environment. Recheck inherited overrides. |
 | MySQL connection or access denied | Confirm the server, port, schema, and account with the database owner. Check `Database__SslMode` if the error reports TLS. |
-| `/health/live` is 200 and `/health/ready` is 503 | Check MySQL connectivity and whether the migrations ran on the configured schema. The simulator waits for the schema and retries database failures. |
+| `/health/live` is 200 and `/health/ready` is 503 | Check MySQL connectivity and whether the migrations ran on the configured schema. Provider workers wait for the schema and retry database failures. |
 | `ERR_CONNECTION_REFUSED` at port 5173 | Start `npm.cmd run dev` from the frontend directory and check its terminal for the `Local:` line or a startup error. |
 | Vite starts but API requests fail | Check http://localhost:5080/health/ready directly, then http://localhost:5173/health/ready through Vite. |
 | Port 5080 or 5173 is occupied | Run `netstat -ano`, find the port's `LISTENING` entry, and identify its PID with `Get-Process -Id <PID>`. Reuse an existing Home Automation instance or stop the process from its own terminal or debugger. Vite exits when port 5173 is occupied. |
@@ -101,7 +101,7 @@ docker compose up -d --build
 docker compose ps -a
 ```
 
-3. Open http://localhost:8080 and sign in with your viewer account. A new property opens with an empty Dashboard. The Devices page shows the simulator once it has completed a poll.
+3. Open http://localhost:8080 and sign in with your viewer account. A new property opens with an empty Dashboard. Devices, Energy and History show readings once a configured provider has reported. The simulator is off by default and never fills in missing provider data.
 
 Compose binds the app and MySQL to loopback. A one-shot service applies the embedded, version-controlled SQL scripts using the migration account and provisions the viewer account. The app starts with a separate DML-only database account. The DB volume and application key volume persist across routine stops. The supplied deployment is for local monitoring.
 
@@ -131,7 +131,7 @@ InnoDB cascades removal to the matching widgets and values. The grant is scoped 
 
 Select the property, open **Dashboard**, and choose **Configure dashboard**. Set each widget's width and measurement columns independently. Drag measurements by their handles or use the move buttons. Use automatic freshness colors or choose a fixed preset. Preview changes before saving. In monitoring mode, each measurement opens its own assigned provider page or, for a simulated source, its device detail. The dashboard remains read-only even when the destination offers device controls.
 
-Readings come from saved Growatt, Daikin ONECTA, eWeLink and Smart Life / Tuya data. Simulator readings appear only when selected and are labeled. Automatic values are green for less than five minutes, blue from five minutes to under one hour, and gray from one hour onward. Age uses the recorded observation instant. The tooltip shows the original timestamp and provenance, and Detailed mode shows these details in the widget. A fixed color changes only the value, while a missing reading remains an em dash. Visible groups always show all their widgets. Widgets start expanded and retain **Show all** and **Collapse** controls when measurements span more than two rows.
+Readings come from saved Growatt, Daikin ONECTA, eWeLink and Smart Life / Tuya data. Simulator readings appear only while the opt-in development simulator is enabled, and are then labeled. Automatic values are green for less than five minutes, blue from five minutes to under one hour, and gray from one hour onward. Age uses the recorded observation instant. The tooltip shows the original timestamp and provenance, and Detailed mode shows these details in the widget. A fixed color changes only the value, while a missing reading remains an em dash. Visible groups always show all their widgets. Widgets start expanded and retain **Show all** and **Collapse** controls when measurements span more than two rows.
 
 Use **Compact** to switch all widgets to compact mode while preserving measurement visibility. **Detailed** switches all widgets to detailed mode and expands manually collapsed measurements. Each widget's view icon switches its mode independently. The shared layout stores the default display modes.
 
@@ -223,6 +223,34 @@ Open **History** in the navigation, or **View history** on a logical device on t
 
 eWeLink power, voltage and current history needs an electrical reporting window. To collect it without an open browser, enable the optional [background electrical collection](docs/integrations/ewelink-cloud.md#background-electrical-collection-milestone-7d) (`Ewelink:ContinuousElectricalCollection`, off by default) and restart the backend. It stays within the shared CoolKit request budget, so coverage is partial. See [eWeLink electrical collection](docs/architecture/13-ewelink-electrical-collection.md).
 
+## Remove simulator data
+
+The demonstration simulator is off by default (`Simulator:Enabled=false`). While it is off, the application never writes simulated observations or broadcasts them. It also hides simulator devices, series and dashboard sources that are already stored. Enable it only in an isolated development or test database. Disabling it hides old simulator data; deleting that data is a separate, explicit command. Details and ownership rules are in [simulator removal](docs/architecture/15-simulator-removal.md).
+
+The cleanup works on one property and is a read-only dry run unless both deletion flags are present. Run it from the repository root with the backend stopped or running with the simulator disabled.
+
+```powershell
+# Dry run: counts, preserved mixed records and dashboard references. Writes nothing; the runtime account is enough.
+dotnet run --project src/backend/HomeAutomation.Api -- --cleanup-simulator-data --simulator-property=1
+
+# Deletion, only after reviewing the dry run and taking a verified backup. Uses a maintenance account.
+$env:Database__User = 'home_maintenance'
+$env:Database__Password = [System.Net.NetworkCredential]::new('', (Read-Host 'Maintenance MySQL password' -AsSecureString)).Password
+try {
+    dotnet run --project src/backend/HomeAutomation.Api -- --cleanup-simulator-data --simulator-property=1 --execute --confirm-simulator-data-deletion
+} finally { Remove-Item Env:Database__User, Env:Database__Password }
+```
+
+Deletion needs the following privileges. The runtime account deliberately lacks `DELETE`, and the command reports missing privileges without deleting anything.
+
+```sql
+CREATE USER 'home_maintenance'@'localhost' IDENTIFIED BY '<password>';
+GRANT SELECT, DELETE ON homeautomation.* TO 'home_maintenance'@'localhost';
+GRANT UPDATE ON homeautomation.properties TO 'home_maintenance'@'localhost';  -- property row lock only
+```
+
+The migration account also works. Drop the maintenance account afterwards. Keep the command output; it is the cleanup record.
+
 ## Growatt read-only monitoring
 
 Sign in and choose **Live Growatt** in the property sidebar to open the inverter detail page. Use the [Growatt cloud setup guide](docs/integrations/growatt.md) to check account discovery, confirm the inverter roles and configure read-only polling.
@@ -289,4 +317,4 @@ The xUnit API tests use a test host and synthetic property memberships. The unit
 - `docker/` packages the frontend into the API image and provisions the limited runtime database account.
 - [Architecture](docs/architecture/01-system-overview.md) and [prompt history](docs/prompts/README.md) record the design and its implementation requests.
 
-Milestone 1 uses a seeded simulator property with property-scoped viewer accounts, raw telemetry history, and device-status alerts. The architecture roadmap covers account management UI, rollups and retention, live provider adapters, device commands, automation execution, and the future local agent.
+Milestone 1 used a seeded demonstration property with a simulator. The simulator is now an opt-in development and test tool, off by default; normal operation uses only provider data. See [simulator removal and cleanup](#remove-simulator-data). The architecture roadmap covers account management UI, rollups and retention, live provider adapters, device commands, automation execution, and the future local agent.

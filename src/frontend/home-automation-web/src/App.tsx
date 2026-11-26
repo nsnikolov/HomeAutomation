@@ -106,12 +106,12 @@ function PropertyView({ property, properties, email }: { property: Property; pro
   const tuyaView = useMatch('/properties/:propertyId/tuya') !== null
   const devicesView = useMatch('/properties/:propertyId/devices') !== null
   const energyView = useMatch('/properties/:propertyId/energy') !== null
-  const simulatorView = devicesView || energyView
+  const stateView = devicesView || energyView
   const live = useLiveUpdates(property.id)
   const snapshot = useQuery({
     queryKey: ['property', property.id, 'state'],
     queryFn: ({ signal }) => api.state(property.id, signal),
-    enabled: simulatorView,
+    enabled: stateView,
     refetchInterval: live ? 30000 : 10000,
   })
   const health = useQuery({
@@ -140,7 +140,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
         </div>
         <div className="topbar-status">
           <span className="sample-label">{growattView ? 'Growatt Cloud' : daikinView ? 'Daikin ONECTA'
-            : ewelinkView ? 'eWeLink Cloud' : tuyaView ? 'Tuya Cloud' : simulatorView ? 'Simulated data' : 'Property monitoring'}</span>
+            : ewelinkView ? 'eWeLink Cloud' : tuyaView ? 'Tuya Cloud' : 'Property monitoring'}</span>
           <button className="live-toggle" type="button" aria-expanded={offlineNotice} onClick={() => setOfflineNotice(!offlineNotice)}>
             <Badge className={live ? 'tone-good' : 'tone-neutral'}><i />{live ? 'Live updates' : 'Auto refresh'}</Badge>
           </button>
@@ -150,7 +150,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
         {live ? 'The dashboard receives updates over SignalR.' : 'The dashboard refreshes regularly while the live connection is unavailable.'}
       </div>}
       <main className="content">
-        {simulatorView && snapshot.isError && <div className="notice" role="alert">The property feed could not be refreshed. <Button variant="outline" onClick={() => void snapshot.refetch()}>Retry</Button></div>}
+        {stateView && snapshot.isError && <div className="notice" role="alert">The property feed could not be refreshed. <Button variant="outline" onClick={() => void snapshot.refetch()}>Retry</Button></div>}
         <Routes>
           <Route index element={<Dashboard property={property} live={live} email={email} />} />
           <Route path="growatt" element={<GrowattPanel property={property} />} />

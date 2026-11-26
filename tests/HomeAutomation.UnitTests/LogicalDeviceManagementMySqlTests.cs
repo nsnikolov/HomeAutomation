@@ -221,7 +221,7 @@ public sealed class LogicalDeviceManagementMySqlTests
         var store = Store();
         await store.ExecuteInitializationAsync(fixture.Property, default);
         var original = await LogicalForAsync(fixture, tuya);
-        var (ewelink, _) = await DeviceAsync(fixture, "simulator", "new-sensor", [("main", [Capability.TemperatureMeasurement])],
+        var (ewelink, _) = await DeviceAsync(fixture, "growatt", "new-sensor", [("main", [Capability.TemperatureMeasurement])],
             Every(Cutover.AddMinutes(-30), Now, 10, at => [("main", Sample.Numeric(Metric.Temperature, at, 23))]));
         Assert.Equal(1, await store.ProvisionAsync(fixture.Property, default));
         var temporary = await LogicalForAsync(fixture, ewelink);

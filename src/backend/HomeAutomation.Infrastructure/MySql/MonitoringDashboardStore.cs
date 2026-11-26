@@ -8,8 +8,10 @@ using static HomeAutomation.Infrastructure.MySql.Database;
 
 namespace HomeAutomation.Infrastructure.MySql;
 
-public sealed class MonitoringDashboardStore(Database database, Migrations migrations, TuyaOptions tuya) : IMonitoringDashboard
+public sealed class MonitoringDashboardStore(Database database, Migrations migrations, TuyaOptions tuya,
+    Simulator.SimulatorOptions? simulator = null) : IMonitoringDashboard
 {
+    private bool IncludeSimulator => simulator?.Enabled == true;
     public Task<bool> SchemaReadyAsync(CancellationToken ct) => migrations.VerifyAsync(ct, includeDashboard: true);
 
     public async Task<DashboardSnapshot> ReadAsync(long property, string user, CancellationToken ct)
@@ -19,7 +21,7 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         var (role, groups) = await ReadLayoutAsync(tx, property, user, ct);
         var keys = Values(groups).Select(value => value.SourceKey).ToHashSet(StringComparer.Ordinal);
         DashboardSource[] sources = keys.Count == 0 || role is null ? [] :
-            (await DashboardSources.ReadAsync(tx, property, tuya, ct, await LogicalReadyAsync(ct)))
+            (await DashboardSources.ReadAsync(tx, property, tuya, IncludeSimulator, ct, await LogicalReadyAsync(ct)))
                 .Where(source => keys.Contains(source.Key)).ToArray();
         await tx.CommitAsync(ct);
         return new(Revision(groups), CanEdit(role), groups, sources);
@@ -31,7 +33,7 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         await using var tx = await db.BeginTransactionAsync(ct);
         var role = await db.QuerySingleOrDefaultAsync<string>(Query(Membership, ct, new { property, user }, tx));
         var result = CanEdit(role)
-            ? (await DashboardSources.ReadAsync(tx, property, tuya, ct, await LogicalReadyAsync(ct))).Where(Selectable).ToArray()
+            ? (await DashboardSources.ReadAsync(tx, property, tuya, IncludeSimulator, ct, await LogicalReadyAsync(ct))).Where(Selectable).ToArray()
             : null;
         await tx.CommitAsync(ct);
         return result;
@@ -51,7 +53,7 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
         var bindings = Values(update.Groups).Where(value => kept.GetValueOrDefault(value.Id) != value.SourceKey).ToArray();
         if (bindings.Length > 0)
         {
-            var available = (await DashboardSources.ReadAsync(tx, property, tuya, ct, await LogicalReadyAsync(ct)))
+            var available = (await DashboardSources.ReadAsync(tx, property, tuya, IncludeSimulator, ct, await LogicalReadyAsync(ct)))
                 .Where(Selectable).Select(source => source.Key).ToHashSet(StringComparer.Ordinal);
             if (bindings.Any(value => !available.Contains(value.SourceKey))) return DashboardSaveResult.InvalidSource;
         }
@@ -131,7 +133,7 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
     private async Task<(List<LogicalBindingProposal> Proposals, List<LogicalBindingSkip> Skipped)> ProposeAsync(MySqlTransaction tx,
         long property, DashboardGroup[] groups, CancellationToken ct)
     {
-        var physical = await DashboardSources.ReadPhysicalAsync(tx, property, tuya, ct);
+        var physical = await DashboardSources.ReadPhysicalAsync(tx, property, tuya, IncludeSimulator, ct);
         var logical = (await DashboardSources.LogicalAsync(tx, property, physical, ct)).Where(item => item.Source.Status is null).ToList();
         var keys = physical.Select(item => item.Source.Key).ToHashSet(StringComparer.Ordinal);
         var proposals = new List<LogicalBindingProposal>();

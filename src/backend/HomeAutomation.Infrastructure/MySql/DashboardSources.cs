@@ -13,10 +13,10 @@ namespace HomeAutomation.Infrastructure.MySql;
 internal static class DashboardSources
 {
     /// <summary>Physical sources, plus logical sources when migration 018 is applied.</summary>
-    public static async Task<DashboardSource[]> ReadAsync(MySqlTransaction tx, long property, TuyaOptions tuya,
+    public static async Task<DashboardSource[]> ReadAsync(MySqlTransaction tx, long property, TuyaOptions tuya, bool includeSimulator,
         CancellationToken ct, bool logical = false)
     {
-        var physical = await ReadPhysicalAsync(tx, property, tuya, ct);
+        var physical = await ReadPhysicalAsync(tx, property, tuya, includeSimulator, ct);
         var sources = physical.Select(item => item.Source);
         if (logical) sources = sources.Concat((await LogicalAsync(tx, property, physical, ct)).Select(item => item.Source));
         return sources.ToArray();
@@ -70,7 +70,8 @@ internal static class DashboardSources
         physical.Where(source => source.DeviceId == device && (endpoint is null || source.EndpointId == endpoint));
 
     /// <summary>Provider sources annotated with the core device and endpoint they report for.</summary>
-    internal static async Task<List<PhysicalSource>> ReadPhysicalAsync(MySqlTransaction tx, long property, TuyaOptions tuya,
+    /// <param name="includeSimulator">Simulated series are listed only while the opt-in simulator is enabled.</param>
+    internal static async Task<List<PhysicalSource>> ReadPhysicalAsync(MySqlTransaction tx, long property, TuyaOptions tuya, bool includeSimulator,
         CancellationToken ct)
     {
         using var rows = await tx.Connection!.QueryMultipleAsync(Query("""
@@ -81,7 +82,7 @@ internal static class DashboardSources
             JOIN device_endpoints e ON e.id=s.endpoint_id AND e.property_id=s.property_id
             JOIN devices d ON d.id=e.device_id AND d.property_id=e.property_id
             LEFT JOIN latest_readings l ON l.series_id=s.id
-            WHERE s.property_id=@property AND s.source_key IN ('growatt','simulator')
+            WHERE s.property_id=@property AND s.source_key IN ('growatt',@simulator)
               AND EXISTS (
                   SELECT 1 FROM provider_bindings b JOIN integration_connections c
                     ON c.id=b.connection_id AND c.property_id=b.property_id
@@ -111,7 +112,7 @@ internal static class DashboardSources
             JOIN provider_endpoint_bindings pe ON pe.binding_id=b.id AND pe.device_id=b.device_id
             JOIN device_endpoints e ON e.id=pe.endpoint_id AND e.device_id=b.device_id
             WHERE b.property_id=@property;
-            """, ct, new { property, scope = tuya.IsConfigured ? tuya.Scope : null }, tx));
+            """, ct, new { property, scope = tuya.IsConfigured ? tuya.Scope : null, simulator = includeSimulator ? "simulator" : "growatt" }, tx));
 
         var canonical = await rows.ReadAsync<SeriesRow>();
         var daikin = await rows.ReadAsync<DaikinRow>();

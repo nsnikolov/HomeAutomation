@@ -14,7 +14,7 @@ internal static class MonitoringEndpoints
     public static void MapMonitoring(this WebApplication app)
     {
         var api = app.MapGroup("/api/v1").RequireAuthorization();
-        api.MapGet("/system/health", async (HealthCheckService health, SimulatorOptions options, PollProgress polling,
+        api.MapGet("/system/health", async (HealthCheckService health, SimulatorOptions options, GrowattOptions growatt, PollProgress polling,
             TimeProvider clock, CancellationToken cancellationToken) =>
         {
             var report = await health.CheckHealthAsync(registration => registration.Tags.Contains("ready"), cancellationToken);
@@ -22,7 +22,9 @@ internal static class MonitoringEndpoints
             var current = !options.Enabled ? "disabled" : state.Failed ? "degraded" : state.LastSuccess is null ? "waiting"
                 : clock.GetUtcNow() - state.LastSuccess > TimeSpan.FromSeconds(options.FreshnessSeconds)
                     ? "degraded" : "running";
-            return Results.Ok(new { database = report.Status.ToString().ToLowerInvariant(), simulator = current, state.LastSuccess, options.PollSeconds });
+            // pollSeconds is the cadence the Energy charts use to break lines at gaps: Growatt's poll unless the opt-in simulator runs.
+            return Results.Ok(new { database = report.Status.ToString().ToLowerInvariant(), simulator = current, state.LastSuccess,
+                PollSeconds = options.Enabled ? options.PollSeconds : growatt.PollSeconds });
         });
 
         var properties = api.MapGroup("/properties");

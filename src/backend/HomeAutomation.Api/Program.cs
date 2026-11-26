@@ -66,6 +66,21 @@ if (initializeLogical is not null && (backfillTelemetry is not null || importPro
     Environment.ExitCode = 1;
     return;
 }
+SimulatorCleanupCommand.Options? cleanupSimulator;
+try { cleanupSimulator = SimulatorCleanupCommand.Parse(args); }
+catch (SimulatorCleanupArgumentException error)
+{
+    Console.Error.WriteLine(error.Message);
+    Environment.ExitCode = 1;
+    return;
+}
+if (cleanupSimulator is not null && (initializeLogical is not null || backfillTelemetry is not null || importProvider is not null || migrate ||
+    bootstrap || discoverGrowatt || createProperty || promoteInitialOwner || rotateConfigurationKeys || convertConfigurationIdentifiers))
+{
+    Console.Error.WriteLine("Run the simulator cleanup command by itself.");
+    Environment.ExitCode = 1;
+    return;
+}
 if (importProvider is not null && (migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner ||
     rotateConfigurationKeys || convertConfigurationIdentifiers))
 {
@@ -88,7 +103,8 @@ if ((createProperty || promoteInitialOwner) && (migrate || bootstrap || discover
     return;
 }
 var builder = WebApplication.CreateBuilder(args.Where(arg => !ProviderConfigurationStartup.IsImportArgument(arg) &&
-    !TelemetryBackfillCommand.IsArgument(arg) && !LogicalDeviceInitializationCommand.IsArgument(arg) && arg is not
+    !TelemetryBackfillCommand.IsArgument(arg) && !LogicalDeviceInitializationCommand.IsArgument(arg) &&
+    !SimulatorCleanupCommand.IsArgument(arg) && arg is not
     ("--migrate" or "--bootstrap-user" or "--discover-growatt" or "--create-property" or "--promote-initial-owner" or
         "--rotate-configuration-keys" or "--convert-configuration-identifiers")).ToArray());
 builder.Logging.ClearProviders();
@@ -305,6 +321,11 @@ if (backfillTelemetry is not null)
 if (initializeLogical is not null)
 {
     Environment.ExitCode = await LogicalDeviceInitializationCommand.RunAsync(app, initializeLogical);
+    return;
+}
+if (cleanupSimulator is not null)
+{
+    Environment.ExitCode = await SimulatorCleanupCommand.RunAsync(app, cleanupSimulator);
     return;
 }
 if (discoverGrowatt)
