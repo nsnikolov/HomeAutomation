@@ -126,7 +126,7 @@ public sealed class AlertRuleEngineTests
             error => error.Contains("one metric"));
         Assert.Contains(Errors(AtOrBelow("c1", 10, SignalAggregation.Single, VoltageA, VoltageB)), error => error.Contains("Any or All"));
         Assert.Contains(Errors(new RuleCondition("c1", [new SignalRef(SignalKind.Connectivity, DeviceId: 1)], SignalAggregation.Single,
-            ConditionOperator.Equals, Text: "Sleeping")), error => error.Contains("Online, Offline"));
+            ConditionOperator.Equals, Text: "Sleeping")), error => error.Contains("Online, Stale, Offline or Unknown"));
         Assert.Contains(Errors(new RuleCondition("c1", [new SignalRef(SignalKind.DeviceEvent, DeviceId: 1, EventCode: "DEVICE_OFFLINE")],
             SignalAggregation.Single, ConditionOperator.EventOccurred)), error => error.Contains("look-back window"));
 

@@ -1,6 +1,7 @@
 using Dapper;
 using HomeAutomation.Application;
 using HomeAutomation.Domain;
+using HomeAutomation.Infrastructure.Growatt;
 using HomeAutomation.Infrastructure.MySql;
 using MySqlConnector;
 
@@ -283,7 +284,7 @@ public sealed class AlertMySqlTests
         // Two devices with the same name are distinct signals with distinguishable labels; nothing is merged.
         var offline = catalog.Where(entry => entry.Signal.EventCode == "DEVICE_OFFLINE" && entry.Label.StartsWith("Heatpump", StringComparison.Ordinal))
             .Select(entry => entry.Label).Order().ToArray();
-        Assert.Equal(["Heatpump (Altherma) went offline", "Heatpump (PSF-X67) went offline"], offline);
+        Assert.Equal(["Heatpump (Altherma) reported offline (provider)", "Heatpump (PSF-X67) reported offline (provider)"], offline);
         Assert.Equal(catalog.Count, catalog.Select(entry => entry.Label).Distinct(StringComparer.OrdinalIgnoreCase).Count());
 
         // Templates only use signals the catalog offers, and the grid setup reads with names, not identifiers.
@@ -296,7 +297,7 @@ public sealed class AlertMySqlTests
             signal => Assert.Contains(AlertSignals.Key(signal), keys));
 
         // Preview evidence carries the same labels as the catalog for the same keys.
-        var heatpump = catalog.Single(entry => entry.Label == "Heatpump (PSF-X67) went offline");
+        var heatpump = catalog.Single(entry => entry.Label == "Heatpump (PSF-X67) reported offline (provider)");
         var probe = templates.GridOutageSetup![1] with
         {
             Definition = new RuleGroup(LogicalOperator.And, [
@@ -480,6 +481,95 @@ public sealed class AlertMySqlTests
         Assert.Equal(2, (await Center(f).SummaryAsync(f.Viewer, default)).Unread);
     }
 
+    [AlertMySqlFact]
+    public async Task GrowattAvailabilityPvStateAndInstallationSummaryComeFromLatestReadingsAndAgreeWithAlerts()
+    {
+        var f = await FixtureAsync();
+        // Inverter A: Growatt's `lost` flag set in the same record as fresh readings. Inverter B: online, idle at night.
+        async Task Write(string external, string name, Metric metric, Capability capability, double value, DateTimeOffset at,
+            Connectivity connectivity = Connectivity.Online) =>
+            await WriteAsync(f, "growatt", external, name, DeviceKind.Inverter, "ac", capability, metric, value, at, connectivity: connectivity);
+        foreach (var (minutes, watts) in new[] { (-10, 30d), (-5, 15d), (0, 15d) })
+            await Write("inverter-a", "Inverter A", Metric.PvPower, Capability.SolarProduction, watts, T0.AddMinutes(minutes), Connectivity.Offline);
+        await Write("inverter-a", "Inverter A", Metric.GridVoltage, Capability.VoltageMeasurement, 243.4, T0, Connectivity.Offline);
+        await Write("inverter-a", "Inverter A", Metric.AcInputPower, Capability.PowerMeasurement, 0, T0, Connectivity.Offline);
+        await Write("inverter-a", "Inverter A", Metric.ActivePower, Capability.PowerMeasurement, 300, T0, Connectivity.Offline);
+        await Write("inverter-b", "Inverter B", Metric.PvPower, Capability.SolarProduction, 1, T0);
+        await Write("inverter-b", "Inverter B", Metric.PvVoltage, Capability.VoltageMeasurement, 0, T0);
+        await Write("inverter-b", "Inverter B", Metric.GridVoltage, Capability.VoltageMeasurement, 244.5, T0);
+        await Write("inverter-b", "Inverter B", Metric.AcInputPower, Capability.PowerMeasurement, 0, T0);
+        await Write("inverter-b", "Inverter B", Metric.ActivePower, Capability.PowerMeasurement, 250, T0);
+        string siteKey;
+        await using (var db = await f.Admin.OpenAsync(default))
+            siteKey = await db.ExecuteScalarAsync<string>("SELECT site_key FROM properties WHERE id = @Property", new { f.Property }) ?? "";
+        var options = new GrowattOptions { SiteKey = siteKey, PollSeconds = 300, FreshnessSeconds = 900 };
+        MonitoringReader Reader(GrowattOptions growatt) => new(f.Runtime, f.Clock, new(), growatt,
+            new TelemetryHoldPolicy(growatt, new(), new(), new(), new()));
+        var samplesBefore = await CountsOfSamplesAsync(f);
+
+        f.Clock.Now = T0.AddMinutes(1);
+        var state = (await Reader(options).GrowattStateAsync(f.Property, siteKey, default))!;
+        var a = state.Devices.Single(device => device.Id == f.InverterA);
+        var b = state.Devices.Single(device => device.Id == f.InverterB);
+        Assert.Equal((Availability.Online, Connectivity.Online, Connectivity.Offline, AvailabilityBasis.RecentReading, 450),
+            (a.Availability, a.Connectivity, a.ReportedConnectivity, a.AvailabilityBasis, a.AvailabilityWindowSeconds));
+        Assert.Equal(T0, a.LatestReadingAt);
+        var pvA = Assert.Single(a.PvInputs!);
+        Assert.Equal((PvState.Generating, PvReason.HeldBetweenThresholds, (double?)15), (pvA.State, pvA.Reason, pvA.DisplayWatts));
+        var pvB = Assert.Single(b.PvInputs!);
+        Assert.Equal((PvState.NotGenerating, PvReason.NoVoltage, (double?)1, (double?)0), (pvB.State, pvB.Reason, pvB.RawWatts, pvB.DisplayWatts));
+        var solar = state.Solar!.ToDictionary(item => item.Slot);
+        Assert.Equal((SummaryState.Available, (double?)15), (solar[SummarySlot.PvPower].State, solar[SummarySlot.PvPower].Number));
+        Assert.Equal((SummaryState.Available, (double?)550), (solar[SummarySlot.Consumption].State, solar[SummarySlot.Consumption].Number));
+        Assert.Equal((SummaryState.Available, "present", (double?)244.5),
+            (solar[SummarySlot.GridSupply].State, solar[SummarySlot.GridSupply].Text, solar[SummarySlot.GridSupply].Number));
+        Assert.Equal((SummaryState.Available, (double?)0), (solar[SummarySlot.AcInput].State, solar[SummarySlot.AcInput].Number));
+        Assert.All(state.Solar!, item => Assert.Equal(SummaryBasis.Inverters, item.Basis));
+
+        // The rule engine sees the same availability: the provider flag on fresh data opens no "device offline" incident.
+        var rules = Rules(f);
+        var catalog = (await rules.CatalogAsync(f.Viewer, f.Property, default))!;
+        var connectivity = catalog.Single(entry => entry.Key == $"c:d{f.InverterA}");
+        Assert.Equal("Online", connectivity.Text);
+        Assert.Equal(["Online", "Stale", "Offline", "Unknown"], connectivity.States);
+        var offline = new AlertRuleInput("Inverter A offline", null, false, AlertSeverity.Warning, null, null, new RuleGroup(LogicalOperator.And,
+            [new(new RuleCondition("c1", [connectivity.Signal], SignalAggregation.Single, ConditionOperator.Equals, Text: "Offline", FreshnessSeconds: 900))]),
+            0, 0);
+        Assert.Equal(Truth.False, (await rules.PreviewAsync(f.Viewer, f.Property, offline, default))!.Result);
+
+        // Eight minutes later nothing new arrived: Stale, never Offline, while the readings themselves are still fresh (15 min).
+        f.Clock.Now = T0.AddMinutes(8);
+        a = (await Reader(options).GrowattStateAsync(f.Property, siteKey, default))!.Devices.Single(device => device.Id == f.InverterA);
+        Assert.Equal((Availability.Stale, Connectivity.Unknown), (a.Availability, a.Connectivity));
+        Assert.All(a.Endpoints.SelectMany(endpoint => endpoint.Measurements).Where(reading => reading.Metric == Metric.GridVoltage),
+            reading => Assert.Equal(ReadingQuality.Fresh, reading.Quality));
+        var preview = (await rules.PreviewAsync(f.Viewer, f.Property, offline, default))!;
+        Assert.Equal(Truth.False, preview.Result);
+        Assert.Equal("Stale", preview.Conditions[0].Signals[0].Text);
+        // A ten-minute polling interval keeps the same evidence recent (15 minute window).
+        var slow = new GrowattOptions { SiteKey = siteKey, PollSeconds = 600, FreshnessSeconds = 1800 };
+        Assert.Equal(Availability.Online,
+            (await Reader(slow).GrowattStateAsync(f.Property, siteKey, default))!.Devices.Single(device => device.Id == f.InverterA).Availability);
+
+        // A disconnection reported after the last reading is a confirmed Offline, in the live view and in the rule.
+        await StatusAsync(f, "growatt", "inverter-a", "Inverter A", DeviceKind.Inverter, "ac", Capability.SolarProduction, Connectivity.Offline,
+            T0.AddMinutes(9));
+        f.Clock.Now = T0.AddMinutes(10);
+        a = (await Reader(options).GrowattStateAsync(f.Property, siteKey, default))!.Devices.Single(device => device.Id == f.InverterA);
+        Assert.Equal((Availability.Offline, AvailabilityBasis.ProviderOffline), (a.Availability, a.AvailabilityBasis));
+        Assert.Equal(Truth.True, (await rules.PreviewAsync(f.Viewer, f.Property, offline, default))!.Result);
+
+        // Raw telemetry is untouched: the 1 W reading is stored as 1 W, and reading added nothing.
+        Assert.Equal(samplesBefore, await CountsOfSamplesAsync(f));
+        Assert.Equal(1L, await ScalarAsync(f, $"""
+            SELECT COUNT(*) FROM telemetry_samples x JOIN telemetry_series s ON s.id = x.series_id JOIN device_endpoints e ON e.id = s.endpoint_id
+            WHERE e.device_id = {f.InverterB} AND s.metric = 'PvPower' AND x.numeric_value = 1 AND s.property_id = @Property
+            """));
+    }
+
+    private static async Task<long> CountsOfSamplesAsync(Fixture f) => await ScalarAsync(f,
+        "SELECT COUNT(*) FROM telemetry_samples x JOIN telemetry_series s ON s.id = x.series_id WHERE s.property_id = @Property");
+
     private static AlertRuleInput Battery(Fixture f, string name, AlertSeverity severity, double below) => new(name, null, true, severity, null, null,
         new RuleGroup(LogicalOperator.And, [new(new RuleCondition("c1", [Soc(f)], SignalAggregation.Single, ConditionOperator.LessThan, below, Unit: "%",
             FreshnessSeconds: 900))]), 0, 0);
@@ -534,13 +624,24 @@ public sealed class AlertMySqlTests
         WriteAsync(f, "growatt", "battery", "Battery", DeviceKind.Battery, "battery", Capability.BatteryLevel, Metric.BatterySoc, soc, at);
 
     private static async Task WriteAsync(Fixture f, string provider, string external, string name, DeviceKind kind, string endpoint,
-        Capability capability, Metric metric, double value, DateTimeOffset at, long? property = null, string model = "Model")
+        Capability capability, Metric metric, double value, DateTimeOffset at, long? property = null, string model = "Model",
+        Connectivity connectivity = Connectivity.Online)
     {
         var id = $"{f.Prefix}-{external}";
         var device = new DiscoveredDevice(id, name, kind, "", "Fixture", model, [new DeviceEndpoint(endpoint, endpoint, [capability])]);
-        var batch = new ObservationBatch(at, [new DeviceObservation(id, Connectivity.Online, null,
+        var batch = new ObservationBatch(at, [new DeviceObservation(id, connectivity, null,
             [new EndpointObservation(endpoint, [Sample.Numeric(metric, at, value)])], at)], []);
         await new TelemetryWriter(f.Runtime, f.Clock).StoreCloudDeviceAsync(provider, property ?? f.Property, null, device, batch, default);
+    }
+
+    /// <summary>A provider status report without readings, for example a confirmed disconnection.</summary>
+    private static async Task StatusAsync(Fixture f, string provider, string external, string name, DeviceKind kind, string endpoint,
+        Capability capability, Connectivity connectivity, DateTimeOffset at)
+    {
+        var id = $"{f.Prefix}-{external}";
+        var device = new DiscoveredDevice(id, name, kind, "", "Fixture", "Model", [new DeviceEndpoint(endpoint, endpoint, [capability])]);
+        var batch = new ObservationBatch(at, [new DeviceObservation(id, connectivity, null, [], at)], []);
+        await new TelemetryWriter(f.Runtime, f.Clock).StoreCloudDeviceAsync(provider, f.Property, null, device, batch, default);
     }
 
     private static async Task EvaluateAsync(Fixture f, AlertEvaluator evaluator, DateTimeOffset at)

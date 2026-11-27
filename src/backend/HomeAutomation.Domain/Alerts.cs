@@ -207,8 +207,8 @@ public static class AlertSignals
             {
                 if (string.IsNullOrWhiteSpace(condition.Text) || condition.Text.Length > 32)
                     errors.Add($"{label} needs a state to compare with.");
-                else if (first.Kind == SignalKind.Connectivity && !Enum.TryParse<Connectivity>(condition.Text, false, out _))
-                    errors.Add($"{label}: connectivity is Online, Offline or Unknown.");
+                else if (first.Kind == SignalKind.Connectivity && !Enum.GetNames<Availability>().Contains(condition.Text, StringComparer.Ordinal))
+                    errors.Add($"{label}: connectivity is Online, Stale, Offline or Unknown.");
             }
             else if (condition.Text is not null) errors.Add($"{label} does not take a state value.");
 

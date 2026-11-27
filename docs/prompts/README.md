@@ -69,3 +69,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 65. 2026-11-27 · [HomeAutomation — Advanced Event Rules, Composite Conditions, Severity and Notification Architecture](0065-event-rules-incidents-notifications.md)
 66. 2026-11-27 · [HomeAutomation — Fix Rule Editor Signal Resolution and Duplicate Signal Labels](0066-fix-rule-editor-signal-resolution.md)
 67. 2026-11-27 · [HomeAutomation — Fix Notification Read Behavior](0067-notification-read-behavior.md)
+68. 2026-11-27 · [HomeAutomation — Growatt Availability, PV Generation, Device Search and Solar Installation Aggregation Fixes](0068-growatt-availability-pv-search-solar-summary.md)

@@ -6,6 +6,7 @@ import { ConfirmDialog } from '../shared/ConfirmDialog'
 import type { Device, DeviceAuditEntry, Property, PropertyOverview, TransferableDevice } from '../shared/types'
 import { Card, Input } from '../shared/ui'
 import { formatMoment } from '../shared/utils'
+import { matchesSearch, searchTerms } from '../shared/search'
 
 /** Providers whose devices can move between properties; Growatt follows its site configuration. */
 export const transferableProviders = new Set(['daikin', 'ewelink', 'tuya'])
@@ -122,19 +123,23 @@ function MoveDialog({ device, source, destinations, onClose, onDone }: {
 }
 
 /** Devices in the user's other managed properties that can be moved here; unassigned provider devices stay on provider pages. */
-export function OtherPropertyDevices({ property, canManage }: { property: Property; canManage: boolean }) {
+export function OtherPropertyDevices({ property, canManage, search = '' }: { property: Property; canManage: boolean; search?: string }) {
   const client = useQueryClient()
   const devices = useQuery({
     queryKey: ['transferable-devices', property.id], queryFn: ({ signal }) => api.transferableDevices(property.id, signal),
     enabled: canManage, retry: false,
   })
   const [moving, setMoving] = useState<TransferableDevice | null>(null)
-  if (!canManage || !devices.data?.length) return null
+  const terms = searchTerms(search)
+  const shown = (devices.data ?? []).filter(device => matchesSearch(terms, [device.name, device.providerName, device.propertyName, device.roomName,
+    device.model]))
+  // Hidden when nothing matches: the page shows one empty state for the whole search.
+  if (!canManage || shown.length === 0) return null
   return <section className="room" aria-labelledby="other-devices-heading">
     <h2 id="other-devices-heading">Devices in your other properties</h2>
     <p className="muted">These devices belong to another property you manage. Moving one keeps its earlier history with that property.</p>
     <div className="management-list">
-      {devices.data.map(device => <Card className="detail-card" key={`${device.propertyId}:${device.deviceId}`}>
+      {shown.map(device => <Card className="detail-card" key={`${device.propertyId}:${device.deviceId}`}>
         <div className="management-row">
           <div><h3>{device.name}</h3>
             <p className="muted">{device.propertyName}{device.roomName ? ` · ${device.roomName}` : ''} · {device.model}</p>

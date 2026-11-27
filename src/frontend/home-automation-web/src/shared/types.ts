@@ -59,6 +59,16 @@ export type Device = {
   providerName?: string | null
   provider?: string | null
   customName?: boolean
+  /** Application availability from recent evidence: the primary status. `connectivity` is its three-value form. */
+  availability?: Availability
+  availabilityBasis?: 'recentReading' | 'providerOnline' | 'providerOffline' | 'noRecentEvidence' | 'noEvidence'
+  /** What the provider itself reported, kept as diagnostic information. */
+  reportedConnectivity?: 'online' | 'offline' | 'unknown'
+  reportedAt?: string | null
+  latestReadingAt?: string | null
+  availabilityWindowSeconds?: number
+  /** Growatt inverters: PV generation per PV input. */
+  pvInputs?: PvInputState[] | null
   endpoints: {
     id: number
     name: string
@@ -67,10 +77,24 @@ export type Device = {
   }[]
 }
 
+export type Availability = 'online' | 'stale' | 'offline' | 'unknown'
+export type PvInputState = {
+  endpointId: number; state: 'generating' | 'notGenerating' | 'unknown'
+  reason: 'noReading' | 'invalid' | 'stale' | 'noVoltage' | 'aboveThreshold' | 'heldBetweenThresholds' | 'belowThreshold' | 'noPriorState'
+  rawWatts: number | null; displayWatts: number | null
+}
+export type InstallationValue = {
+  slot: 'pvPower' | 'consumption' | 'gridSupply' | 'acInput'; basis: 'installation' | 'inverters'
+  state: 'available' | 'partial' | 'stale' | 'unavailable'; number: number | null; unit: string | null
+  text: 'present' | 'absent' | 'unknown' | null; observedAt: string | null; used: number; expected: number; reason: string | null
+}
+
 export type PropertyState = {
   devices: Device[]
   installation: Reading[]
   alerts: { deviceId: number; deviceName: string; code: string; occurredAt: string }[]
+  /** Growatt only: installation values derived from the inverters' latest readings. */
+  solar?: InstallationValue[] | null
 }
 
 export type Point = Omit<Reading, 'metric' | 'unit' | 'quality'> & { observedAt: string }

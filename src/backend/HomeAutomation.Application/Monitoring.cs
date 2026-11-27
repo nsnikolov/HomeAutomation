@@ -33,13 +33,27 @@ public sealed record CapabilityState(Capability Code, Access Access);
 public sealed record MetricReading(
     Metric Metric, string? Unit, DateTimeOffset? ObservedAt, double? Number, bool? Flag, string? Code, ReadingQuality Quality);
 public sealed record EndpointState(long Id, string Name, IReadOnlyList<CapabilityState> Capabilities, IReadOnlyList<MetricReading> Measurements);
+/// <param name="Connectivity">The application availability in the provider-neutral three-value form (Stale reads as Unknown).</param>
+/// <param name="Availability">The application availability (<see cref="DeviceAvailability"/>): the primary status.</param>
+/// <param name="ReportedConnectivity">What the provider itself last reported, kept as diagnostic information.</param>
+/// <param name="ReportedAt">The source time of that report.</param>
+/// <param name="LatestReadingAt">The newest source time of any of the device's readings.</param>
+/// <param name="AvailabilityWindowSeconds">How long evidence counts as recent for this device's provider.</param>
+/// <param name="PvInputs">Growatt inverters only: the PV generation state of each PV input.</param>
 public sealed record DeviceDetails(
     long Id, long? RoomId, string Name, DeviceKind Kind, string Manufacturer, string Model,
     Connectivity Connectivity, string? FaultCode, DateTimeOffset? LastContactAt, ReadingQuality Quality,
-    IReadOnlyList<EndpointState> Endpoints, string? ProviderName = null, string? Provider = null, bool CustomName = false);
+    IReadOnlyList<EndpointState> Endpoints, string? ProviderName = null, string? Provider = null, bool CustomName = false,
+    Availability Availability = Availability.Unknown, Connectivity ReportedConnectivity = Connectivity.Unknown,
+    DateTimeOffset? ReportedAt = null, DateTimeOffset? LatestReadingAt = null, int AvailabilityWindowSeconds = 0,
+    AvailabilityBasis AvailabilityBasis = AvailabilityBasis.NoEvidence, IReadOnlyList<PvInputState>? PvInputs = null);
+/// <summary>PV generation of one inverter PV input: raw and displayed power and the hysteresis state.</summary>
+public sealed record PvInputState(long EndpointId, PvState State, PvReason Reason, double? RawWatts, double? DisplayWatts);
 public sealed record DeviceAlert(long DeviceId, string DeviceName, string Code, DateTimeOffset OccurredAt);
+/// <param name="Solar">Growatt only: installation values derived from the inverters' latest readings.</param>
 public sealed record PropertyState(
-    IReadOnlyList<DeviceDetails> Devices, IReadOnlyList<MetricReading> Installation, IReadOnlyList<DeviceAlert> Alerts);
+    IReadOnlyList<DeviceDetails> Devices, IReadOnlyList<MetricReading> Installation, IReadOnlyList<DeviceAlert> Alerts,
+    IReadOnlyList<InstallationValue>? Solar = null);
 public sealed record HistoryPoint(DateTimeOffset ObservedAt, double? Number, bool? Flag, string? Code);
 
 public interface IMonitoringReader

@@ -88,15 +88,27 @@ internal static class AlertSignalReader
             index > 0 && char.IsUpper(character) ? " " + char.ToLowerInvariant(character) : character.ToString())),
     };
 
+    /// <summary>Newest valid source time per device, from latest readings.</summary>
+    private static Dictionary<long, DateTimeOffset?> LatestReadings(IEnumerable<SeriesRow> rows) => rows
+        .Where(row => row.DeviceId is not null && row.Observed is not null &&
+            (row.Number is { } number ? double.IsFinite(number) : row.Flag is not null || !string.IsNullOrWhiteSpace(row.Text)))
+        .GroupBy(row => row.DeviceId!.Value).ToDictionary(group => group.Key, group => (DateTimeOffset?)Utc(group.Max(row => row.Observed!.Value)));
+
+    private static AvailabilityResult AvailabilityOf(StateRow? state, DateTimeOffset? latestReading, DateTimeOffset now, TimeSpan window) =>
+        DeviceAvailability.Evaluate(state is not null && Enum.TryParse<Connectivity>(state.Connectivity, out var reported) ? reported : null,
+            state is null ? null : Utc(state.Observed), latestReading, now, window);
+
     public static string EventLabel(string code) => code switch
     {
-        DeviceOffline => "went offline",
+        // The provider's own report, kept as an event; availability is the Connectivity signal.
+        DeviceOffline => "reported offline (provider)",
         AnyFault => "reported a fault",
         _ => $"reported fault {code}",
     };
 
     /// <summary>Reads every referenced signal for one property. Signals outside the property, retired or simulated are unavailable.</summary>
     public static async Task<Func<RuleCondition, SignalRef, SignalReading>> LoadAsync(MySqlConnection db, MySqlTransaction? tx, long property,
+        TelemetryHoldPolicy holds,
         IReadOnlyCollection<RuleCondition> conditions, DateTimeOffset now, CancellationToken ct)
     {
         var signals = conditions.SelectMany(condition => condition.Signals).Distinct().ToArray();
@@ -105,6 +117,8 @@ internal static class AlertSignalReader
 
         var devices = deviceIds.Length == 0 ? new Dictionary<long, DeviceRow>() : (await db.QueryAsync<DeviceRow>(Query("""
             SELECT d.id AS Id, d.property_id AS PropertyId, COALESCE(d.display_name, d.name) AS Name, d.retired_at_utc AS RetiredAt,
+                   COALESCE((SELECT MIN(c.provider_code) FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
+                             WHERE b.device_id = d.id), 'unknown') AS Provider,
                    CAST(d.inventory_key LIKE 'simulator:%' AS SIGNED) AS Simulated
             FROM devices d WHERE d.id IN @deviceIds
             """, ct, new { deviceIds }, tx))).ToDictionary(row => row.Id);
@@ -138,6 +152,7 @@ internal static class AlertSignalReader
         var connectivity = current.Length == 0 ? new Dictionary<long, StateRow>() : (await db.QueryAsync<StateRow>(Query("""
             SELECT device_id AS DeviceId, connectivity AS Connectivity, observed_at_utc AS Observed FROM device_state WHERE device_id IN @current
             """, ct, new { current }, tx))).ToDictionary(row => row.DeviceId);
+        var latestReadings = LatestReadings(endpointSeries);
 
         var eventWindow = conditions.Where(condition => condition.Operator == ConditionOperator.EventOccurred)
             .Select(condition => condition.WindowSeconds ?? 0).DefaultIfEmpty(0).Max();
@@ -187,9 +202,16 @@ internal static class AlertSignalReader
             switch (signal.Kind)
             {
                 case SignalKind.Connectivity:
-                    return connectivity.TryGetValue(signal.DeviceId!.Value, out var state)
-                        ? new SignalReading(signal, label, Text: state.Connectivity, ObservedAt: Utc(state.Observed))
-                        : SignalReading.Missing(signal, label, "No connectivity has been reported.");
+                {
+                    // The same application availability the live views show, so a provider flag that contradicts fresh readings
+                    // neither opens nor resolves incidents. The reading's time is the evidence's source time.
+                    var id = signal.DeviceId!.Value;
+                    connectivity.TryGetValue(id, out var state);
+                    var availability = AvailabilityOf(state, latestReadings.GetValueOrDefault(id), now, holds.AvailabilityWindow(devices[id].Provider));
+                    return availability.State == Availability.Unknown
+                        ? SignalReading.Missing(signal, label, "No connectivity or readings have been reported.")
+                        : new SignalReading(signal, label, Text: availability.State.ToString(), ObservedAt: availability.EvidenceAt);
+                }
                 case SignalKind.DeviceEvent:
                     var since = now - TimeSpan.FromSeconds(condition.WindowSeconds ?? 0);
                     var matching = events.Where(item => item.DeviceId == signal.DeviceId && Utc(item.Occurred) >= since &&
@@ -226,7 +248,8 @@ internal static class AlertSignalReader
     }
 
     /// <summary>Every signal the editor may use in the property: current, non-simulated devices and the property's installations.</summary>
-    public static async Task<IReadOnlyList<SignalCatalogEntry>> CatalogAsync(MySqlConnection db, long property, CancellationToken ct)
+    public static async Task<IReadOnlyList<SignalCatalogEntry>> CatalogAsync(MySqlConnection db, long property, TelemetryHoldPolicy holds,
+        DateTimeOffset now, CancellationToken ct)
     {
         var devices = (await db.QueryAsync<CatalogDevice>(Query("""
             SELECT d.id AS Id, COALESCE(d.display_name, d.name) AS Name,
@@ -282,11 +305,16 @@ internal static class AlertSignalReader
             entries.Add(Entry(signal, label, row.DeviceId, row.DeviceId is null ? null : owner, row.EndpointName, provider, type,
                 Telemetry.Unit(metric), [], row.Number, row.Flag, row.Text, Utc(row.Observed)));
         }
+        var latestReadings = LatestReadings(rows);
         foreach (var device in devices)
         {
             var name = NameOf(device);
+            var availability = AvailabilityOf(device.Connectivity is null || device.Observed is null ? null
+                : new StateRow(device.Id, device.Connectivity, device.Observed.Value), latestReadings.GetValueOrDefault(device.Id), now,
+                holds.AvailabilityWindow(device.Provider));
             entries.Add(Entry(new SignalRef(SignalKind.Connectivity, DeviceId: device.Id), $"{name} · connectivity", device.Id, name,
-                null, device.Provider, SignalValueType.Status, null, Enum.GetNames<Connectivity>(), null, null, device.Connectivity, Utc(device.Observed)));
+                null, device.Provider, SignalValueType.Status, null, Enum.GetNames<Availability>(), null, null,
+                availability.State == Availability.Unknown ? null : availability.State.ToString(), availability.EvidenceAt));
             foreach (var code in new[] { DeviceOffline, AnyFault }.Concat(faults.Where(fault => fault.DeviceId == device.Id).Select(fault => fault.Code)))
                 entries.Add(Entry(new SignalRef(SignalKind.DeviceEvent, DeviceId: device.Id, EventCode: code), $"{name} {EventLabel(code)}",
                     device.Id, name, null, device.Provider, SignalValueType.Event, null, [], null, null, null, null));
@@ -355,7 +383,7 @@ internal static class AlertSignalReader
         return errors;
     }
 
-    private sealed record DeviceRow(long Id, long PropertyId, string Name, DateTime? RetiredAt, long Simulated);
+    private sealed record DeviceRow(long Id, long PropertyId, string Name, DateTime? RetiredAt, string Provider, long Simulated);
     private sealed record InstallationRow(long Id, long PropertyId, string Name);
     private sealed record SeriesRow(long? DeviceId, long? InstallationId, string? EndpointKey, string? EndpointName, long SeriesId, string Metric,
         string Source, DateTime? Observed, double? Number, bool? Flag, string? Text);

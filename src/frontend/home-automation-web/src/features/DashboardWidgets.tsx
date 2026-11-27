@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSP
 import { Rows2, Rows3 } from 'lucide-react'
 import { Link } from 'react-router'
 import type { DashboardGroup, DashboardReading, DashboardSource, DashboardValue, DashboardWidget, Property } from '../shared/types'
+import { displayNumber } from '../shared/utils'
 import { metricLabels } from './Devices'
 import { defaultWidgetView, type WidgetView } from './dashboardWidgetViews'
 
@@ -203,7 +204,9 @@ function Measurement({ value, source, now, dateFormat, detailed, propertyId, pre
   let originalStamp: string | undefined
   let provenance: string | undefined
   if (reading && at !== null && tier !== 'missing') {
-    measurement = reading.number !== null ? numeric.format(reading.number) + (source?.unit === '%' ? '%' : source?.unit ? ` ${source.unit}` : '')
+    const shown = reading.number !== null && source ? displayNumber(source.metric, reading.number) : reading.number
+    measurement = reading.number !== null ? shown === null ? 'Invalid'
+      : numeric.format(shown) + (source?.unit === '%' ? '%' : source?.unit ? ` ${source.unit}` : '')
       : reading.flag !== null ? (reading.flag ? 'ON' : 'OFF') : reading.code!
     summary = freshnessLabels[tier]
     stamp = dateFormat.format(at)

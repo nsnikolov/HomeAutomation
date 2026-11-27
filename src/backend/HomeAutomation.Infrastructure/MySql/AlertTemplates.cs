@@ -63,8 +63,8 @@ internal static class AlertTemplates
     /// look like an outage. Users can switch to Any or a single authoritative inverter.
     /// </summary>
     private static RuleCondition VoltageCondition(SignalCatalogEntry[] voltage) => new("c1", voltage.Select(entry => entry.Signal).ToArray(),
-        voltage.Length == 1 ? SignalAggregation.Single : SignalAggregation.All, ConditionOperator.LessThanOrEqual, 10, Unit: "V",
-        RecoveryNumber: 180, FreshnessSeconds: voltage.Max(entry => entry.SuggestedFreshnessSeconds));
+        voltage.Length == 1 ? SignalAggregation.Single : SignalAggregation.All, ConditionOperator.LessThanOrEqual, GridSupply.LostAtOrBelowVolts, Unit: "V",
+        RecoveryNumber: GridSupply.PresentAboveVolts, FreshnessSeconds: voltage.Max(entry => entry.SuggestedFreshnessSeconds));
 
     /// <summary>A shared battery is one physical source: the first reporting device is proposed as the authoritative one.</summary>
     private static RuleCondition BatteryCondition(SignalCatalogEntry[] battery, string id, double below, double recover) =>

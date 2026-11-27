@@ -7,6 +7,7 @@ import type {
 } from '../shared/types'
 import { Badge, Button, Card, Input } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
+import { matchesSearch, searchTerms } from '../shared/search'
 import { metricLabels } from './Devices'
 
 const providers: Record<string, string> = {
@@ -33,9 +34,24 @@ type Panel =
   | { type: 'use'; device: PhysicalDevice }
 type Filters = { room: string; provider: string; kind: string; status: 'all' | 'assigned' | 'unassigned'; lifecycle: 'active' | 'archived' }
 
-export function LogicalDevices({ property }: { property: Property }) {
+/** Search fields of a logical device: its own name and details and every device it uses or used. */
+export function logicalDeviceMatches(device: LogicalDevice, terms: string[], roomName?: string) {
+  return matchesSearch(terms, [device.name, device.description, kindLabel(device.kind), device.kind, roomName,
+    ...[...device.current, ...device.previous].flatMap(item => [item.deviceName, item.provider, providerName(item.provider), item.manufacturer,
+      item.model, item.endpointName, item.channelKey])])
+}
+
+export function hardwareMatches(device: PhysicalDevice, terms: string[], roomName?: string) {
+  return matchesSearch(terms, [device.name, device.provider, providerName(device.provider), device.manufacturer, device.model,
+    kindLabel(device.kind), roomName, device.logicalDeviceName, `#${device.id}`, ...device.endpoints.map(endpoint => endpoint.name)])
+}
+
+export const logicalDevicesKey = (property: number) => ['property', property, 'logical-devices']
+
+export function LogicalDevices({ property, search = '' }: { property: Property; search?: string }) {
   const client = useQueryClient()
-  const key = ['property', property.id, 'logical-devices']
+  const key = logicalDevicesKey(property.id)
+  const terms = searchTerms(search)
   const list = useQuery({ queryKey: key, queryFn: ({ signal }) => api.logicalDevices(property.id, signal), retry: false })
   const physical = useQuery({
     queryKey: [...key, 'physical'], queryFn: ({ signal }) => api.physicalDevices(property.id, signal), retry: false, enabled: list.isSuccess,
@@ -65,11 +81,13 @@ export function LogicalDevices({ property }: { property: Property }) {
   const roomList: Room[] = rooms.data ?? []
   const roomName = (id: number | null) => roomList.find(room => room.id === id)?.name
   const hardware = physical.data?.devices ?? []
-  const newHardware = hardware.filter(device => device.logicalDeviceId === null || device.logicalCreation === 'automatic')
+  const newHardware = hardware.filter(device => (device.logicalDeviceId === null || device.logicalCreation === 'automatic') &&
+    hardwareMatches(device, terms, roomName(device.roomId)))
   const shown = devices.filter(device => (filters.lifecycle === 'archived') === (device.archivedAt !== null) &&
     (!filters.room || String(device.roomId ?? '') === filters.room) && (!filters.kind || device.kind === filters.kind) &&
     (!filters.provider || device.current.some(item => item.provider === filters.provider)) &&
-    (filters.status === 'all' || (filters.status === 'assigned') === (device.current.length > 0)))
+    (filters.status === 'all' || (filters.status === 'assigned') === (device.current.length > 0)) &&
+    logicalDeviceMatches(device, terms, roomName(device.roomId)))
   const providerOptions = [...new Set(devices.flatMap(device => [...device.current, ...device.previous].map(item => item.provider)))].sort()
   const setFilter = <K extends keyof Filters>(name: K, value: Filters[K]) => setFilters(current => ({ ...current, [name]: value }))
 
@@ -89,7 +107,7 @@ export function LogicalDevices({ property }: { property: Property }) {
       onCancel={() => open(null)} onDone={done} />}
 
     {tab === 'hardware' && <HardwareView property={property} devices={newHardware} logical={devices} canManage={canManage}
-      loading={physical.isPending} failed={physical.isError} roomName={roomName} panel={panel} open={open}
+      loading={physical.isPending} failed={physical.isError} roomName={roomName} panel={panel} open={open} search={search}
       onUse={(target, device) => {
         // Continue in the 7B replacement form of the chosen logical device, with this hardware preselected.
         const active = target.current.find(item => item.channelKey === 'main') ?? target.current[0] ?? null
@@ -124,7 +142,8 @@ export function LogicalDevices({ property }: { property: Property }) {
       </div>}
       {devices.length === 0 && <Card className="placeholder"><p className="muted">No logical devices yet. Create one, or ask an administrator to
         initialize the existing devices with the documented command. New hardware is then covered automatically.</p></Card>}
-      {devices.length > 0 && shown.length === 0 && <p className="muted">No logical devices match these filters.</p>}
+      {devices.length > 0 && shown.length === 0 && <p className="muted" role="status">{terms.length
+        ? `No logical devices match “${search.trim()}”.` : 'No logical devices match these filters.'}</p>}
       {shown.map(device => <LogicalCard key={device.id} property={property} device={device} canManage={canManage} rooms={roomList}
         roomName={roomName(device.roomId)} panel={panel} open={open} onDone={done}
         onRestore={() => restore.mutate(device.id)} restoring={restore.isPending && restore.variables === device.id} />)}
@@ -460,14 +479,15 @@ function ArchiveDevice({ property, device, onCancel, onDone }: {
 }
 
 /** Hardware without an active logical device, and hardware whose identity was created automatically and may still need a decision. */
-function HardwareView({ property, devices, logical, canManage, loading, failed, roomName, panel, open, onUse }: {
+function HardwareView({ property, devices, logical, canManage, loading, failed, roomName, panel, open, onUse, search = '' }: {
   property: Property; devices: PhysicalDevice[]; logical: LogicalDevice[]; canManage: boolean; loading: boolean; failed: boolean
   roomName: (id: number | null) => string | undefined; panel: Panel | null; open: (panel: Panel | null) => void
-  onUse: (target: LogicalDevice, device: PhysicalDevice) => void
+  onUse: (target: LogicalDevice, device: PhysicalDevice) => void; search?: string
 }) {
   if (loading) return <p role="status">Loading hardware…</p>
   if (failed) return <p role="alert">Hardware could not be loaded.</p>
-  if (devices.length === 0) return <Card className="placeholder"><p className="muted">Every physical device is part of a logical device you manage.</p></Card>
+  if (devices.length === 0) return <Card className="placeholder"><p className="muted" role="status">{search.trim()
+    ? `No unassigned or new hardware matches “${search.trim()}”.` : 'Every physical device is part of a logical device you manage.'}</p></Card>
   return <div>
     <p className="muted">Unassigned hardware is not necessarily offline or faulty. Auto-created devices are new equipment until you say otherwise.</p>
     {devices.map(device => <Card className="detail-card" key={device.id}>

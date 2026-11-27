@@ -55,6 +55,21 @@ public sealed class TelemetryHoldPolicy(GrowattOptions growatt, DaikinOptions da
         _ => Fallback
     });
 
+    /// <summary>
+    /// How long evidence keeps a device available (<see cref="DeviceAvailability"/>), shared by the live views and alert evaluation.
+    /// Growatt uses one and a half times its configured polling interval (300 s gives 450 s); the provider sends source-timed batches on
+    /// that fixed cadence. Other providers keep their existing freshness windows, which their own pages and control eligibility also use.
+    /// Reading freshness (<see cref="Hold"/>) is a separate, longer window and is unchanged.
+    /// </summary>
+    public TimeSpan AvailabilityWindow(string provider) => Clamp(provider switch
+    {
+        "growatt" => DeviceAvailability.Window(TimeSpan.FromSeconds(growatt.PollSeconds)),
+        _ => Hold(provider, Metric.SwitchOn),
+    });
+
+    /// <summary>A policy with every provider's default settings, for components constructed without configuration.</summary>
+    public static TelemetryHoldPolicy Defaults() => new(new(), new(), new(), new(), new());
+
     /// <summary>Growatt daily counters restart at the inverter-local midnight used by the existing daily-counter freshness rule.</summary>
     public TimeZoneInfo? CounterZone(string source, TimeZoneInfo? propertyZone) =>
         source == "growatt" && Zone(growatt.TimeZone) is { } inverter ? inverter : propertyZone;

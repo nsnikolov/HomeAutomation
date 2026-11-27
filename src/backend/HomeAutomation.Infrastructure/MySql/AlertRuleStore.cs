@@ -10,8 +10,11 @@ namespace HomeAutomation.Infrastructure.MySql;
 /// Alert rule persistence. Any member reads rules; Owner, Admin and Operator change them, as for the shared dashboard.
 /// Rules are soft-deleted so incidents and notifications keep their history. Every change writes a revision snapshot.
 /// </summary>
-public sealed class AlertRuleStore(Database database, TimeProvider clock, IAlertTrigger? trigger = null) : IAlertRules
+public sealed class AlertRuleStore(Database database, TimeProvider clock, IAlertTrigger? trigger = null, TelemetryHoldPolicy? holdPolicy = null)
+    : IAlertRules
 {
+    private readonly TelemetryHoldPolicy holds = holdPolicy ?? TelemetryHoldPolicy.Defaults();
+
     internal static bool CanConfigure(string? role) => role?.ToUpperInvariant() is "OWNER" or "ADMIN" or "OPERATOR";
 
     public async Task<AlertRuleList?> ListAsync(string user, long property, CancellationToken ct)
@@ -48,7 +51,7 @@ public sealed class AlertRuleStore(Database database, TimeProvider clock, IAlert
     {
         await using var db = await database.OpenAsync(ct);
         if (await PropertyManagementStore.RoleAsync(db, null, property, user, ct) is null) return null;
-        return await AlertSignalReader.CatalogAsync(db, property, ct);
+        return await AlertSignalReader.CatalogAsync(db, property, holds, clock.GetUtcNow(), ct);
     }
 
     public async Task<AlertTemplateList?> TemplatesAsync(string user, long property, CancellationToken ct)
@@ -66,7 +69,7 @@ public sealed class AlertRuleStore(Database database, TimeProvider clock, IAlert
         if (errors.Count == 0) errors.AddRange(await AlertSignalReader.ValidateReferencesAsync(db, null, property, input.Definition, ct));
         if (errors.Count > 0) return new AlertRulePreview(false, errors, Truth.Unknown, [], now);
         // Read-only: no transaction, no state, incident or notification writes.
-        var read = await AlertSignalReader.LoadAsync(db, null, property, Domain.AlertSignals.Conditions(input.Definition).ToArray(), now, ct);
+        var read = await AlertSignalReader.LoadAsync(db, null, property, holds, Domain.AlertSignals.Conditions(input.Definition).ToArray(), now, ct);
         var evaluation = RuleEvaluator.Evaluate(input.Definition, read, now, latched: false);
         return new AlertRulePreview(true, [], evaluation.Result, evaluation.Conditions, now);
     }

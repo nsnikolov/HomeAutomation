@@ -29,7 +29,7 @@ Definitions are JSON stored in `alert_rules.definition`, validated on save and n
 - **Signals.** These four kinds are supported:
   - **Measurement on a device endpoint:** `deviceId`, `endpointKey` and `metric`.
   - **Measurement on an installation:** `installationId` and `metric`.
-  - **Connectivity:** `deviceId`, with the values Online, Offline or Unknown.
+  - **Connectivity:** `deviceId`, with the values Online, Stale, Offline or Unknown. It is the application availability the live views show ([availability](18-availability-pv-installation-summary.md#device-availability)): a provider Offline flag that arrives with fresh readings reads Online, and Stale is never Offline. Rules stored with Online, Offline or Unknown keep working.
   - **Device event:** `deviceId` and `eventCode`, which is `DEVICE_OFFLINE`, `ANY_FAULT` or a reported fault code.
 
   Signals refer to device identity and capability, never to display names. Saving a rule rejects any device or installation that is not currently in the rule's property, and any measurement the device has not reported.

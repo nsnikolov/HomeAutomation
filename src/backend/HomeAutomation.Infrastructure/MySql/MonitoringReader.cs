@@ -59,7 +59,75 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
         var matches = await connection.ExecuteScalarAsync<bool>(Query(
             "SELECT EXISTS(SELECT 1 FROM properties WHERE id = @PropertyId AND site_key = @SiteKey)",
             cancellationToken, new { PropertyId = propertyId, SiteKey = siteKey }));
-        return matches ? await ReadStateAsync(propertyId, null, "growatt", cancellationToken) : null;
+        if (!matches) return null;
+        var state = await ReadStateAsync(propertyId, null, "growatt", cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        var inverters = state.Devices.Where(device => device.Kind == DeviceKind.Inverter).OrderBy(device => device.Id).ToArray();
+
+        // PV generation needs the state before the latest reading for its hysteresis: a bounded read of recent samples per PV input.
+        var pvEndpoints = inverters.SelectMany(device => device.Endpoints)
+            .Where(endpoint => endpoint.Measurements.Any(reading => reading.Metric == Metric.PvPower)).Select(endpoint => endpoint.Id).ToArray();
+        var recent = (pvEndpoints.Length == 0 ? [] : await connection.QueryAsync<PvSampleRow>(Query(
+            """
+            SELECT s.endpoint_id AS EndpointId, x.observed_at_utc AS ObservedAt, x.numeric_value AS Number
+            FROM telemetry_series s JOIN telemetry_samples x ON x.series_id = s.id
+            WHERE s.property_id = @PropertyId AND s.source_key = 'growatt' AND s.metric = 'PvPower' AND s.endpoint_id IN @Endpoints
+              AND x.observed_at_utc >= @Since AND x.observed_at_utc <= @Until
+            ORDER BY x.observed_at_utc DESC LIMIT 400
+            """, cancellationToken, new
+            {
+                PropertyId = propertyId, Endpoints = pvEndpoints, Since = (now - PvHistory).UtcDateTime,
+                Until = (now + AlertLimits.FutureTolerance).UtcDateTime,
+            }))).ToLookup(row => row.EndpointId);
+
+        var devices = state.Devices.Select(device => device.Kind != DeviceKind.Inverter ? device : device with
+        {
+            PvInputs = device.Endpoints.Where(endpoint => pvEndpoints.Contains(endpoint.Id)).Select(endpoint =>
+            {
+                var power = endpoint.Measurements.First(reading => reading.Metric == Metric.PvPower);
+                var samples = recent[endpoint.Id].OrderByDescending(row => row.ObservedAt).Take(PvSamples).OrderBy(row => row.ObservedAt)
+                    .Select(row => (Utc(row.ObservedAt), row.Number)).ToList();
+                if (power.ObservedAt is { } latest && (samples.Count == 0 || samples[^1].Item1 < latest)) samples.Add((latest, power.Number));
+                var voltage = new[] { Metric.Pv1Voltage, Metric.PvVoltage }
+                    .Select(metric => endpoint.Measurements.FirstOrDefault(reading => reading.Metric == metric && reading.Number is not null))
+                    .Where(reading => reading is not null).OrderBy(reading => reading!.Quality).FirstOrDefault();
+                var result = PvGeneration.Evaluate(samples.Select(sample => sample.Item2).ToArray(), power.Quality, voltage?.Number,
+                    voltage?.Quality ?? ReadingQuality.Missing);
+                return new PvInputState(endpoint.Id, result.State, result.Reason, result.RawWatts, result.DisplayWatts);
+            }).ToArray(),
+        }).ToArray();
+        return state with { Devices = devices, Solar = Summarize(inverters, state.Installation, TimeSpan.FromSeconds(growatt.PollSeconds)) };
+    }
+
+    private static readonly TimeSpan PvHistory = TimeSpan.FromHours(3);
+    private const int PvSamples = 12;
+
+    /// <summary>
+    /// The live installation summary: a current whole-installation reading when the provider sends one, otherwise values derived
+    /// from the inverters' latest readings (<see cref="InstallationSummary"/>). Nothing is stored.
+    /// </summary>
+    internal static IReadOnlyList<InstallationValue> Summarize(IReadOnlyList<DeviceDetails> inverters, IReadOnlyList<MetricReading> installation,
+        TimeSpan maximumSpread)
+    {
+        SourceReading[] Sources(Metric metric) => inverters.Select(device =>
+        {
+            var reading = device.Endpoints.SelectMany(endpoint => endpoint.Measurements).FirstOrDefault(item => item.Metric == metric);
+            return new SourceReading(device.Name, reading?.Number, reading?.ObservedAt, reading?.Quality ?? ReadingQuality.Missing);
+        }).ToArray();
+        InstallationValue? Site(SummarySlot slot, Metric metric) =>
+            installation.FirstOrDefault(item => item.Metric == metric && item.Quality == ReadingQuality.Fresh &&
+                (item.Number is { } number ? double.IsFinite(number) : item.Flag is not null)) is { } reading
+                ? InstallationSummary.Reported(slot, reading.Unit, reading.Number, reading.Flag, reading.ObservedAt) : null;
+        return
+        [
+            Site(SummarySlot.PvPower, Metric.PvPower) ??
+                InstallationSummary.Sum(SummarySlot.PvPower, "W", Sources(Metric.PvPower), maximumSpread, PvGeneration.Display),
+            Site(SummarySlot.Consumption, Metric.HouseholdPower) ??
+                InstallationSummary.Sum(SummarySlot.Consumption, "W", Sources(Metric.ActivePower), maximumSpread),
+            Site(SummarySlot.GridSupply, Metric.GridAvailable) ?? InstallationSummary.Supply(Sources(Metric.GridVoltage)),
+            Site(SummarySlot.AcInput, Metric.GridImportPower) ??
+                InstallationSummary.Sum(SummarySlot.AcInput, "W", Sources(Metric.AcInputPower), maximumSpread),
+        ];
     }
 
     /// <param name="provider">One provider's devices and series, or null for every real provider.</param>
@@ -134,13 +202,22 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             var qualities = deviceEndpoints.SelectMany(endpoint => endpoint.Measurements).Select(sample => sample.Quality).ToList();
             var quality = qualities.Contains(ReadingQuality.Fresh) ? ReadingQuality.Fresh
                 : qualities.Contains(ReadingQuality.Stale) ? ReadingQuality.Stale : ReadingQuality.Missing;
-            var freshness = provider == "growatt" ? TimeSpan.FromSeconds(growatt.FreshnessSeconds) : holds.Hold(device.Provider, Metric.SwitchOn);
-            var online = Telemetry.Quality(Utc(device.StatusObserved), now, freshness) == ReadingQuality.Fresh
-                && Enum.TryParse<Connectivity>(device.Connectivity, out var status) ? status : Connectivity.Unknown;
+            // Availability rests on source times: the provider's status report and the newest valid reading. A refetch of old data
+            // keeps the old source time, so it is not new evidence.
+            var reported = Enum.TryParse<Connectivity>(device.Connectivity, out var status) ? status : Connectivity.Unknown;
+            var latestReading = endpoints[device.Id].SelectMany(endpoint => readings[endpoint.Id]).Where(Valid)
+                .Select(row => Utc(row.ObservedAt)).Max();
+            var window = holds.AvailabilityWindow(device.Provider);
+            var availability = DeviceAvailability.Evaluate(device.Connectivity is null ? null : reported, Utc(device.StatusObserved),
+                latestReading, now, window);
             return new DeviceDetails(device.Id, device.RoomId, device.Name, Enum.Parse<DeviceKind>(device.Kind),
-                device.Manufacturer, device.Model, online, device.FaultCode, Utc(device.LastContact), quality, deviceEndpoints,
-                device.ProviderName, device.Provider, device.ProviderName != device.Name);
+                device.Manufacturer, device.Model, DeviceAvailability.ToConnectivity(availability.State), device.FaultCode,
+                Utc(device.LastContact), quality, deviceEndpoints, device.ProviderName, device.Provider, device.ProviderName != device.Name,
+                availability.State, reported, Utc(device.StatusObserved), latestReading, (int)window.TotalSeconds, availability.Basis);
         }).ToArray(), readings[null].Select(ToReading).ToArray(), alerts);
+
+        static bool Valid(ReadingRow row) => row.ObservedAt is not null &&
+            (row.Number is { } number ? double.IsFinite(number) : row.Flag is not null || !string.IsNullOrWhiteSpace(row.Code));
 
         MetricReading ToReading(ReadingRow row)
         {
@@ -194,4 +271,5 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
         string Source);
     private sealed record AlertRow(long DeviceId, string DeviceName, string Code, DateTime OccurredAt);
     private sealed record HistoryRow(DateTime ObservedAt, double? Number, bool? Flag, string? Code);
+    private sealed record PvSampleRow(long EndpointId, DateTime ObservedAt, double? Number);
 }

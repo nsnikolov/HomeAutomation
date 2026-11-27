@@ -14,9 +14,10 @@ namespace HomeAutomation.Infrastructure.MySql;
 /// key allows at most one active incident per correlation family. All state is in MySQL, so a restart resumes where it left off.
 /// This class never sends device commands.
 /// </summary>
-public sealed class AlertEvaluator(Database database, TimeProvider clock, AlertOptions options)
+public sealed class AlertEvaluator(Database database, TimeProvider clock, AlertOptions options, TelemetryHoldPolicy? holdPolicy = null)
 {
     private const int CacheLimit = 2000;
+    private readonly TelemetryHoldPolicy holds = holdPolicy ?? TelemetryHoldPolicy.Defaults();
     private readonly ConcurrentDictionary<(long Rule, int Revision), (RuleGroup Definition, NotificationPolicy Policy)> cache = new();
 
     /// <summary>Properties with enabled rules or active incidents. Deleted properties are skipped.</summary>
@@ -74,7 +75,7 @@ public sealed class AlertEvaluator(Database database, TimeProvider clock, AlertO
             """, ct, new { property }, tx))).ToDictionary(row => row.RuleId);
 
         var parsed = rows.Select(row => (Row: row, Parsed: Parse(row))).ToArray();
-        var read = await AlertSignalReader.LoadAsync(db, tx, property,
+        var read = await AlertSignalReader.LoadAsync(db, tx, property, holds,
             parsed.SelectMany(rule => Domain.AlertSignals.Conditions(rule.Parsed.Definition)).ToArray(), now, ct);
 
         var evaluated = new List<Evaluated>();

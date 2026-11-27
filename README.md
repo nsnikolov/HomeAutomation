@@ -178,6 +178,10 @@ Automations → **Alert rules** creates rules from structured conditions or temp
 
 Apply migration 021 with `--migrate` after a backup and restart the API. No grant change is needed, and readiness does not depend on 021: until it is applied, the alert pages report that the database must be upgraded. No rule exists until someone creates one or confirms **Set up grid outage alerts**. Optional settings: `Alerts:Enabled`, `Alerts:SweepSeconds` (default 30), `Alerts:MinimumRenotifySeconds` (300) and `Alerts:DeliveryExpirySeconds` (900).
 
+## Device status and the solar summary
+
+A device shows **Online** when a reading or provider status arrived recently. For Growatt that means within one and a half polling intervals (7.5 minutes at the default 5 minutes). It shows **Stale** when nothing recent arrived, which is not a confirmed disconnection. It shows **Offline** only when the provider reports a disconnection that no newer reading contradicts. The provider's own report stays visible in the tooltip. On Live Growatt, PV power from 0 to 10 W shows as 0 W, and **PV generating** needs more than 20 W. The **Solar installation** summary combines both inverters' latest readings and says when a value is partial, stale or unavailable. Devices search filters every section by name, provider, model or room. Details are in [device availability, PV generation and the installation summary](docs/architecture/18-availability-pv-installation-summary.md).
+
 ## Historical telemetry
 
 Milestone 7A adds hourly rollups, local calendar days, energy estimates and provider-neutral history routes. The model, quality rules and API are in [historical telemetry](docs/architecture/10-historical-telemetry.md).
