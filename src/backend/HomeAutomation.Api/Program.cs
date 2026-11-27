@@ -284,6 +284,21 @@ var protection = builder.Services.AddDataProtection().SetApplicationName("HomeAu
 if (!string.IsNullOrWhiteSpace(keyDirectory))
     protection.PersistKeysToFileSystem(new DirectoryInfo(keyDirectory));
 
+builder.Services.AddOptions<AlertOptions>().BindConfiguration("Alerts")
+    .Validate(options => options.SweepSeconds is >= 10 and <= 600 && options.MinimumRenotifySeconds is >= 0 and <= 86400 &&
+        options.DeliveryExpirySeconds is >= 60 and <= 86400, "Invalid alert sweep, renotification or delivery expiry setting.")
+    .ValidateOnStart();
+builder.Services.AddSingleton(services => services.GetRequiredService<IOptions<AlertOptions>>().Value);
+builder.Services.AddSingleton<AlertTrigger>();
+builder.Services.AddSingleton<IAlertTrigger>(services => services.GetRequiredService<AlertTrigger>());
+builder.Services.AddScoped<IAlertRules, AlertRuleStore>();
+builder.Services.AddScoped<INotificationCenter, NotificationStore>();
+builder.Services.AddSingleton<AlertEvaluator>();
+builder.Services.AddSingleton<IAlertLiveNotifier, AlertLiveNotifier>();
+builder.Services.AddSingleton<INotificationChannel, BrowserNotificationChannel>();
+builder.Services.AddSingleton<NotificationDispatcher>();
+builder.Services.AddSingleton<IAlertSchema, AlertSchema>();
+builder.Services.AddHostedService<AlertWorker>();
 builder.Services.AddSingleton<PollProgress>();
 builder.Services.AddHostedService<TelemetryWorker>();
 builder.Services.AddTelemetryHistory();

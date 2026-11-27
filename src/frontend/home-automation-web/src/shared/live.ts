@@ -106,6 +106,15 @@ export function useLiveUpdates(propertyId: number) {
       ewelinkDirty = true
       scheduleEwelinkRefresh()
     })
+    // Alerts: property views refresh on rule or incident changes; the bell and banner on any notification for this user.
+    connection.on('alertsChanged', (event: { propertyId: number }) => {
+      void client.invalidateQueries({ queryKey: ['property', event.propertyId, 'alerts'] })
+      void client.invalidateQueries({ queryKey: ['notifications', 'summary'] })
+    })
+    connection.on('notificationsChanged', () => { void client.invalidateQueries({ queryKey: ['notifications'] }) })
+    connection.on('browserNotification', (message: unknown) => {
+      window.dispatchEvent(new CustomEvent('homeautomation:browser-notification', { detail: message }))
+    })
     connection.onreconnecting(disconnected)
     connection.onreconnected(subscribe)
     connection.onclose(() => { disconnected(); retryStart() })
@@ -119,6 +128,9 @@ export function useLiveUpdates(propertyId: number) {
       connection.off('stateChanged')
       connection.off('ewelinkChanged')
       connection.off('dashboardChanged')
+      connection.off('alertsChanged')
+      connection.off('notificationsChanged')
+      connection.off('browserNotification')
       void connection.stop().catch(() => undefined)
     }
   }, [client, propertyId])

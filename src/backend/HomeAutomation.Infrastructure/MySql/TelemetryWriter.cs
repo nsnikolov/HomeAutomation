@@ -6,7 +6,9 @@ using static HomeAutomation.Infrastructure.MySql.Database;
 
 namespace HomeAutomation.Infrastructure.MySql;
 
-public sealed class TelemetryWriter(Database database, TimeProvider timeProvider) : ITelemetryWriter, IGrowattTelemetryStore
+/// <param name="alerts">Optional: wakes rule evaluation for the property after each committed write.</param>
+public sealed class TelemetryWriter(Database database, TimeProvider timeProvider, IAlertTrigger? alerts = null)
+    : ITelemetryWriter, IGrowattTelemetryStore
 {
     public async Task<long> RegisterDemoInventoryAsync(IReadOnlyList<DiscoveredDevice> devices, CancellationToken cancellationToken)
     {
@@ -54,6 +56,7 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
         await RegisterInventoryAsync(connection, transaction, site, "growatt", devices, cancellationToken);
         await PersistAsync(connection, transaction, site, "growatt", batch, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        alerts?.PropertyChanged(site.PropertyId);
         return site.PropertyId;
     }
 
@@ -79,6 +82,7 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
         await RegisterInventoryAsync(connection, transaction, site, provider, [device with { RoomKey = room }], cancellationToken);
         await PersistAsync(connection, transaction, site, provider, batch, cancellationToken, sensorReportSource);
         await transaction.CommitAsync(cancellationToken);
+        alerts?.PropertyChanged(propertyId);
     }
 
     private static async Task RegisterInventoryAsync(MySqlConnection connection, MySqlTransaction transaction, Site site,
@@ -160,6 +164,7 @@ public sealed class TelemetryWriter(Database database, TimeProvider timeProvider
         var site = await LoadSiteAsync(connection, transaction, "simulator", "countryside", propertyId, cancellationToken);
         await PersistAsync(connection, transaction, site, "simulator", batch, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        alerts?.PropertyChanged(propertyId);
     }
 
     private async Task PersistAsync(MySqlConnection connection, MySqlTransaction transaction, Site site, string provider,

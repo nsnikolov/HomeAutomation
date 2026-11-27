@@ -70,7 +70,9 @@ internal static class MonitoringEndpoints
         property.MapHistory();
         property.MapLogicalDevices();
         property.MapPropertyManagement();
+        property.MapAlerts();
         api.MapPropertyAdministration();
+        api.MapNotifications();
     }
 
     private static async Task<IResult> HistoryAsync(long propertyId, long? endpointId, string metric, DateTimeOffset? from,

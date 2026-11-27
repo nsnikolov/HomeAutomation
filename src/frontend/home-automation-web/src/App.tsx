@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowUpRight, ChartNoAxesCombined, ChevronDown, CircuitBoard, History as HistoryIcon, House, LayoutGrid, LogOut, Settings, Snowflake, Zap } from 'lucide-react'
+import { ArrowUpRight, Bell, ChartNoAxesCombined, ChevronDown, CircuitBoard, History as HistoryIcon, House, LayoutGrid, LogOut, Settings, Snowflake, Zap } from 'lucide-react'
 import { Link, NavLink, Navigate, Route, Routes, useMatch, useNavigate, useParams, useSearchParams } from 'react-router'
 import { api } from './shared/api'
 import { useLiveUpdates } from './shared/live'
@@ -13,10 +13,13 @@ import { EwelinkPanel } from './features/EwelinkPanel'
 import { TuyaPanel } from './features/TuyaPanel'
 import { Devices, DevicePage } from './features/Devices'
 import { Energy } from './features/Energy'
+import { CriticalBanner, NotificationBell, useBrowserNotifications } from './features/alerts/NotificationCenter'
 // History is loaded on demand so its charts do not enlarge the initial bundle.
 const HistoryPage = lazy(() => import('./features/history/HistoryPage').then(module => ({ default: module.HistoryPage })))
 // Settings and property management are administrative pages, loaded on demand like History.
 const ConfigurationSettings = lazy(() => import('./features/ConfigurationSettings').then(module => ({ default: module.ConfigurationSettings })))
+const AlertsPage = lazy(() => import('./features/alerts/AlertsPage').then(module => ({ default: module.AlertsPage })))
+const AutomationsPage = lazy(() => import('./features/alerts/AlertRules').then(module => ({ default: module.AutomationsPage })))
 const FirstPropertyForm = lazy(() => import('./features/PropertyManagement').then(module => ({ default: module.FirstPropertyForm })))
 
 export function App() {
@@ -106,6 +109,7 @@ const links = [
   { path: '/devices', label: 'Devices', icon: CircuitBoard },
   { path: '/energy', label: 'Energy', icon: ChartNoAxesCombined },
   { path: '/history', label: 'History', icon: HistoryIcon },
+  { path: '/alerts', label: 'Alerts', icon: Bell },
   { path: '/automations', label: 'Automations', icon: Zap },
   { path: '/settings', label: 'Settings', icon: Settings },
 ]
@@ -120,6 +124,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
   const energyView = useMatch('/properties/:propertyId/energy') !== null
   const stateView = devicesView || energyView
   const live = useLiveUpdates(property.id)
+  useBrowserNotifications()
   const snapshot = useQuery({
     queryKey: ['property', property.id, 'state'],
     queryFn: ({ signal }) => api.state(property.id, signal),
@@ -153,6 +158,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
         <div className="topbar-status">
           <span className="sample-label">{growattView ? 'Growatt Cloud' : daikinView ? 'Daikin ONECTA'
             : ewelinkView ? 'eWeLink Cloud' : tuyaView ? 'Tuya Cloud' : 'Property monitoring'}</span>
+          <NotificationBell property={property} />
           <button className="live-toggle" type="button" aria-expanded={offlineNotice} onClick={() => setOfflineNotice(!offlineNotice)}>
             <Badge className={live ? 'tone-good' : 'tone-neutral'}><i />{live ? 'Live updates' : 'Auto refresh'}</Badge>
           </button>
@@ -162,6 +168,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
         {live ? 'The dashboard receives updates over SignalR.' : 'The dashboard refreshes regularly while the live connection is unavailable.'}
       </div>}
       <main className="content">
+        <CriticalBanner property={property} />
         {stateView && snapshot.isError && <div className="notice" role="alert">The property feed could not be refreshed. <Button variant="outline" onClick={() => void snapshot.refetch()}>Retry</Button></div>}
         <Routes>
           <Route index element={<Dashboard property={property} live={live} email={email} />} />
@@ -173,17 +180,14 @@ function PropertyView({ property, properties, email }: { property: Property; pro
           <Route path="devices/:deviceId" element={<DevicePage property={property} />} />
           <Route path="energy" element={<Energy property={property} state={snapshot.data} pollSeconds={health.data?.pollSeconds ?? 10} />} />
           <Route path="history" element={<Suspense fallback={<p role="status">Loading history…</p>}><HistoryPage property={property} /></Suspense>} />
-          <Route path="automations" element={<Placeholder title="Automations" description="Automation rules will appear here when rule execution is available." />} />
+          <Route path="alerts" element={<Suspense fallback={<p role="status">Loading alerts…</p>}><AlertsPage property={property} properties={properties} /></Suspense>} />
+          <Route path="automations" element={<Suspense fallback={<p role="status">Loading automations…</p>}><AutomationsPage property={property} properties={properties} /></Suspense>} />
           <Route path="settings" element={<Suspense fallback={<p role="status">Loading settings…</p>}><ConfigurationSettings property={property} /></Suspense>} />
           <Route path="*" element={<Navigate to={root} replace />} />
         </Routes>
       </main>
     </div>
   </div>
-}
-
-function Placeholder({ title, description }: { title: string; description: string }) {
-  return <><h1>{title}</h1><Card className="placeholder"><p>{description}</p></Card></>
 }
 
 function Failure({ message, retry }: { message: string; retry: () => void }) {

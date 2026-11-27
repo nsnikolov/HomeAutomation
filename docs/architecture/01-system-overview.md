@@ -51,3 +51,4 @@ flowchart LR
 - [Automation](06-automation-engine.md), [security and deployment](07-security-deployment.md), and [roadmap](08-implementation-roadmap.md)
 - Decisions on [deployment shape](adr/0001-modular-monolith.md), [web rendering](adr/0002-react-spa.md), [persistence](adr/0003-mysql-dapper.md), [integration locality](adr/0004-cloud-first-integrations.md), [automation execution](adr/0005-automation-execution.md), and [telemetry lifecycle](adr/0006-telemetry-storage.md)
 - [Capability model and multiple provider bindings](adr/0007-device-capabilities-and-provider-bindings.md)
+- [Structured alert rules, correlated incidents and channel-neutral notifications](adr/0008-alert-rules-and-incidents.md)

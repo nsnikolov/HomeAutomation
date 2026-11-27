@@ -94,7 +94,7 @@ internal static class PropertyManagementEndpoints
         }
     }
 
-    private static async ValueTask<object?> Antiforgery(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    internal static async ValueTask<object?> Antiforgery(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var http = context.HttpContext;
         if (!HttpMethods.IsGet(http.Request.Method))
@@ -116,7 +116,7 @@ internal static class PropertyManagementEndpoints
         return Result(result, created);
     }
 
-    private static IResult Result(ManagementResult result, bool created = false)
+    internal static IResult Result(ManagementResult result, bool created = false)
     {
         if (result.Status == ManagementStatus.Done)
             return created ? Results.Created((string?)null, new { id = result.Id }) : Results.Ok(new { id = result.Id });

@@ -959,6 +959,7 @@ public sealed class ApiTests : IClassFixture<ApiTests.Host>
             builder.UseSetting("Database:Password", "test-configuration-only");
             builder.UseSetting("Simulator:Enabled", "false");
             builder.UseSetting("TelemetryHistory:RollupsEnabled", "false");
+            builder.UseSetting("Alerts:Enabled", "false");
             builder.UseSetting("Growatt:Enabled", "false");
             builder.UseSetting("Daikin:ClientId", "");
             builder.UseSetting("Daikin:ClientSecret", "");

@@ -172,6 +172,12 @@ dotnet run --project src/backend/HomeAutomation.Api -- --clear-room-assignments
 dotnet run --project src/backend/HomeAutomation.Api -- --clear-room-assignments --execute --confirm-room-assignment-clearing
 ```
 
+## Alerts and notifications
+
+Automations → **Alert rules** creates rules from structured conditions or templates: grid outage, low battery, room temperature and device offline. Rules sharing a correlation group, such as `grid.outage`, form one incident that escalates from Warning to Critical and recovers. **Alerts** shows incidents with their timeline, the notification history and your notification settings; the header bell and a Critical banner stay current over SignalR. Alerts never control equipment. Details are in [alert rules, incidents and notifications](docs/architecture/17-alerts-and-notifications.md).
+
+Apply migration 021 with `--migrate` after a backup and restart the API. No grant change is needed, and readiness does not depend on 021: until it is applied, the alert pages report that the database must be upgraded. No rule exists until someone creates one or confirms **Set up grid outage alerts**. Optional settings: `Alerts:Enabled`, `Alerts:SweepSeconds` (default 30), `Alerts:MinimumRenotifySeconds` (300) and `Alerts:DeliveryExpirySeconds` (900).
+
 ## Historical telemetry
 
 Milestone 7A adds hourly rollups, local calendar days, energy estimates and provider-neutral history routes. The model, quality rules and API are in [historical telemetry](docs/architecture/10-historical-telemetry.md).

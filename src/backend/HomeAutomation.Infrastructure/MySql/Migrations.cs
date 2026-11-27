@@ -72,9 +72,19 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
     private const string TelemetryRollupMigration = ".017_telemetry_rollups.sql";
     private const string LogicalDeviceMigration = ".018_logical_devices.sql";
     private const string LogicalManagementMigration = ".019_logical_device_management.sql";
+    private const string AlertsMigration = ".021_alerts_and_notifications.sql";
     private volatile bool receiveTimeReady;
     private volatile bool telemetryHistoryReady;
     private volatile bool logicalDevicesReady;
+    private volatile bool alertsReady;
+
+    /// <summary>Event rules, incidents and notifications need migration 021. Other readiness checks ignore it.</summary>
+    public async Task<bool> VerifyAlertsAsync(CancellationToken ct)
+    {
+        if (alertsReady) return true;
+        alertsReady = await RecordedAsync([AlertsMigration], ct);
+        return alertsReady;
+    }
 
     /// <summary>Historical rollups are optional until migration 017 is applied. Other readiness checks ignore it.</summary>
     public async Task<bool> VerifyTelemetryHistoryAsync(CancellationToken ct)
@@ -134,6 +144,7 @@ public sealed class Migrations(Database database, ILogger<Migrations>? logger = 
                 !name.EndsWith(TelemetryRollupMigration, StringComparison.Ordinal) &&
                 !name.EndsWith(LogicalDeviceMigration, StringComparison.Ordinal) &&
                 !name.EndsWith(LogicalManagementMigration, StringComparison.Ordinal) &&
+                !name.EndsWith(AlertsMigration, StringComparison.Ordinal) &&
                 !ConfigurationMigrations.Contains(name, StringComparer.Ordinal) &&
                 (includeTuya || !name.EndsWith(".005_tuya_cloud.sql", StringComparison.Ordinal)) &&
                 (includeDashboard || !name.EndsWith(".011_monitoring_dashboard.sql", StringComparison.Ordinal)) &&

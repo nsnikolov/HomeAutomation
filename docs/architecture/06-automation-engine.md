@@ -1,5 +1,7 @@
 # Automation engine
 
+Alert rules, incidents and notifications are implemented separately and never issue commands; see [alert rules, incidents and notifications](17-alerts-and-notifications.md#future-automation-integration). Future automations can react to their incident events.
+
 Use declarative, versioned rules with a fixed catalog of triggers, predicates and actions. Evaluate them inside the backend against timestamped inputs. Send all resulting device writes through the same durable command path used by manual control. See [ADR 0005](adr/0005-automation-execution.md).
 
 ## Rule and schedule model
