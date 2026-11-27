@@ -1,10 +1,14 @@
+import { lazy, Suspense, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router'
 import { api } from '../shared/api'
 import type { Device, GrowattState, InstallationValue, Property, PvInputState, Reading } from '../shared/types'
 import { Badge, Card } from '../shared/ui'
 import { displayNumber, formatMoment, humanize } from '../shared/utils'
 import { DeviceBadge, deviceAvailability, formatReading, metricLabels } from './Devices'
 import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
+// The power-flow view and its illustrations load on first use, like the other larger pages.
+const GrowattFlow = lazy(() => import('./growatt/GrowattFlow').then(module => ({ default: module.GrowattFlow })))
 
 const messages: Record<string, string> = {
   notConfigured: 'Live Growatt monitoring is not configured for this property.',
@@ -35,15 +39,55 @@ function deviceMetricLabel(metric: Reading['metric']) {
     ? inverterMetricLabels[metric] : metricLabels[metric]
 }
 
+export type GrowattView = 'flow' | 'details'
+export const growattViewKey = 'homeautomation:growatt-view'
+const isView = (value: string | null): value is GrowattView => value === 'flow' || value === 'details'
+
+function storedView(): GrowattView | null {
+  try {
+    const value = localStorage.getItem(growattViewKey)
+    return isView(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
+/** “Поток | Детайли”: a real button group in the style of the Dashboard's Compact/Detailed toggle. */
+export function GrowattViewToggle({ view, onChange }: { view: GrowattView; onChange: (view: GrowattView) => void }) {
+  return <div className="monitor-view-toggle" role="group" aria-label="Изглед">
+    {([['flow', 'Поток'], ['details', 'Детайли']] as const).map(([value, label]) =>
+      <button key={value} type="button" aria-pressed={view === value} onClick={() => onChange(value)}>{label}</button>)}
+  </div>
+}
+
+/**
+ * The Live Growatt page. One query feeds both views, and live updates refresh it through the property query key. The choice is in
+ * the URL (`?view=flow` or `?view=details`) and in localStorage; the default is the power-flow view. Details is the existing summary.
+ */
 export function GrowattPanel({ property }: { property: Property }) {
   const preferences = useDevicePreferences(property.id, 'growatt')
+  const [params, setParams] = useSearchParams()
+  const requested = params.get('view')
+  const view: GrowattView = isView(requested) ? requested : storedView() ?? 'flow'
+  useEffect(() => {
+    try { localStorage.setItem(growattViewKey, view) } catch { /* the URL still carries the choice */ }
+    if (requested !== view)
+      setParams(current => { const next = new URLSearchParams(current); next.set('view', view); return next }, { replace: true })
+  }, [view, requested, setParams])
   const query = useQuery({
     queryKey: ['property', property.id, 'growatt'],
     queryFn: ({ signal }) => api.growatt(property.id, signal),
     refetchInterval: 30000,
   })
-  return <GrowattSummary result={query.data} timeZone={property.timeZone} preferences={preferences}
-    message={query.isError ? 'The Growatt status request failed.' : 'Checking Growatt integration…'} />
+  const message = query.isError ? 'The Growatt status request failed.' : 'Checking Growatt integration…'
+  return <>
+    <div className="growatt-view-bar"><GrowattViewToggle view={view} onChange={next =>
+      setParams(current => { const updated = new URLSearchParams(current); updated.set('view', next); return updated })} /></div>
+    {view === 'details'
+      ? <GrowattSummary result={query.data} timeZone={property.timeZone} preferences={preferences} message={message} />
+      : <Suspense fallback={<p role="status">Loading the power-flow view…</p>}>
+        <GrowattFlow result={query.data} timeZone={property.timeZone} message={message} /></Suspense>}
+  </>
 }
 
 export function GrowattSummary({ result, timeZone, message, preferences }: {

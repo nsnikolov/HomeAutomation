@@ -47,6 +47,12 @@ Updated 2026-11-27. [AGENTS.md](../AGENTS.md) contains the shared development ru
   - **Migration 021**, optional for readiness; no grant change. The prompt referenced an earlier notification spec that was never archived; Phase 15 of [prompt 0065](prompts/0065-event-rules-incidents-notifications.md) was used as its requirements.
   - **Signal identity fix ([prompt 0066](prompts/0066-fix-rule-editor-signal-resolution.md)):** the catalog spelled metrics in C# PascalCase inside `key` (`BatterySoc`) while the editor derived camelCase keys from stored signals (`batterySoc`), so every measurement looked unavailable. `AlertSignals.Key` is now the single camelCase identity. The browser resolves signals through `signalIndex`, built from each entry's own `signal`. Devices sharing a name are told apart by model, then manufacturer, room or number, in the catalog, evidence and timelines. An unavailable stored signal is kept and explained, never substituted.
   - **Read behavior ([prompt 0067](prompts/0067-notification-read-behavior.md)):** opening the bell reads nothing. Selecting a notification in the bell or history opens its incident and marks only that notification read. A `notification=<id>` link (system notification click) reads that one notification. Counters change after server confirmation, failures keep notifications unread, and in-flight reads are deduplicated. Other tabs follow `notificationsChanged`, with in-flight reads cancelled first so a stale count cannot survive. Reading, acknowledgment and resolution stay independent. Frontend only.
+- **Live Growatt power-flow view (2026-11-27)** — see [prompt 0069](prompts/0069-growatt-power-flow-view.md) and [Live Growatt views](architecture/18-availability-pv-installation-summary.md#live-growatt-views-power-flow-and-details).
+  - **Switch:** **Поток | Детайли** (`?view=`, localStorage). The default is the power-flow view; Details is the unchanged existing view. One query feeds both.
+  - **Power flow:** a cross diagram with original SVG illustrations, animated chevrons (static with reduced motion), one data-status badge, a separate cloud-offline label, today's totals and short inverter cards. It is in Bulgarian, as requested.
+  - **Battery:** the flow is the inverters' `batteryPower` sum (`batteryFlow`, labelled *по данни от инверторите*). The shared battery card's *Shared battery flow unavailable* is by design and unchanged.
+  - **Energy:** the page now sums the inverters' recorded `PvPower` and `ActivePower` series (`sumSeries`, `productionCurves`), because V4 records no installation series.
+  - **Scope:** frontend only. No migration, API or device-command change.
 - **Availability, PV display, Devices search and the solar summary (2026-11-27)** — see [prompt 0068](prompts/0068-growatt-availability-pv-search-solar-summary.md) and [availability, PV and installation summary](architecture/18-availability-pv-installation-summary.md).
   - **Availability:** `DeviceDetails.availability` is Online, Stale, Offline or Unknown, from source-timed evidence. A Growatt window is `PollSeconds × 1.5`; other providers keep their windows. A provider Offline flag that arrives with fresh readings reads Online and stays visible as `reportedConnectivity`; Offline needs a newer disconnection report.
   - **Alerts:** the Connectivity alert signal uses the same evaluation and accepts Stale. The `DEVICE_OFFLINE` event label is now "reported offline (provider)".
@@ -67,7 +73,8 @@ Updated 2026-11-27. [AGENTS.md](../AGENTS.md) contains the shared development ru
 
 | Commit | Change |
 | --- | --- |
-| Availability, PV and solar summary | Evidence-based device availability (Growatt `PollSeconds × 1.5`), PV display and generation hysteresis, derived installation summary, Devices search across all sections. No migration. See [prompt 0068](prompts/0068-growatt-availability-pv-search-solar-summary.md). |
+| Growatt power-flow view | **Поток \| Детайли** switch, power-flow diagram with original SVG illustrations, battery flow summed from the inverters, Energy curves from the inverters' series. Frontend only. See [prompt 0069](prompts/0069-growatt-power-flow-view.md). |
+| `4e8c7d3` | Evidence-based device availability (Growatt `PollSeconds × 1.5`), PV display and generation hysteresis, derived installation summary, Devices search across all sections. No migration. See [prompt 0068](prompts/0068-growatt-availability-pv-search-solar-summary.md). |
 | `1b77d57` | Bell and history selection marks one notification read, `notification=<id>` links, confirmed counters, failure handling, dedupe, stale-count race fix, unread styling. Frontend only. See [prompt 0067](prompts/0067-notification-read-behavior.md). |
 | `b3f9a53` | Canonical camelCase signal keys, one browser signal index, distinguishable equal device names, explained unavailable signals, grid setup names. No migration. See [prompt 0066](prompts/0066-fix-rule-editor-signal-resolution.md). |
 | `a2bf0b4` | Rules, incidents, notifications, worker, migration 021, Alerts and Automations pages, bell and Critical banner. See [prompt 0065](prompts/0065-event-rules-incidents-notifications.md). |
@@ -161,6 +168,18 @@ Keep manual commands on provider pages and behind explicit authorization. Record
 - Use the [roadmap](architecture/08-implementation-roadmap.md) for new work when requested. Do not treat its future architecture as deployed.
 
 ## Verification baseline
+
+- **Growatt power-flow view (frontend only)**:
+  - **Build:** type-check and the production build passed. The power-flow view is a lazy 18 kB chunk, the main chunk is 433 kB, and the earlier chunk-size warning no longer appears.
+  - **Tests:** Vitest reported 173 passes, including 16 new ones:
+    - **Battery flow (4):** both inverters, one, none, and charging, discharging and idle.
+    - **Today and status (3):** totals and status.
+    - **Energy (2):** series sums and curve choice.
+    - **Power-flow view (4):** values, night state, today's row and inverter cards, and the no-data case.
+    - **Switch (3):** default view, URL and localStorage, URL precedence, Details rendering the existing component, and a single fetch.
+  - **Lint:** the project has no lint script; `tsc --noEmit` runs in `npm run build`.
+  - **Backend:** unchanged and not rerun.
+  - **Not checked:** the view in a real browser at phone widths, or against live Growatt data.
 
 - **Availability, PV display, Devices search and the solar summary**:
   - **Backend:** the Release build passed with zero warnings. With disposable MySQL 8.0.46 fixtures, 394 passed and 11 opt-in skips, twice in a row; without fixtures, 345 passed and 60 skipped.

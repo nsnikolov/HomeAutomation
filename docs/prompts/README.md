@@ -70,3 +70,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 66. 2026-11-27 · [HomeAutomation — Fix Rule Editor Signal Resolution and Duplicate Signal Labels](0066-fix-rule-editor-signal-resolution.md)
 67. 2026-11-27 · [HomeAutomation — Fix Notification Read Behavior](0067-notification-read-behavior.md)
 68. 2026-11-27 · [HomeAutomation — Growatt Availability, PV Generation, Device Search and Solar Installation Aggregation Fixes](0068-growatt-availability-pv-search-solar-summary.md)
+69. 2026-11-27 · [Нов изглед „Поток“ (Power flow) за страницата Live Growatt](0069-growatt-power-flow-view.md)

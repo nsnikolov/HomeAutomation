@@ -33,6 +33,12 @@ home-automation-web/src/
   - **Search:** Devices search filters provider devices, logical devices, unassigned hardware and other-property devices locally, by every word, case-insensitive, with one *No matching devices* state.
   - **PV display:** PV power from 0 to 10 W shows as 0 W everywhere it is displayed (`displayNumber`). The Growatt PV badge uses the server's hysteresis state, and the **Solar installation** summary renders `solar` values with partial, stale and unavailable reasons.
   - See [device availability, PV generation and the installation summary](18-availability-pv-installation-summary.md).
+- **Live Growatt views.**
+  - **Switch:** Live Growatt has a **Поток | Детайли** switch. The choice is kept in `?view=` and localStorage, and the default is the power-flow view.
+  - **Power flow:** a lazy chunk with original SVG illustrations that reuses the existing summary and states.
+  - **Details:** the existing view.
+  - **Data:** one `/growatt` query feeds both.
+  - **Energy page:** it sums the inverters' recorded series when the provider records no installation series. See [Live Growatt views](18-availability-pv-installation-summary.md#live-growatt-views-power-flow-and-details).
 - Device-card collections store order per authenticated user, property, page and group. Assigned cards precede unassigned candidates. A dedicated pointer and keyboard handle keeps ordering separate from actions on a card. Tuya visibility uses the same preference scope and keeps hidden cards available for restoration.
 - Compose device cards and detail panels from a typed catalog. Render `Switch` as an explicit On/Off control for each supported channel, `PowerMeasurement` as a watts readout and trend, `EnergyMeasurement` as kWh over the selected period, and temperature and humidity as shared sensor views. HVAC mode and setpoint controls use their capability-specific constraints. Provider names appear in provenance and integration settings. Use the same panels across manufacturers.
 - Render read-only measurements and display unavailable control reasons such as unsupported, disabled, permission required, provider unavailable, or pending verification. Switch controls show last reported state, pending requested state and uncertainty distinctly. For commissioned loads show the authorized operation window, runtime deadline when known, and current restrictions. Never present a queued or accepted OFF request as confirmed isolation.

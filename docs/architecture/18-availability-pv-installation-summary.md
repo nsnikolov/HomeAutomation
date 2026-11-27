@@ -126,3 +126,57 @@ The Devices page filters what it already loaded and never calls a provider.
 - **Logical devices.** Fields: name, description, kind, room, and the name, provider, manufacturer, model and channel of every current or previous device.
 - **Other sections.** **Unassigned and new hardware**, and **Devices in your other properties** (properties the user already manages).
 - **Empty results.** Sections with nothing matching say so or disappear. When nothing matches anywhere, the page shows *No matching devices for "…"*.
+
+## Live Growatt views: power flow and details
+
+[Prompt 0069](../prompts/0069-growatt-power-flow-view.md) adds a **Поток | Детайли** switch to Live Growatt.
+
+- **Switch:** buttons in the Dashboard Compact/Detailed style. The default is **Поток**. The choice is kept in `?view=flow|details` and in localStorage (`homeautomation:growatt-view`). A URL view wins over the stored one.
+- **One data source:** both views render the same `/growatt` query. That query is refreshed by live updates through the property query key and by its 30-second interval. Switching does not fetch again.
+- **Details:** renders the existing `GrowattSummary` unchanged.
+- **Language:** the power-flow view is in Bulgarian, as requested. The rest of the application is still in English, and there is no translation layer.
+
+### The power-flow view
+
+`features/growatt/GrowattFlow.tsx` is a lazy chunk. Its pure helpers are in `features/growatt/flow.ts`.
+
+- **Diagram.** A cross of medallions: solar on top, grid on the left, inverter in the centre, home on the right, battery at the bottom.
+  - **Illustrations:** original inline SVGs in `features/growatt/illustrations/`. They are `aria-hidden`, with a text label next to each.
+  - **Narrow screens:** below 640 px the diagram becomes two columns, so there is no horizontal scrolling.
+- **Values.** Every value comes from the existing summary and readings:
+  - **PV:** the `solar` PV slot. It shows *Няма производство* and a muted panel unless an inverter's PV badge rule (`pvStatus`) says PV generating.
+  - **Grid:** AC input power, the supply voltage, and the first inverter's current frequency.
+  - **Inverter:** the reported operating mode and each inverter's load %.
+  - **Home:** inverter output in W. No apparent-power (VA) metric is mapped, so VA is not shown.
+  - **Battery:** the shared battery's SOC and voltage.
+- **Lines.**
+  - **With flow:** animated chevrons in the direction of flow, coloured by source (grid blue, solar amber, battery green, home neutral), with the value beside the line.
+  - **Without flow:** a static dashed grey line.
+  - **Reduced motion:** with `prefers-reduced-motion`, the chevrons are static.
+  - **Screen readers:** each line has a visually hidden text with its value.
+- **Status.**
+  - **Data badge:** a single badge from the inverters' availability and newest source time. It reads *Получава данни · HH:mm* (green), *Остарели данни · HH:mm* (yellow) or *Няма данни* (red).
+  - **Cloud flag:** Growatt's `lost` flag is a separate grey *Облак: offline* label with an explanation.
+- **Today.** PV, inverter output and battery-discharge energy, each summed over the inverters with a per-inverter breakdown. Missing values show "—" and partial totals are marked. The solar share is today's PV energy divided by output energy, capped at 100 %. It is an indication, not an energy balance.
+- **Inverter cards.** Status, load, AC input and battery flow, a load bar (`role="meter"`), and an expandable *Всички показания* with every other reading.
+
+### Shared battery flow
+
+The Details view shows *Shared battery flow unavailable* on the shared battery card **by design**. Growatt reports `pBat` per inverter, and the adapter keeps that flow on the reporting inverter so it is never counted twice. The shared battery device carries only SOC and voltage.
+
+The power-flow view sums the inverters' current `batteryPower` readings with `batteryFlow` and labels the result *по данни от инверторите*:
+- **Partial:** when only some inverters report, it names how many reported.
+- **Unavailable:** when none report.
+- **Direction:** positive is charging, negative is discharging, and 0 is idle.
+
+The Details view is unchanged.
+
+### Energy page
+
+The PV and consumption curves showed *No provider readings were recorded in this range* for the same reason the summary did. The page asked for installation-level series, which Growatt V4 never records. The readings are recorded: each inverter's `PvPower` and `ActivePower` series hold the 5-minute samples.
+
+`productionCurves` now chooses the curves:
+- **Installation series:** used when the provider records one.
+- **Otherwise:** the inverters' own series. `sumSeries` adds them at times when every inverter reported within half the poll interval. A missing inverter leaves a gap rather than a lower total.
+
+The labels say *(sum of inverters)*. Chart values stay raw, as in History, so a 1 W night reading appears as 1 W there. The battery chart is unchanged.
