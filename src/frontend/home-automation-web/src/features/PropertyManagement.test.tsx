@@ -254,18 +254,29 @@ it('asks for plain confirmation before starting the existing ONECTA reconnection
   expect(connect).toHaveBeenCalledWith(1)
 })
 
-it('keeps Assign here for unassigned devices and offers only a room change for devices already in the property', async () => {
+it('keeps Assign here for unassigned Daikin devices and shows no inline room controls on device cards', async () => {
   daikin({ devices: [daikinDevice({ id: 'here', name: 'Living room AC', roomId: 3 })], unassigned: [daikinDevice({ id: 'new', name: 'New AC' })] })
   const assign = vi.spyOn(api, 'assignDaikin').mockResolvedValue(undefined)
-  expect(await screen.findByRole('button', { name: 'Assign here' })).toBeEnabled()
+  const button = await screen.findByRole('button', { name: 'Assign here' })
   expect(screen.getAllByRole('button', { name: 'Assign here' })).toHaveLength(1)
-  const save = screen.getByRole('button', { name: 'Save room' })
-  expect(save).toBeDisabled()
-  fireEvent.change(screen.getByLabelText('Room for Living room AC'), { target: { value: '' } })
-  fireEvent.click(save)
-  await waitFor(() => expect(assign).toHaveBeenCalledWith(1, 'here', null))
-  fireEvent.click(screen.getByRole('button', { name: 'Assign here' }))
-  await waitFor(() => expect(assign).toHaveBeenCalledWith(1, 'new', null))
+  expect(screen.getByRole('heading', { name: 'New AC' }).closest('.device-card')).toContainElement(button)
+  expect(screen.getByRole('heading', { name: 'Living room AC' })).toBeInTheDocument()
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Save room' })).not.toBeInTheDocument()
+  expect(screen.queryByText('No room')).not.toBeInTheDocument()
+  expect(api.rooms).not.toHaveBeenCalled()
+  const reads = vi.mocked(api.daikin).mock.calls.length
+  fireEvent.click(button)
+  await waitFor(() => expect(assign).toHaveBeenCalledExactlyOnceWith(1, 'new', null))
+  await waitFor(() => expect(vi.mocked(api.daikin).mock.calls.length).toBeGreaterThan(reads))
+})
+
+it('keeps a failed Assign here on the card with an error', async () => {
+  daikin({ unassigned: [daikinDevice({ id: 'new', name: 'New AC' })] })
+  vi.spyOn(api, 'assignDaikin').mockRejectedValue(new Error('offline'))
+  fireEvent.click(await screen.findByRole('button', { name: 'Assign here' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not assign this device.')
+  expect(screen.getByRole('button', { name: 'Assign here' })).toBeEnabled()
 })
 
 it('shows connect without account menu when ONECTA is disconnected', async () => {

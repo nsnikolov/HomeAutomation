@@ -1,10 +1,11 @@
-import { memo, useEffect, useState } from 'react'
+import { memo, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
 import { api, ApiError } from '../shared/api'
-import type { EwelinkDevice, Property, Room } from '../shared/types'
+import type { EwelinkDevice, Property } from '../shared/types'
 import { Badge, Button, Card } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
+import { AssignHere } from './AssignHere'
 import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
 import { formatReading } from './Devices'
 import { useEwelinkElectricalViewer } from './useEwelinkElectricalViewer'
@@ -70,9 +71,6 @@ export function EwelinkPanel({ property }: { property: Property }) {
     console.info('eWeLink React trace', { cards: view.devices.length, electricalRows, liveRows, waitingDevices })
   }, [trace, view])
   useEwelinkElectricalViewer(property.id, view?.canViewLiveElectrical === true)
-  const rooms = useQuery({
-    queryKey: ['property', property.id, 'rooms'], queryFn: ({ signal }) => api.rooms(property.id, signal), enabled: !!view?.manage,
-  })
   const action = useMutation({
     mutationFn: async (operation: 'connect' | 'disconnect' | 'refresh') => {
       if (operation === 'connect') window.location.assign((await api.connectEwelink(property.id)).authorizationUrl)
@@ -113,31 +111,24 @@ export function EwelinkPanel({ property }: { property: Property }) {
       {refreshResult && <p role={action.isError ? 'alert' : 'status'}>{refreshResult} {errorCode && statuses[errorCode]}</p>}
       {action.isError && action.variables !== 'refresh' &&
         <p role="alert">{errorCode && statuses[errorCode] || 'eWeLink account action failed.'}</p>}
-      {rooms.isError && <p role="alert">Rooms could not be loaded.</p>}
     </div>}
     {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
     {!!view?.devices.length && <section className="room"><h2>Assigned devices</h2>
       <DeviceCardOrder items={view.devices} group="assigned" preferences={preferences}>{device =>
-        <EwelinkCard device={device} property={property} assigned rooms={view.manage ? rooms.data : undefined} />}</DeviceCardOrder>
+        <EwelinkCard device={device} property={property} assignable={false} />}</DeviceCardOrder>
     </section>}
     {!!view?.unassigned.length && <section className="room"><h2>Unassigned devices</h2>
       <DeviceCardOrder items={view.unassigned} group="unassigned" preferences={preferences}>{device =>
-        <EwelinkCard device={device} property={property} assigned={false} rooms={rooms.data} />}</DeviceCardOrder>
+        <EwelinkCard device={device} property={property} assignable={!!view.manage} />}</DeviceCardOrder>
     </section>}
     {view?.manage && connected && !view.devices.length && !view.unassigned.length && <p>No eWeLink devices have been discovered.</p>}
   </section>
 }
 
-const EwelinkCard = memo(function EwelinkCard({ device, property, rooms, assigned }: {
-  device: EwelinkDevice; property: Property; rooms?: Room[]; assigned: boolean
+const EwelinkCard = memo(function EwelinkCard({ device, property, assignable }: {
+  device: EwelinkDevice; property: Property; assignable: boolean
 }) {
   const client = useQueryClient()
-  const [room, setRoom] = useState(device.roomId?.toString() ?? '')
-  const assign = useMutation({
-    mutationFn: () => api.assignEwelink(property.id, device.id, room ? Number(room) : null),
-    onSuccess: () => Promise.all([client.invalidateQueries({ queryKey: ['property', property.id] }),
-      client.invalidateQueries({ queryKey: ['property-management'] })]),
-  })
   const command = useMutation({
     mutationFn: (on: boolean) => api.commandEwelinkRelay(property.id, device.id, on, !!device.requiresRelayConfirmation),
     onSettled: () => client.invalidateQueries({ queryKey: ['property', property.id, 'ewelink'] }),
@@ -222,16 +213,7 @@ const EwelinkCard = memo(function EwelinkCard({ device, property, rooms, assigne
           ? 'Pending' : 'Failed to submit relay command. Check the reported state before trying again.'}</p>
         : commandStatus && <p role="status">{humanize(commandStatus)}</p>}
     </div>}
-    {rooms && <div className="filters">
-      <select className="input select-input" aria-label={`Room for ${device.name}`} value={room}
-        onChange={event => setRoom(event.target.value)} disabled={assign.isPending}>
-        <option value="">No room</option>
-        {rooms.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select>
-      <Button variant="outline" onClick={() => assign.mutate()}
-        disabled={assign.isPending || (assigned && room === (device.roomId?.toString() ?? ''))}>{assigned ? 'Save room' : 'Assign here'}</Button>
-      {assign.isError && <p role="alert">{assigned ? 'Could not change the room.' : 'Could not assign this device.'}</p>}
-    </div>}
+    {assignable && <AssignHere property={property.id} assign={() => api.assignEwelink(property.id, device.id, null)} />}
   </Card>
 })
 

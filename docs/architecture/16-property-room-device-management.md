@@ -79,7 +79,7 @@ The next provider sync writes to the destination identity. Readers exclude retir
 
 - **Settings** shows **Properties** (create, edit, delete with impact review and typed name) and **Rooms**. Both pages and the first-property form are lazy chunks.
 - **Devices** adds a three-dot menu per device with **Rename…**, **Change room…** and **Move to another property…**. A **Devices in your other properties** section offers **Move to this property…**.
-- **Provider pages:** **Assign here** remains for unassigned provider devices. Devices already in the property get **Save room** instead. Room choice is optional everywhere.
+- **Provider pages:** device cards carry no room controls. **Assign here** remains on unassigned provider devices for users the provider page lets manage devices. It assigns the device to the property with no room, using the unchanged provider assign endpoints. A device's room is set or changed only through **Change room…** in its menu on **Devices**. Growatt cards never had room controls. Room choice is optional everywhere.
 - **Daikin ONECTA:** **Refresh discovery** stays visible. **Reconnect account…** (plain confirmation, then the unchanged OAuth flow) and **Disconnect account…** sit in an account menu. Disconnect requires typing `DISCONNECT`.
   - Disconnect behaves as before: it clears only the stored ONECTA token envelope and sets the account to `disconnected`. Devices, rooms, history, alerts and vault profiles stay. Reconnecting requires Daikin sign-in.
 - `ConfirmDialog` is the shared modal: focus trap, Escape, focus restore, typed confirmation, blocked state, errors kept in the dialog, and one submission at a time. `ActionMenu` is the shared three-dot menu with keyboard support.

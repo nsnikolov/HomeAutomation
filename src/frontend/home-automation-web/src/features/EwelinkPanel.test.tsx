@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { expect, it, vi } from 'vitest'
 import { api, ApiError } from '../shared/api'
@@ -53,7 +53,6 @@ it('shows background collection status without the page activating reporting', a
       { ...device, id: 'unavailable', name: 'Pump', electricalReporting: { status: 'deviceUnavailable', providerCode: 504 } },
     ],
   })
-  const rooms = vi.spyOn(api, 'rooms').mockResolvedValue([])
   const prepare = vi.spyOn(api, 'prepareEwelinkElectricalViewer')
   try {
     view()
@@ -62,7 +61,6 @@ it('shows background collection status without the page activating reporting', a
     expect(prepare).not.toHaveBeenCalled()
   } finally {
     status.mockRestore()
-    rooms.mockRestore()
     prepare.mockRestore()
   }
 })
@@ -163,7 +161,6 @@ it.each([
     status: 'connected', manage: true, lastSuccess: '2026-11-23T08:00:00Z', lastAttempt: '2026-11-23T08:10:00Z',
     nextSync: '2099-11-23T08:20:00Z', devices: [], unassigned: [],
   })
-  const rooms = vi.spyOn(api, 'rooms').mockResolvedValue([])
   const refresh = vi.spyOn(api, 'updateEwelink').mockImplementation(async () => {
     if (error) throw error
   })
@@ -178,7 +175,6 @@ it.each([
     expect(refresh).toHaveBeenCalledExactlyOnceWith(1, 'refresh')
   } finally {
     status.mockRestore()
-    rooms.mockRestore()
     refresh.mockRestore()
   }
 })
@@ -193,7 +189,6 @@ it('shows the automatic OAuth outcome without a local completion action', async 
   const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
     status: 'connected', manage: true, lastSuccess: null, nextSync: null, devices: [], unassigned: [],
   })
-  const rooms = vi.spyOn(api, 'rooms').mockResolvedValue([])
   try {
     view('/properties/1/ewelink?connect=success')
     expect(await screen.findByRole('button', { name: 'Disconnect account' })).toBeInTheDocument()
@@ -201,7 +196,6 @@ it('shows the automatic OAuth outcome without a local completion action', async 
     expect(screen.queryByRole('button', { name: 'Finish connecting' })).not.toBeInTheDocument()
   } finally {
     status.mockRestore()
-    rooms.mockRestore()
   }
 })
 
@@ -258,4 +252,33 @@ it.each([true, false])('shows only capabilities on a device with relay support s
     const rows = screen.queryAllByRole('term')
     expect(rows.map(row => row.textContent)).toEqual(hasRelay ? ['Relay'] : [])
   } finally { status.mockRestore() }
+})
+
+it('offers Assign here only on unassigned cards and no inline room controls', async () => {
+  const time = '2026-11-27T08:00:00Z'
+  const device = { name: 'Boiler', model: 'PSF-X67', roomId: 1, connectivity: 'online' as const,
+    seenAt: time, quality: 'fresh' as const, hasRelay: true, relay: false, relayAt: time, relayQuality: 'fresh' as const }
+  const status = vi.spyOn(api, 'ewelink').mockResolvedValue({
+    status: 'connected', manage: true, lastSuccess: time, nextSync: null, canViewLiveElectrical: false,
+    devices: [{ ...device, id: 'here' }], unassigned: [{ ...device, id: 'new', name: 'Pump', roomId: null }],
+  })
+  const rooms = vi.spyOn(api, 'rooms')
+  const assign = vi.spyOn(api, 'assignEwelink').mockResolvedValue(undefined)
+  try {
+    view()
+    const unassigned = (await screen.findByRole('heading', { name: 'Unassigned devices' })).closest('section')!
+    const button = within(unassigned).getByRole('button', { name: 'Assign here' })
+    expect(screen.getAllByRole('button', { name: 'Assign here' })).toHaveLength(1)
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save room' })).not.toBeInTheDocument()
+    expect(rooms).not.toHaveBeenCalled()
+    const reads = status.mock.calls.length
+    fireEvent.click(button)
+    await waitFor(() => expect(assign).toHaveBeenCalledExactlyOnceWith(1, 'new', null))
+    await waitFor(() => expect(status.mock.calls.length).toBeGreaterThan(reads))
+  } finally {
+    status.mockRestore()
+    rooms.mockRestore()
+    assign.mockRestore()
+  }
 })

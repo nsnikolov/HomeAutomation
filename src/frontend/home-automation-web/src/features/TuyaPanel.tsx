@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '../shared/api'
-import type { Property, Room, TuyaDevice, TuyaReading } from '../shared/types'
+import type { Property, TuyaDevice, TuyaReading } from '../shared/types'
 import { Badge, Button, Card } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
+import { AssignHere } from './AssignHere'
 import { formatReading, metricLabels } from './Devices'
 import { DeviceCardOrder, orderDevices, useDevicePreferences } from './DeviceCardOrder'
 import { SensorHistory } from './SensorHistory'
@@ -32,9 +33,6 @@ export function TuyaPanel({ property }: { property: Property }) {
   const key = ['property', property.id, 'tuya']
   const query = useQuery({ queryKey: key, queryFn: ({ signal }) => api.tuya(property.id, signal), refetchInterval: 30_000 })
   const state = query.data
-  const rooms = useQuery({
-    queryKey: ['property', property.id, 'rooms'], queryFn: ({ signal }) => api.rooms(property.id, signal), enabled: !!state?.manage,
-  })
   const refresh = useMutation({
     mutationFn: () => api.refreshTuya(property.id),
     onSettled: () => client.invalidateQueries({ queryKey: key }),
@@ -49,7 +47,7 @@ export function TuyaPanel({ property }: { property: Property }) {
   ].filter(device => !isVisible(device))
   const card = (device: TuyaDevice, assigned: boolean) =>
     <TuyaCard key={device.id} device={device} property={property} assigned={assigned}
-      rooms={state?.manage ? rooms.data : undefined}
+      assignable={!assigned && !!state?.manage}
       visibility={preferences.ready ? { hidden: hidden.has(device.id), busy: preferences.busy,
         toggle: () => preferences.update({ id: device.id, hidden: !hidden.has(device.id) }) } : undefined} />
 
@@ -64,7 +62,6 @@ export function TuyaPanel({ property }: { property: Property }) {
       {deferred && state.nextSync && <p>Next sync {formatMoment(state.nextSync, property.timeZone)}</p>}
       {state.providerCode !== null && <p>Tuya error {state.providerCode}</p>}
       {refresh.isError && <p role="alert">{errorCode && statusText[errorCode] || 'Tuya discovery failed.'}</p>}
-      {rooms.isError && <p role="alert">Rooms could not be loaded.</p>}
     </div>}
     {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
     {!!hiddenDevices.length && <Button variant="ghost" type="button" aria-expanded={showHidden}
@@ -85,18 +82,11 @@ export function TuyaPanel({ property }: { property: Property }) {
   </section>
 }
 
-function TuyaCard({ device, property, rooms, assigned, visibility }: {
-  device: TuyaDevice; property: Property; rooms?: Room[]; assigned: boolean;
+function TuyaCard({ device, property, assigned, assignable, visibility }: {
+  device: TuyaDevice; property: Property; assigned: boolean; assignable: boolean;
   visibility?: { hidden: boolean; busy: boolean; toggle: () => void };
 }) {
-  const client = useQueryClient()
-  const [room, setRoom] = useState(device.roomId?.toString() ?? '')
   const [history, setHistory] = useState(false)
-  const assign = useMutation({
-    mutationFn: () => api.assignTuya(property.id, device.id, room ? Number(room) : null),
-    onSuccess: () => Promise.all([client.invalidateQueries({ queryKey: ['property', property.id] }),
-      client.invalidateQueries({ queryKey: ['property-management'] })]),
-  })
   return <Card className="device-card">
     <div className="device-card-top"><h3>{device.name}</h3>
       <Badge className={device.quality === 'stale' ? 'tone-warn' : device.connectivity === 'online' ? 'tone-good' : 'tone-neutral'}>
@@ -119,16 +109,7 @@ function TuyaCard({ device, property, rooms, assigned, visibility }: {
           onClick={visibility.toggle} disabled={visibility.busy}>{visibility.hidden ? 'Restore' : 'Hide'}</Button>}
       </div>}
     {history && <SensorHistory property={property} device={device.id} load={api.tuyaHistory} source="tuya" />}
-    {rooms && <div className="filters">
-      <select className="input select-input" aria-label={`Room for ${device.name}`} value={room}
-        onChange={event => setRoom(event.target.value)} disabled={assign.isPending}>
-        <option value="">No room</option>
-        {rooms.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select>
-      <Button variant="outline" onClick={() => assign.mutate()}
-        disabled={assign.isPending || (assigned && room === (device.roomId?.toString() ?? ''))}>{assigned ? 'Save room' : 'Assign here'}</Button>
-      {assign.isError && <p role="alert">{assigned ? 'Could not change the room.' : 'Could not assign this device.'}</p>}
-    </div>}
+    {assignable && <AssignHere property={property.id} assign={() => api.assignTuya(property.id, device.id, null)} />}
   </Card>
 }
 

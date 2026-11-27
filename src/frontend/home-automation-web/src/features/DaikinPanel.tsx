@@ -6,7 +6,8 @@ import { ActionMenu } from '../shared/ActionMenu'
 import { ConfirmDialog } from '../shared/ConfirmDialog'
 import { Button, Card, Input } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
-import type { DaikinDevice, DaikinRange, Property, Room } from '../shared/types'
+import type { DaikinDevice, DaikinRange, Property } from '../shared/types'
+import { AssignHere } from './AssignHere'
 import { HistoryChart } from './Energy'
 import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
 
@@ -56,10 +57,6 @@ export function DaikinPanel({ property }: { property: Property }) {
       device.openCommands?.some(command => command.status === 'awaitingConfirmation')) ? 5_000 : 30_000,
   })
   const state = query.data
-  const rooms = useQuery({
-    queryKey: ['property', property.id, 'rooms'], queryFn: ({ signal }) => api.rooms(property.id, signal),
-    enabled: !!state?.manage,
-  })
   const action = useMutation({
     mutationFn: async (operation: 'connect' | 'complete' | 'disconnect' | 'refresh') => {
       if (operation === 'connect') {
@@ -112,41 +109,17 @@ export function DaikinPanel({ property }: { property: Property }) {
     {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
     {!!state?.devices.length && <section className="room"><h2>Assigned devices</h2>
       <DeviceCardOrder items={state.devices} group="assigned" preferences={preferences}>{unit =>
-        <DaikinDeviceCard device={unit} property={property}
-          writes={state.writes} rooms={state.manage ? rooms.data ?? [] : undefined} />}</DeviceCardOrder>
+        <DaikinDeviceCard device={unit} property={property} writes={state.writes} />}</DeviceCardOrder>
     </section>}
     {!!state?.unassigned.length && <section className="room"><h2>Unassigned devices</h2>
       <DeviceCardOrder items={state.unassigned} group="unassigned" preferences={preferences}>{unit =>
         <Card className="device-card"><h3>{unit.name}</h3>
-          <AssignRoom property={property.id} device={unit} rooms={rooms.data ?? []} assigned={false} /></Card>}</DeviceCardOrder>
+          <AssignHere property={property.id} assign={() => api.assignDaikin(property.id, unit.id, null)} /></Card>}</DeviceCardOrder>
     </section>}
   </section>
 }
 
-/** Assigns an unassigned device to this property, or changes the optional room of a device already here. */
-function AssignRoom({ property, device, rooms, assigned }: { property: number; device: DaikinDevice; rooms: Room[]; assigned: boolean }) {
-  const [selected, setSelected] = useState(device.roomId?.toString() ?? '')
-  const cache = useQueryClient()
-  const assignment = useMutation({
-    mutationFn: () => api.assignDaikin(property, device.id, selected ? Number(selected) : null),
-    onSuccess: () => Promise.all([cache.invalidateQueries({ queryKey: ['property', property] }),
-      cache.invalidateQueries({ queryKey: ['property-management'] })]),
-  })
-  return <div className="filters">
-    <select className="input" aria-label={`Room for ${device.name}`} value={selected} onChange={event => setSelected(event.target.value)}>
-      <option value="">No room</option>{rooms.map(room => <option key={room.id} value={room.id}>{room.name}</option>)}
-    </select>
-    <Button variant="outline" disabled={assignment.isPending || (assigned && selected === (device.roomId?.toString() ?? ''))}
-      onClick={() => assignment.mutate()}>
-      {assignment.isPending ? 'Saving…' : assigned ? 'Save room' : 'Assign here'}
-    </Button>
-    {assignment.isError && <p role="alert">{assigned ? 'Could not change the room.' : 'Could not assign this device.'}</p>}
-  </div>
-}
-
-export function DaikinDeviceCard({ device, property, writes, rooms }: {
-  device: DaikinDevice; property: Property; writes: boolean; rooms?: Room[]
-}) {
+export function DaikinDeviceCard({ device, property, writes }: { device: DaikinDevice; property: Property; writes: boolean }) {
   const cache = useQueryClient()
   const submitting = useRef(false)
   const command = useMutation({
@@ -226,7 +199,6 @@ export function DaikinDeviceCard({ device, property, writes, rooms }: {
       : 'Command could not be confirmed. Check the device and command status.'}</p>}
     {[...visible.values()].map(outcome => <p key={outcome.id} role="status">{outcomes[outcome.status] ?? humanize(outcome.status)}
       {' · '}{humanize(outcome.operation)} {outcome.value}</p>)}
-    {rooms && <AssignRoom property={property.id} device={device} rooms={rooms} assigned />}
   </Card>
 }
 

@@ -68,7 +68,6 @@ it('shows assigned devices before unassigned and keeps a hidden card out until r
   const state = { status: 'connected', manage: true, lastSuccess: timestamp, nextSync: null, providerCode: null,
     devices: [device], unassigned: [candidate] }
   const provider = vi.spyOn(api, 'tuya').mockResolvedValue(state)
-  vi.spyOn(api, 'rooms').mockResolvedValue([{ id: 12, name: 'Room' }])
   const first = view()
   const assigned = await screen.findByRole('heading', { name: 'Assigned devices' })
   const unassigned = await screen.findByRole('heading', { name: 'Unassigned devices' })
@@ -83,9 +82,44 @@ it('shows assigned devices before unassigned and keeps a hidden card out until r
   fireEvent.click(await screen.findByRole('button', { name: 'Show hidden (1)' }))
   const hiddenSection = screen.getByRole('heading', { name: 'Hidden devices' }).closest('section')!
   await within(hiddenSection).findByRole('heading', { name: 'Rediscovered sensor' })
-  expect(within(hiddenSection).getByRole('combobox', { name: 'Room for Rediscovered sensor' })).toBeInTheDocument()
+  expect(within(hiddenSection).queryByRole('combobox')).not.toBeInTheDocument()
+  expect(within(hiddenSection).queryByRole('button', { name: 'Assign here' })).not.toBeInTheDocument()
   fireEvent.click(within(hiddenSection).getByRole('button', { name: 'Restore Rediscovered sensor' }))
   await waitFor(() => expect(visibility).toHaveBeenLastCalledWith(1, 'one', false))
   expect(await screen.findByRole('heading', { name: 'Assigned devices' })).toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Hidden devices' })).not.toBeInTheDocument()
+})
+
+it('offers Assign here only on unassigned cards and no inline room controls', async () => {
+  const device: TuyaDevice = {
+    id: 'one', name: 'Assigned sensor', model: '', roomId: 12, connectivity: 'online',
+    receivedAt: timestamp, quality: 'fresh', specificationsAvailable: true, readings: [],
+  }
+  const provider = vi.spyOn(api, 'tuya').mockResolvedValue({ status: 'connected', manage: true, lastSuccess: timestamp, nextSync: null,
+    providerCode: null, devices: [device], unassigned: [{ ...device, id: 'two', name: 'Unassigned sensor', roomId: null }] })
+  const rooms = vi.spyOn(api, 'rooms')
+  const assign = vi.spyOn(api, 'assignTuya').mockResolvedValue(undefined)
+  view()
+  const button = await screen.findByRole('button', { name: 'Assign here' })
+  expect(screen.getAllByRole('button', { name: 'Assign here' })).toHaveLength(1)
+  expect(screen.getByRole('heading', { name: 'Unassigned sensor' }).closest('.device-card')).toContainElement(button)
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Save room' })).not.toBeInTheDocument()
+  expect(rooms).not.toHaveBeenCalled()
+  const reads = provider.mock.calls.length
+  fireEvent.click(button)
+  await waitFor(() => expect(assign).toHaveBeenCalledExactlyOnceWith(1, 'two', null))
+  await waitFor(() => expect(provider.mock.calls.length).toBeGreaterThan(reads))
+})
+
+it('does not offer Assign here to a viewer', async () => {
+  const device: TuyaDevice = {
+    id: 'two', name: 'Unassigned sensor', model: '', roomId: null, connectivity: 'online',
+    receivedAt: timestamp, quality: 'fresh', specificationsAvailable: true, readings: [],
+  }
+  vi.spyOn(api, 'tuya').mockResolvedValue({ status: 'connected', manage: false, lastSuccess: timestamp, nextSync: null,
+    providerCode: null, devices: [], unassigned: [device] })
+  view()
+  expect(await screen.findByRole('heading', { name: 'Unassigned sensor' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Assign here' })).not.toBeInTheDocument()
 })

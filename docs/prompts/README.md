@@ -65,3 +65,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 61. 2026-11-26 · [HomeAutomation — Remove Runtime Simulation Data and Implement Safe Cleanup](0061-remove-runtime-simulation-data.md)
 62. 2026-11-26 · [Configuration Vault global profile visibility in Settings](0062-configuration-vault-global-profile-visibility.md)
 63. 2026-11-27 · [HomeAutomation — Property, Room and Device Management, Safe Account Actions and UX Improvements](0063-property-room-device-management.md)
+64. 2026-11-27 · [HomeAutomation — Remove redundant room assignment controls](0064-remove-redundant-room-controls.md)
