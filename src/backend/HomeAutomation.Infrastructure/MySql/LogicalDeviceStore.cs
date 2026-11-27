@@ -346,6 +346,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
               AND NOT EXISTS (SELECT 1 FROM logical_device_assignments a WHERE a.property_id=d.property_id AND a.device_id=d.id)
               AND NOT EXISTS (SELECT 1 FROM provider_bindings b JOIN integration_connections c ON c.id=b.connection_id AND c.property_id=b.property_id
                               WHERE b.device_id=d.id AND b.property_id=d.property_id AND c.provider_code='simulator')
+              AND d.retired_at_utc IS NULL
             ORDER BY d.property_id
             """, ct))).ToList();
     }
@@ -429,7 +430,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         foreach (var device in state.Devices.Values)
         {
             var count = series.GetValueOrDefault(device.Id);
-            string? skipped = device.Simulated ? "simulated device"
+            string? skipped = device.Retired ? "moved to another property" : device.Simulated ? "simulated device"
                 : origins.Contains(device.Id) ? "already initialized"
                 : state.Assignments.FirstOrDefault(item => item.DeviceId == device.Id) is { } assigned
                     ? $"already assigned to logical device {assigned.LogicalDeviceId}" : null;
@@ -662,10 +663,11 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
     private static async Task<State> LoadAsync(MySqlConnection db, MySqlTransaction? tx, long property, CancellationToken ct)
     {
         using var rows = await db.QueryMultipleAsync(Query("""
-            SELECT d.id AS Id, d.name AS Name, d.kind AS Kind, d.manufacturer AS Manufacturer, d.model AS Model, d.room_id AS RoomId,
+            SELECT d.id AS Id, COALESCE(d.display_name, d.name) AS Name, d.kind AS Kind, d.manufacturer AS Manufacturer, d.model AS Model, d.room_id AS RoomId,
                    COALESCE((SELECT c.provider_code FROM provider_bindings b JOIN integration_connections c
                              ON c.id=b.connection_id AND c.property_id=b.property_id
-                             WHERE b.device_id=d.id AND b.property_id=d.property_id ORDER BY b.id LIMIT 1), 'unknown') AS Provider
+                             WHERE b.device_id=d.id AND b.property_id=d.property_id ORDER BY b.id LIMIT 1), 'unknown') AS Provider,
+                   d.retired_at_utc IS NOT NULL AS Retired
             FROM devices d WHERE d.property_id=@property ORDER BY d.id;
             SELECT id AS Id, device_id AS DeviceId, name AS Name, endpoint_key AS EndpointKey FROM device_endpoints WHERE property_id=@property ORDER BY id;
             SELECT cap.endpoint_id AS EndpointId, cap.capability_code AS Code FROM device_capabilities cap
@@ -693,7 +695,7 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         var series = (await rows.ReadAsync<SeriesMetricRow>()).Where(row => row.Metric is not null).ToList();
         var byDevice = endpoints.ToLookup(endpoint => endpoint.DeviceId);
         return new(devices.ToDictionary(device => device.Id, device => new PhysicalDevice(device.Id, device.Name, device.Kind, device.Manufacturer,
-            device.Model, device.RoomId, device.Provider, byDevice[device.Id].Select(endpoint => new PhysicalEndpoint(endpoint.Id, endpoint.Name,
+            device.Model, device.RoomId, device.Provider, device.Retired != 0, byDevice[device.Id].Select(endpoint => new PhysicalEndpoint(endpoint.Id, endpoint.Name,
                 endpoint.EndpointKey, capabilities[endpoint.Id].Select(item => Enum.TryParse<Capability>(item.Code, out var code) && Enum.IsDefined(code)
                     ? code : (Capability?)null).OfType<Capability>().Distinct().ToList())).ToList())), logical, assignments, rooms, series);
     }
@@ -715,7 +717,8 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
 
     private static async Task<string?> RoleAsync(MySqlConnection db, MySqlTransaction? tx, long property, string user, CancellationToken ct) =>
         await db.QuerySingleOrDefaultAsync<string>(Query(
-            "SELECT role_code FROM property_memberships WHERE property_id=@property AND user_id=@user", ct, new { property, user }, tx));
+            "SELECT m.role_code FROM property_memberships m JOIN properties p ON p.id=m.property_id AND p.deleted_at_utc IS NULL WHERE m.property_id=@property AND m.user_id=@user",
+            ct, new { property, user }, tx));
 
     internal static bool CanManage(string? role) => role?.ToUpperInvariant() is "OWNER" or "ADMIN";
     private static IReadOnlyList<Capability> Measurements(IEnumerable<Capability> capabilities) =>
@@ -741,18 +744,19 @@ public sealed class LogicalDeviceStore(Database database, Migrations migrations,
         public Metric? Metric => Enum.TryParse<Metric>(MetricName, out var metric) && Enum.IsDefined(metric) ? metric : null;
     }
 
-    private sealed record PhysicalDevice(long Id, string Name, string Kind, string Manufacturer, string Model, long? RoomId, string Provider,
+    private sealed record PhysicalDevice(long Id, string Name, string Kind, string Manufacturer, string Model, long? RoomId, string Provider, bool Retired,
         IReadOnlyList<PhysicalEndpoint> Endpoints)
     {
         public IEnumerable<Capability> Capabilities(long? endpoint) =>
             Endpoints.Where(item => endpoint is null || item.Id == endpoint).SelectMany(item => item.Capabilities).Distinct();
         public bool RequiresEndpoint => LogicalDeviceRules.RequiresEndpoint(Endpoints.Select(item => item.Capabilities));
         /// <summary>Demonstration hardware from the opt-in simulator never receives new logical identities or assignments.</summary>
-        public bool Simulated => Provider == TelemetryHoldPolicy.SimulatorSource;
+        /// <summary>Simulated hardware, or a device row retired when the device moved to another property. Neither takes new assignments.</summary>
+        public bool Simulated => Provider == TelemetryHoldPolicy.SimulatorSource || Retired;
     }
 
     private sealed record PhysicalEndpoint(long Id, string Name, string Key, IReadOnlyList<Capability> Capabilities);
-    private sealed record DeviceRow(long Id, string Name, string Kind, string Manufacturer, string Model, long? RoomId, string Provider);
+    private sealed record DeviceRow(long Id, string Name, string Kind, string Manufacturer, string Model, long? RoomId, string Provider, long Retired);
     private sealed record EndpointRow(long Id, long DeviceId, string Name, string EndpointKey);
     private sealed record CapabilityRow(long EndpointId, string Code);
     private sealed record LogicalRow(long Id, string Name, string Kind, long? RoomId, string? Description, long? OriginDeviceId, string Creation,

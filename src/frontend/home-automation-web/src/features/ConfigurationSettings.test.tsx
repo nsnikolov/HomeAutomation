@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router'
 import { api, ApiError } from '../shared/api'
 import type { ConfigurationView } from '../shared/types'
 import { ConfigurationSettings } from './ConfigurationSettings'
@@ -12,7 +13,11 @@ const data: ConfigurationView = { canEdit: true, keyAvailable: true, providers: 
 }] }
 
 function show() {
-  render(<QueryClientProvider client={new QueryClient()}><ConfigurationSettings property={property} /></QueryClientProvider>)
+  // Property and room management share the page; their own behaviour is covered in PropertyManagement.test.tsx.
+  vi.spyOn(api, 'propertyManagement').mockResolvedValue({ canCreate: false, properties: [] })
+  vi.spyOn(api, 'managedRooms').mockResolvedValue([])
+  render(<QueryClientProvider client={new QueryClient()}><MemoryRouter>
+    <ConfigurationSettings property={property} /></MemoryRouter></QueryClientProvider>)
 }
 
 afterEach(() => vi.restoreAllMocks())

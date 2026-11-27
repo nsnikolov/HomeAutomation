@@ -160,8 +160,14 @@ internal static class DaikinEndpoints
         }).RequireRateLimiting("session");
 
         group.MapPost("/devices/{device:guid}/assign", async (HttpContext http, long property, Guid device, RoomAssignment input,
-            DaikinService service, CancellationToken ct) => await service.AssignAsync(User(http), device.ToString("N"),
-                property, input.RoomId, ct) ? Results.NoContent() : Results.Conflict());
+            DaikinService service, IDeviceAssignmentAudit audit, CancellationToken ct) =>
+        {
+            var id = device.ToString("N");
+            var before = await PropertyManagementEndpoints.AssignmentBeforeAsync(http, audit, "daikin", id, ct);
+            if (!await service.AssignAsync(User(http), id, property, input.RoomId, ct)) return Results.Conflict();
+            await PropertyManagementEndpoints.RecordAssignmentAsync(http, audit, "daikin", before, id, ct);
+            return Results.NoContent();
+        });
 
         group.MapGet("/devices/{device:guid}/water-history", async (long property, Guid device,
             DaikinService service, DaikinOptions options, Migrations migrations, CancellationToken ct) =>

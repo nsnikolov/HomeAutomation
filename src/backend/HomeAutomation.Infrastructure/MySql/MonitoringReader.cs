@@ -20,7 +20,7 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             """
             SELECT p.id AS Id, p.name AS Name, p.time_zone AS TimeZone
             FROM properties p JOIN property_memberships m ON m.property_id = p.id
-            WHERE m.user_id = @UserId ORDER BY p.name, p.id
+            WHERE m.user_id = @UserId AND p.deleted_at_utc IS NULL ORDER BY p.name, p.id
             """, cancellationToken, new { UserId = userId }))).AsList();
     }
 
@@ -28,7 +28,10 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
     {
         await using var connection = await database.OpenAsync(cancellationToken);
         return await connection.ExecuteScalarAsync<bool>(Query(
-            "SELECT EXISTS(SELECT 1 FROM property_memberships WHERE property_id = @PropertyId AND user_id = @UserId)",
+            """
+            SELECT EXISTS(SELECT 1 FROM property_memberships m JOIN properties p ON p.id = m.property_id AND p.deleted_at_utc IS NULL
+                          WHERE m.property_id = @PropertyId AND m.user_id = @UserId)
+            """,
             cancellationToken, new { UserId = userId, PropertyId = propertyId }));
     }
 
@@ -77,13 +80,13 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             """;
         using var results = await connection.QueryMultipleAsync(Query(
             $"""
-            SELECT d.id AS Id, d.room_id AS RoomId, d.name AS Name, d.kind AS Kind, d.manufacturer AS Manufacturer,
+            SELECT d.id AS Id, d.room_id AS RoomId, COALESCE(d.display_name, d.name) AS Name, d.name AS ProviderName, d.kind AS Kind, d.manufacturer AS Manufacturer,
                    d.model AS Model, s.connectivity AS Connectivity, s.fault_code AS FaultCode,
                    s.last_contact_utc AS LastContact, s.observed_at_utc AS StatusObserved,
                    COALESCE((SELECT c.provider_code FROM provider_bindings b JOIN integration_connections c ON c.id = b.connection_id
                              WHERE b.device_id = d.id ORDER BY c.provider_code = 'simulator', b.id LIMIT 1), 'unknown') AS Provider
             FROM devices d LEFT JOIN device_state s ON s.device_id = d.id
-            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId) AND {bound}
+            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId) AND d.retired_at_utc IS NULL AND {bound}
             ORDER BY d.id;
 
             SELECT id AS Id, device_id AS DeviceId, name AS Name FROM device_endpoints
@@ -102,9 +105,9 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
                        ELSE t.source_key = @Provider END)
                   AND (@DeviceId IS NULL OR e.device_id = @DeviceId) ORDER BY t.metric, t.id;
 
-            SELECT a.device_id AS DeviceId, d.name AS DeviceName, a.alert_code AS Code, a.occurred_at_utc AS OccurredAt
+            SELECT a.device_id AS DeviceId, COALESCE(d.display_name, d.name) AS DeviceName, a.alert_code AS Code, a.occurred_at_utc AS OccurredAt
             FROM devices d JOIN device_alerts a ON a.device_id = d.id
-            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId) AND {bound}
+            WHERE d.property_id = @PropertyId AND (@DeviceId IS NULL OR d.id = @DeviceId) AND d.retired_at_utc IS NULL AND {bound}
             ORDER BY a.occurred_at_utc DESC, a.id DESC LIMIT 12;
             """, cancellationToken, parameters));
 
@@ -135,7 +138,8 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
             var online = Telemetry.Quality(Utc(device.StatusObserved), now, freshness) == ReadingQuality.Fresh
                 && Enum.TryParse<Connectivity>(device.Connectivity, out var status) ? status : Connectivity.Unknown;
             return new DeviceDetails(device.Id, device.RoomId, device.Name, Enum.Parse<DeviceKind>(device.Kind),
-                device.Manufacturer, device.Model, online, device.FaultCode, Utc(device.LastContact), quality, deviceEndpoints);
+                device.Manufacturer, device.Model, online, device.FaultCode, Utc(device.LastContact), quality, deviceEndpoints,
+                device.ProviderName, device.Provider, device.ProviderName != device.Name);
         }).ToArray(), readings[null].Select(ToReading).ToArray(), alerts);
 
         MetricReading ToReading(ReadingRow row)
@@ -182,7 +186,7 @@ public sealed class MonitoringReader(Database database, TimeProvider timeProvide
         return rows.Reverse().Select(row => new HistoryPoint(Utc(row.ObservedAt), row.Number, row.Flag, row.Code)).ToArray();
     }
 
-    private sealed record DeviceRow(long Id, long? RoomId, string Name, string Kind, string Manufacturer, string Model,
+    private sealed record DeviceRow(long Id, long? RoomId, string Name, string ProviderName, string Kind, string Manufacturer, string Model,
         string? Connectivity, string? FaultCode, DateTime? LastContact, DateTime? StatusObserved, string Provider);
     private sealed record EndpointRow(long Id, long DeviceId, string Name);
     private sealed record CapabilityRow(long EndpointId, string Code, bool Readable);

@@ -36,7 +36,7 @@ public sealed record EndpointState(long Id, string Name, IReadOnlyList<Capabilit
 public sealed record DeviceDetails(
     long Id, long? RoomId, string Name, DeviceKind Kind, string Manufacturer, string Model,
     Connectivity Connectivity, string? FaultCode, DateTimeOffset? LastContactAt, ReadingQuality Quality,
-    IReadOnlyList<EndpointState> Endpoints);
+    IReadOnlyList<EndpointState> Endpoints, string? ProviderName = null, string? Provider = null, bool CustomName = false);
 public sealed record DeviceAlert(long DeviceId, string DeviceName, string Code, DateTimeOffset OccurredAt);
 public sealed record PropertyState(
     IReadOnlyList<DeviceDetails> Devices, IReadOnlyList<MetricReading> Installation, IReadOnlyList<DeviceAlert> Alerts);

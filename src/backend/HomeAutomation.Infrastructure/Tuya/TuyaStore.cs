@@ -71,6 +71,7 @@ internal sealed class TuyaStore(Database database, TuyaOptions options)
         var affected = await db.ExecuteAsync(Query("""
             UPDATE tuya_devices SET property_id=@property,room_id=@room
             WHERE project_scope=@scope AND public_id=@id AND (property_id IS NULL OR property_id=@property)
+              AND EXISTS(SELECT 1 FROM properties p WHERE p.id=@property AND p.deleted_at_utc IS NULL)
             """, ct, new { scope = options.Scope, id, property, room }));
         if (affected == 0) throw new TuyaFailure("notFound");
     }

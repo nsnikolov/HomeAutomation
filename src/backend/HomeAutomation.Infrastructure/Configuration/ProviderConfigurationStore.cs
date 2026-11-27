@@ -32,7 +32,8 @@ public sealed partial class ProviderConfigurationStore(Database database, Migrat
         FROM configuration_profiles
         """;
     private const string Membership = """
-        SELECT role_code FROM property_memberships WHERE property_id=@property AND user_id=@actor
+        SELECT m.role_code FROM property_memberships m JOIN properties p ON p.id=m.property_id AND p.deleted_at_utc IS NULL
+        WHERE m.property_id=@property AND m.user_id=@actor
         """;
     private readonly ConfigurationKeys keys = new(options);
     private static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);

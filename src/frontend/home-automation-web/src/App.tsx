@@ -15,7 +15,9 @@ import { Devices, DevicePage } from './features/Devices'
 import { Energy } from './features/Energy'
 // History is loaded on demand so its charts do not enlarge the initial bundle.
 const HistoryPage = lazy(() => import('./features/history/HistoryPage').then(module => ({ default: module.HistoryPage })))
-import { ConfigurationSettings } from './features/ConfigurationSettings'
+// Settings and property management are administrative pages, loaded on demand like History.
+const ConfigurationSettings = lazy(() => import('./features/ConfigurationSettings').then(module => ({ default: module.ConfigurationSettings })))
+const FirstPropertyForm = lazy(() => import('./features/PropertyManagement').then(module => ({ default: module.FirstPropertyForm })))
 
 export function App() {
   const session = useQuery({ queryKey: ['session'], queryFn: ({ signal }) => api.session(signal) })
@@ -74,8 +76,18 @@ function PropertyRoutes({ email }: { email: string }) {
     <Route path="/properties/:propertyId/*" element={<SelectedProperty properties={properties.data} email={email} />} />
     <Route path="*" element={properties.data.length
       ? <Navigate to={`/properties/${properties.data[0].id}`} replace />
-      : <div className="page-notice"><p>No properties are assigned to your account.</p><SignOut /></div>} />
+      : <NoProperties />} />
   </Routes>
+}
+
+/** Shown when the account has no property; an installation administrator can create the first one here. */
+function NoProperties() {
+  const management = useQuery({ queryKey: ['property-management'], queryFn: ({ signal }) => api.propertyManagement(signal), retry: false })
+  return <div className="page-notice">
+    <p>No properties are assigned to your account.</p>
+    {management.data?.canCreate && <Suspense fallback={<p role="status">Loading…</p>}><FirstPropertyForm /></Suspense>}
+    <SignOut />
+  </div>
 }
 
 function SelectedProperty({ properties, email }: { properties: Property[]; email: string }) {
@@ -162,7 +174,7 @@ function PropertyView({ property, properties, email }: { property: Property; pro
           <Route path="energy" element={<Energy property={property} state={snapshot.data} pollSeconds={health.data?.pollSeconds ?? 10} />} />
           <Route path="history" element={<Suspense fallback={<p role="status">Loading history…</p>}><HistoryPage property={property} /></Suspense>} />
           <Route path="automations" element={<Placeholder title="Automations" description="Automation rules will appear here when rule execution is available." />} />
-          <Route path="settings" element={<ConfigurationSettings property={property} />} />
+          <Route path="settings" element={<Suspense fallback={<p role="status">Loading settings…</p>}><ConfigurationSettings property={property} /></Suspense>} />
           <Route path="*" element={<Navigate to={root} replace />} />
         </Routes>
       </main>

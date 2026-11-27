@@ -158,7 +158,7 @@ public sealed class MonitoringDashboardStore(Database database, Migrations migra
     private static bool Selectable(DashboardSource source) => source.Status != "archived";
 
     private const string Membership =
-        "SELECT role_code FROM property_memberships WHERE property_id=@property AND user_id=@user";
+        "SELECT m.role_code FROM property_memberships m JOIN properties p ON p.id=m.property_id AND p.deleted_at_utc IS NULL WHERE m.property_id=@property AND m.user_id=@user";
 
     private static async Task<(string? Role, DashboardGroup[] Groups)> ReadLayoutAsync(MySqlTransaction tx,
         long property, string user, CancellationToken ct)

@@ -28,3 +28,12 @@ A logical device gives a monitored role a stable identity independent of hardwar
 - **Replacement remains an explicit user decision.** An automatic identity is released only when the user names it, at an explicit time and with confirmation when it would keep readings. Raw telemetry, rollups and dashboard bindings are not rewritten.
 - **Consequence.** Users decide afterwards whether new hardware is new equipment or a replacement. The trade-off is a short-lived duplicate identity until they resolve it.
 - See [logical device management](../14-logical-device-management.md).
+
+## Addendum — Moving devices between properties
+
+**Status** Accepted.
+
+- **Decision.** Telemetry stays owned by the property where it was recorded. Moving a device retires its source row and opens (or reactivates) a destination row with the same inventory key. Endpoints, capabilities, binding and endpoint bindings are copied, and the provider row moves. Series and samples are never re-keyed.
+- **Alternatives.** Re-keying series to the new property would rewrite history and break the composite property foreign keys. Hard-deleting properties or devices would destroy history and could orphan vault credentials, so properties are soft-deleted.
+- **Consequence.** One physical device can have several device rows over time, at most one current. Readers exclude retired rows, and history before the move stays in the source property. Growatt hardware follows the site configuration and does not move this way.
+- See [property, room and device management](../16-property-room-device-management.md).

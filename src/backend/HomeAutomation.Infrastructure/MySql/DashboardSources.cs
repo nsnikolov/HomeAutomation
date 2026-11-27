@@ -32,7 +32,7 @@ internal static class DashboardSources
         using var rows = await tx.Connection!.QueryMultipleAsync(Query("""
             SELECT id AS Id,name AS Name,archived_at_utc AS ArchivedAt FROM logical_devices WHERE property_id=@property ORDER BY id;
             SELECT a.logical_device_id AS LogicalDeviceId,a.channel_key AS ChannelKey,a.device_id AS DeviceId,a.endpoint_id AS EndpointId,
-                a.valid_from_utc AS ValidFrom,a.valid_to_utc AS ValidTo,d.name AS DeviceName
+                a.valid_from_utc AS ValidFrom,a.valid_to_utc AS ValidTo,COALESCE(d.display_name,d.name) AS DeviceName
             FROM logical_device_assignments a JOIN devices d ON d.id=a.device_id AND d.property_id=a.property_id
             WHERE a.property_id=@property ORDER BY a.valid_from_utc,a.id;
             """, ct, new { property }, tx));
@@ -75,12 +75,12 @@ internal static class DashboardSources
         CancellationToken ct)
     {
         using var rows = await tx.Connection!.QueryMultipleAsync(Query("""
-            SELECT s.id AS Id,s.source_key AS Provider,d.id AS DeviceId,d.name AS DeviceName,e.name AS Channel,
+            SELECT s.id AS Id,s.source_key AS Provider,d.id AS DeviceId,COALESCE(d.display_name,d.name) AS DeviceName,e.name AS Channel,
                 s.metric AS Metric,l.observed_at_utc AS ObservedAt,l.numeric_value AS Number,
                 l.boolean_value AS Flag,l.status_value AS Code,e.id AS EndpointId
             FROM telemetry_series s
             JOIN device_endpoints e ON e.id=s.endpoint_id AND e.property_id=s.property_id
-            JOIN devices d ON d.id=e.device_id AND d.property_id=e.property_id
+            JOIN devices d ON d.id=e.device_id AND d.property_id=e.property_id AND d.retired_at_utc IS NULL
             LEFT JOIN latest_readings l ON l.series_id=s.id
             WHERE s.property_id=@property AND s.source_key IN ('growatt',@simulator)
               AND EXISTS (
@@ -106,11 +106,13 @@ internal static class DashboardSources
             JOIN telemetry_series s ON s.endpoint_id=e.id AND s.property_id=e.property_id AND s.source_key='tuya-sensor-report'
             JOIN latest_readings l ON l.series_id=s.id
             WHERE d.property_id=@property AND d.project_scope=@scope AND s.metric IN ('Temperature','Humidity');
-            SELECT c.provider_code AS Provider,b.external_id AS ExternalId,b.device_id AS DeviceId,e.id AS EndpointId,e.endpoint_key AS EndpointKey
+            SELECT c.provider_code AS Provider,b.external_id AS ExternalId,b.device_id AS DeviceId,e.id AS EndpointId,e.endpoint_key AS EndpointKey,
+                d.display_name AS DisplayName
             FROM provider_bindings b
             JOIN integration_connections c ON c.id=b.connection_id AND c.property_id=b.property_id
             JOIN provider_endpoint_bindings pe ON pe.binding_id=b.id AND pe.device_id=b.device_id
             JOIN device_endpoints e ON e.id=pe.endpoint_id AND e.device_id=b.device_id
+            JOIN devices d ON d.id=b.device_id AND d.property_id=b.property_id AND d.retired_at_utc IS NULL
             WHERE b.property_id=@property;
             """, ct, new { property, scope = tuya.IsConfigured ? tuya.Scope : null, simulator = includeSimulator ? "simulator" : "growatt" }, tx));
 
@@ -149,7 +151,9 @@ internal static class DashboardSources
                 var endpoint = provider == "tuya"
                     ? bound.FirstOrDefault(item => item.EndpointKey == source.Channel)?.EndpointId
                     : bound.Count == 1 ? bound[0].EndpointId : null;
-                yield return new(source, device, endpoint);
+                // A custom device name replaces the provider-reported name; provider identifiers and keys are unchanged.
+                var label = bound.Select(item => item.DisplayName).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name));
+                yield return new(label is null ? source : source with { DeviceName = label }, device, endpoint);
             }
         }
     }
@@ -215,7 +219,7 @@ internal static class DashboardSources
     private sealed record SeriesRow(long Id, string Provider, long DeviceId, string DeviceName, string Channel, string Metric,
         DateTime? ObservedAt, double? Number, bool? Flag, string? Code, long EndpointId);
     private sealed record TuyaReport(string DeviceId, string Point, string Metric, DateTime ObservedAt, double? Number);
-    private sealed record BindingRow(string Provider, string ExternalId, long DeviceId, long EndpointId, string EndpointKey);
+    private sealed record BindingRow(string Provider, string ExternalId, long DeviceId, long EndpointId, string EndpointKey, string? DisplayName);
     private sealed record LogicalRow(long Id, string Name, DateTime? ArchivedAt);
     private sealed record LogicalAssignment(long LogicalDeviceId, string ChannelKey, long DeviceId, long? EndpointId, DateTime ValidFrom,
         DateTime? ValidTo, string DeviceName);

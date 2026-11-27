@@ -118,22 +118,25 @@ export function EwelinkPanel({ property }: { property: Property }) {
     {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
     {!!view?.devices.length && <section className="room"><h2>Assigned devices</h2>
       <DeviceCardOrder items={view.devices} group="assigned" preferences={preferences}>{device =>
-        <EwelinkCard device={device} property={property} rooms={view.manage ? rooms.data : undefined} />}</DeviceCardOrder>
+        <EwelinkCard device={device} property={property} assigned rooms={view.manage ? rooms.data : undefined} />}</DeviceCardOrder>
     </section>}
     {!!view?.unassigned.length && <section className="room"><h2>Unassigned devices</h2>
       <DeviceCardOrder items={view.unassigned} group="unassigned" preferences={preferences}>{device =>
-        <EwelinkCard device={device} property={property} rooms={rooms.data} />}</DeviceCardOrder>
+        <EwelinkCard device={device} property={property} assigned={false} rooms={rooms.data} />}</DeviceCardOrder>
     </section>}
     {view?.manage && connected && !view.devices.length && !view.unassigned.length && <p>No eWeLink devices have been discovered.</p>}
   </section>
 }
 
-const EwelinkCard = memo(function EwelinkCard({ device, property, rooms }: { device: EwelinkDevice; property: Property; rooms?: Room[] }) {
+const EwelinkCard = memo(function EwelinkCard({ device, property, rooms, assigned }: {
+  device: EwelinkDevice; property: Property; rooms?: Room[]; assigned: boolean
+}) {
   const client = useQueryClient()
   const [room, setRoom] = useState(device.roomId?.toString() ?? '')
   const assign = useMutation({
     mutationFn: () => api.assignEwelink(property.id, device.id, room ? Number(room) : null),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['property', property.id, 'ewelink'] }),
+    onSuccess: () => Promise.all([client.invalidateQueries({ queryKey: ['property', property.id] }),
+      client.invalidateQueries({ queryKey: ['property-management'] })]),
   })
   const command = useMutation({
     mutationFn: (on: boolean) => api.commandEwelinkRelay(property.id, device.id, on, !!device.requiresRelayConfirmation),
@@ -225,8 +228,9 @@ const EwelinkCard = memo(function EwelinkCard({ device, property, rooms }: { dev
         <option value="">No room</option>
         {rooms.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select>
-      <Button variant="outline" onClick={() => assign.mutate()} disabled={assign.isPending}>Assign here</Button>
-      {assign.isError && <p role="alert">Could not assign this device.</p>}
+      <Button variant="outline" onClick={() => assign.mutate()}
+        disabled={assign.isPending || (assigned && room === (device.roomId?.toString() ?? ''))}>{assigned ? 'Save room' : 'Assign here'}</Button>
+      {assign.isError && <p role="alert">{assigned ? 'Could not change the room.' : 'Could not assign this device.'}</p>}
     </div>}
   </Card>
 })

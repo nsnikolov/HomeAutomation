@@ -3,11 +3,12 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ArrowUpRight, Battery, Cable, CircuitBoard, Search, Snowflake, Sun, Thermometer } from 'lucide-react'
 import { Link, useParams } from 'react-router'
 import { api } from '../shared/api'
-import type { Device, Metric, Property, Reading } from '../shared/types'
+import type { Device, Metric, Property, PropertyOverview, Reading } from '../shared/types'
 import { Badge, Card, Input } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
 import { DeviceCardOrder, useDevicePreferences } from './DeviceCardOrder'
 import { LogicalDevices } from './LogicalDevices'
+import { DeviceActions, DeviceAudit, OtherPropertyDevices, useManagedProperties } from './DeviceManagement'
 
 export const metricLabels: Record<Metric, string> = {
   pvPower: 'PV production', householdPower: 'Household consumption', gridAvailable: 'Grid availability',
@@ -59,7 +60,10 @@ export function Devices({ property, devices }: { property: Property; devices?: D
   const rooms = useQuery({ queryKey: ['property', property.id, 'rooms'], queryFn: ({ signal }) => api.rooms(property.id, signal) })
   const matches = (device: Device) => (!kind || device.kind === kind) &&
     `${device.name} ${device.manufacturer} ${device.model}`.toLowerCase().includes(search.trim().toLowerCase())
-  const groups = [...(rooms.data ?? []), { id: null, name: 'Unassigned room' }]
+  const groups = [...(rooms.data ?? []), { id: null, name: 'No room' }]
+  const managed = useManagedProperties().data?.properties ?? []
+  const canManage = managed.some(item => item.id === property.id && item.canManage)
+  const destinations = managed.filter(item => item.id !== property.id && item.canManage)
 
   return <>
     <div className="page-heading"><h1>Devices</h1><p>Monitor device state, readings and available capabilities.</p></div>
@@ -76,23 +80,27 @@ export function Devices({ property, devices }: { property: Property; devices?: D
     {devices && !devices.some(matches) && <Card className="placeholder">No devices match your filters.</Card>}
     {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
     <LogicalDevices property={property} />
+    <OtherPropertyDevices property={property} canManage={canManage} />
     {groups.map(room => {
       const items = (devices ?? []).filter(device => device.roomId === room.id)
       if (!items.some(matches)) return null
       return <section className="room" key={room.id ?? 'unassigned'}>
         <h2>{room.name}</h2>
         <DeviceCardOrder items={items} group={room.id === null ? 'unassigned' : `room-${room.id}`}
-          preferences={preferences} visible={matches}>{device => <DeviceCard device={device} property={property} />}</DeviceCardOrder>
+          preferences={preferences} visible={matches}>{device =>
+          <DeviceCard device={device} property={property} destinations={canManage ? destinations : undefined} />}</DeviceCardOrder>
       </section>
     })}
   </>
 }
 
-function DeviceCard({ device, property }: { device: Device; property: Property }) {
+function DeviceCard({ device, property, destinations }: { device: Device; property: Property; destinations?: PropertyOverview[] }) {
   const readings = device.endpoints.flatMap(endpoint => endpoint.measurements).slice(0, 3)
   return <Card className="device-card">
     <div className="device-card-top">
-      <span className="device-icon"><DeviceIcon kind={device.kind} /></span><DeviceBadge device={device} />
+      <span className="device-icon"><DeviceIcon kind={device.kind} /></span>
+      <span className="device-card-actions"><DeviceBadge device={device} />
+        {destinations && <DeviceActions device={device} property={property} destinations={destinations} />}</span>
     </div>
     <h3><Link to={`/properties/${property.id}/devices/${device.id}`}>{device.name}<ArrowUpRight size={15} /></Link></h3>
     <p className="muted">{device.model}</p>
@@ -116,7 +124,8 @@ export function DevicePage({ property }: { property: Property }) {
     {details.isError && <p role="alert">Device details are unavailable.</p>}
     {!device && details.isPending && <p role="status">{details.fetchStatus === 'idle' ? 'Device unavailable.' : 'Loading device…'}</p>}
     {device && <>
-      <div className="page-heading"><h1>{device.name}</h1><p>{device.manufacturer} · {device.model}</p></div>
+      <div className="page-heading"><h1>{device.name}</h1><p>{device.manufacturer} · {device.model}</p>
+        {device.customName && device.providerName && <p>Provider name: {device.providerName}</p>}</div>
       <Card className="detail-state">
         <DeviceBadge device={device} />
         <p>Last contact {device.lastContactAt ? formatMoment(device.lastContactAt, property.timeZone) : '—'}</p>
@@ -131,6 +140,7 @@ export function DevicePage({ property }: { property: Property }) {
           <dt>{metricLabels[reading.metric]}</dt><dd>{formatReading(reading)} {reading.quality === 'stale' && <Badge className="tone-warn">Stale</Badge>}</dd>
         </div>)}</dl>
       </Card>)}
+      <DeviceAudit property={property} device={device.id} />
     </>}
   </>
 }

@@ -143,6 +143,7 @@ internal sealed class EwelinkStore(Database database, Migrations migrations) : I
         await db.ExecuteAsync(Query("""
             UPDATE ewelink_devices SET property_id=@property,room_id=@room
             WHERE public_id=@device AND owner_id=@owner AND (property_id IS NULL OR property_id=@property)
+              AND EXISTS(SELECT 1 FROM properties p WHERE p.id=@property AND p.deleted_at_utc IS NULL)
             """, ct, new { device = row.Id, owner, property, room }));
     }
 }

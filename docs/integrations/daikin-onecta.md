@@ -39,7 +39,7 @@ dotnet user-secrets set 'Daikin:EnableWrites' 'false' --project src/backend/Home
 
 If `Daikin__EnableWrites` is set in the launcher or environment, set it to `false` there or remove it to allow the User Secrets value to take effect. Altherma monitoring remains read-only.
 
-**Disconnect account** stops polling and clears the stored access and refresh tokens locally. Historical telemetry and assignments are retained. The authenticated contract for upstream revocation could not be verified, so use Daikin's account or app management to revoke its grant where available. Reconnect may be required after expiration or revocation.
+**Refresh discovery** stays on the page. **Reconnect account…** and **Disconnect account…** are in the account actions menu. Reconnect asks for confirmation and then starts the same OAuth flow. Disconnect requires typing `DISCONNECT`. **Disconnect account** stops polling and clears the stored access and refresh tokens locally. Historical telemetry and assignments are retained. The authenticated contract for upstream revocation could not be verified, so use Daikin's account or app management to revoke its grant where available. Reconnect may be required after expiration or revocation.
 
 Migration 003 uses additive tables in the configured schema and leaves the existing simulator and Growatt migrations in place. Apply it with the dedicated migration account and keep the runtime account's scoped DML grants.
 

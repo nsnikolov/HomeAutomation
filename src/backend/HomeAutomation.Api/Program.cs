@@ -81,6 +81,22 @@ if (cleanupSimulator is not null && (initializeLogical is not null || backfillTe
     Environment.ExitCode = 1;
     return;
 }
+RoomAssignmentClearingCommand.Options? clearRooms;
+try { clearRooms = RoomAssignmentClearingCommand.Parse(args); }
+catch (RoomAssignmentClearingArgumentException error)
+{
+    Console.Error.WriteLine(error.Message);
+    Environment.ExitCode = 1;
+    return;
+}
+if (clearRooms is not null && (cleanupSimulator is not null || initializeLogical is not null || backfillTelemetry is not null ||
+    importProvider is not null || migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner ||
+    rotateConfigurationKeys || convertConfigurationIdentifiers))
+{
+    Console.Error.WriteLine("Run the room assignment clearing command by itself.");
+    Environment.ExitCode = 1;
+    return;
+}
 if (importProvider is not null && (migrate || bootstrap || discoverGrowatt || createProperty || promoteInitialOwner ||
     rotateConfigurationKeys || convertConfigurationIdentifiers))
 {
@@ -104,7 +120,7 @@ if ((createProperty || promoteInitialOwner) && (migrate || bootstrap || discover
 }
 var builder = WebApplication.CreateBuilder(args.Where(arg => !ProviderConfigurationStartup.IsImportArgument(arg) &&
     !TelemetryBackfillCommand.IsArgument(arg) && !LogicalDeviceInitializationCommand.IsArgument(arg) &&
-    !SimulatorCleanupCommand.IsArgument(arg) && arg is not
+    !SimulatorCleanupCommand.IsArgument(arg) && !RoomAssignmentClearingCommand.IsArgument(arg) && arg is not
     ("--migrate" or "--bootstrap-user" or "--discover-growatt" or "--create-property" or "--promote-initial-owner" or
         "--rotate-configuration-keys" or "--convert-configuration-identifiers")).ToArray());
 builder.Logging.ClearProviders();
@@ -152,6 +168,9 @@ builder.Services.AddScoped<TelemetryWriter>();
 builder.Services.AddScoped<DeviceViewPreferences>();
 builder.Services.AddScoped<IMonitoringDashboard, MonitoringDashboardStore>();
 builder.Services.AddSingleton<IMonitoringDashboardNotifier, MonitoringDashboardNotifier>();
+builder.Services.AddScoped<PropertyManagementStore>();
+builder.Services.AddScoped<IPropertyManagement>(services => services.GetRequiredService<PropertyManagementStore>());
+builder.Services.AddScoped<IDeviceAssignmentAudit>(services => services.GetRequiredService<PropertyManagementStore>());
 builder.Services.AddScoped<ITelemetryWriter>(services => services.GetRequiredService<TelemetryWriter>());
 builder.Services.AddScoped<IMonitoringReader, MonitoringReader>();
 builder.Services.AddScoped<IGrowattTelemetryStore>(services => services.GetRequiredService<TelemetryWriter>());
@@ -326,6 +345,11 @@ if (initializeLogical is not null)
 if (cleanupSimulator is not null)
 {
     Environment.ExitCode = await SimulatorCleanupCommand.RunAsync(app, cleanupSimulator);
+    return;
+}
+if (clearRooms is not null)
+{
+    Environment.ExitCode = await RoomAssignmentClearingCommand.RunAsync(app, clearRooms);
     return;
 }
 if (discoverGrowatt)

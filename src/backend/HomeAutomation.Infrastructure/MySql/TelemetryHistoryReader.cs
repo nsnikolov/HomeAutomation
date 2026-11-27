@@ -91,7 +91,7 @@ public sealed class TelemetryHistoryReader(Database database, Migrations migrati
             "SELECT name FROM logical_devices WHERE property_id=@propertyId AND id=@logicalId", ct, new { propertyId, logicalId }));
         if (name is null) return new(HistoryReadStatus.NotFound);
         var assignments = (await db.QueryAsync<AssignmentRow>(Query("""
-            SELECT a.id AS Id, a.device_id AS DeviceId, d.name AS DeviceName, a.endpoint_id AS EndpointId,
+            SELECT a.id AS Id, a.device_id AS DeviceId, COALESCE(d.display_name, d.name) AS DeviceName, a.endpoint_id AS EndpointId,
                    a.valid_from_utc AS ValidFrom, a.valid_to_utc AS ValidTo
             FROM logical_device_assignments a JOIN devices d ON d.id=a.device_id AND d.property_id=a.property_id
             WHERE a.property_id=@propertyId AND a.logical_device_id=@logicalId AND a.channel_key=@channel
@@ -410,7 +410,7 @@ public sealed class TelemetryHistoryReader(Database database, Migrations migrati
         var join = ready ? "LEFT JOIN telemetry_rollup_state st ON st.series_id=s.id" : "";
         return (await db.QueryAsync<SeriesRow>(Query($"""
             SELECT s.id AS Id, s.metric AS MetricName, s.source_key AS Source, s.endpoint_id AS EndpointId, e.name AS EndpointName,
-                   d.id AS DeviceId, d.name AS DeviceName, s.installation_id AS InstallationId, i.name AS InstallationName, {state}
+                   d.id AS DeviceId, COALESCE(d.display_name, d.name) AS DeviceName, s.installation_id AS InstallationId, i.name AS InstallationName, {state}
             FROM telemetry_series s
             LEFT JOIN device_endpoints e ON e.id=s.endpoint_id AND e.property_id=s.property_id
             LEFT JOIN devices d ON d.id=e.device_id AND d.property_id=e.property_id

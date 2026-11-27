@@ -139,9 +139,12 @@ internal static class EwelinkEndpoints
             return Results.NoContent();
         }).RequireRateLimiting("ewelink-presence");
         propertyRoutes.MapPost("/devices/{device:guid}/assign", async (HttpContext http, long property, Guid device,
-            RoomAssignment assignment, EwelinkService service, CancellationToken ct) =>
+            RoomAssignment assignment, EwelinkService service, IDeviceAssignmentAudit audit, CancellationToken ct) =>
         {
-            await service.AssignAsync(User(http), property, device.ToString("N"), assignment.RoomId, ct);
+            var id = device.ToString("N");
+            var before = await PropertyManagementEndpoints.AssignmentBeforeAsync(http, audit, "ewelink", id, ct);
+            await service.AssignAsync(User(http), property, id, assignment.RoomId, ct);
+            await PropertyManagementEndpoints.RecordAssignmentAsync(http, audit, "ewelink", before, id, ct);
             return Results.NoContent();
         });
         propertyRoutes.MapPost("/devices/{device:guid}/relay", (HttpContext http, long property, Guid device,

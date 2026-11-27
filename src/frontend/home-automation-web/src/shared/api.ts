@@ -2,7 +2,8 @@ import type { DaikinOutcome, DaikinState, DaikinWaterHistory, Device, DevicePage
 import type { DashboardGroup, DashboardSnapshot, DashboardSource } from './types'
 import type { ConfigurationView, ProviderConfigurationUpdate } from './types'
 import type {
-  AssignDeviceRequest, LogicalBindingReview, LogicalDeviceInput, LogicalDeviceList, LogicalHistory, PhysicalDeviceList, ReleasePreview,
+  AssignDeviceRequest, DeviceAuditEntry, DeviceTransferImpact, LogicalBindingReview, LogicalDeviceInput, LogicalDeviceList, LogicalHistory,
+  ManagedRoom, PhysicalDeviceList, PropertyDeletionImpact, PropertyManagementView, ReleasePreview, TransferableDevice,
   ReplaceDeviceRequest, ReplacementCandidate,
 } from './types'
 
@@ -84,10 +85,10 @@ async function logicalRequest<T>(path: string, options: RequestInit = {}): Promi
   return response.status === 204 ? undefined as T : await response.json() as T
 }
 
-async function logicalPost<T>(path: string, body: object, method: 'POST' | 'PUT' = 'POST') {
+async function logicalPost<T>(path: string, body: object | null, method: 'POST' | 'PUT' | 'DELETE' = 'POST') {
   const { token } = await request<{ token: string }>('/session/csrf')
   return logicalRequest<T>(path, {
-    method, headers: { 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method, headers: { 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' }, body: body === null ? undefined : JSON.stringify(body),
   })
 }
 
@@ -160,6 +161,31 @@ export const api = {
   device: (id: number, device: number, signal?: AbortSignal) =>
     request<Device>(`/properties/${id}/devices/${device}`, { signal }),
   health: (signal?: AbortSignal) => request<Health>('/system/health', { signal }),
+  propertyManagement: (signal?: AbortSignal) => logicalRequest<PropertyManagementView>('/property-management', { signal }),
+  createProperty: (body: { name: string; description: string | null; timeZone: string | null; requestId: string }) =>
+    logicalPost<{ id: number }>('/property-management/properties', body),
+  updateProperty: (id: number, body: { name: string; description: string | null; timeZone: string }) =>
+    logicalPost<{ id: number }>(`/properties/${id}/details`, body, 'PUT'),
+  deletionImpact: (id: number, signal?: AbortSignal) => logicalRequest<PropertyDeletionImpact>(`/properties/${id}/deletion-impact`, { signal }),
+  deleteProperty: (id: number, confirmName: string) => logicalPost<{ id: number }>(`/properties/${id}/delete`, { confirmName }),
+  managedRooms: (id: number, signal?: AbortSignal) => logicalRequest<ManagedRoom[]>(`/properties/${id}/room-management`, { signal }),
+  createRoom: (id: number, body: { name: string; description: string | null }) =>
+    logicalPost<{ id: number }>(`/properties/${id}/room-management`, body),
+  updateRoom: (id: number, room: number, body: { name: string; description: string | null }) =>
+    logicalPost<{ id: number }>(`/properties/${id}/room-management/${room}`, body, 'PUT'),
+  deleteRoom: (id: number, room: number) => logicalPost<{ id: number }>(`/properties/${id}/room-management/${room}`, null, 'DELETE'),
+  renameDevice: (id: number, device: number, displayName: string | null) =>
+    logicalPost<{ id: number }>(`/properties/${id}/devices/${device}/name`, { displayName }, 'PUT'),
+  setDeviceRoom: (id: number, device: number, roomId: number | null) =>
+    logicalPost<{ id: number }>(`/properties/${id}/devices/${device}/room`, { roomId }, 'PUT'),
+  deviceAudit: (id: number, device: number, signal?: AbortSignal) =>
+    logicalRequest<DeviceAuditEntry[]>(`/properties/${id}/devices/${device}/audit`, { signal }),
+  transferableDevices: (id: number, signal?: AbortSignal) =>
+    logicalRequest<TransferableDevice[]>(`/properties/${id}/transferable-devices`, { signal }),
+  transferImpact: (id: number, device: number, destination: number, signal?: AbortSignal) =>
+    logicalRequest<DeviceTransferImpact>(`/properties/${id}/devices/${device}/transfer-impact?destination=${destination}`, { signal }),
+  transferDevice: (id: number, device: number, destinationPropertyId: number) =>
+    logicalPost<{ id: number }>(`/properties/${id}/devices/${device}/transfer`, { destinationPropertyId }),
   logicalDevices: (id: number, signal?: AbortSignal) =>
     logicalRequest<LogicalDeviceList>(`/properties/${id}/logical-devices?includeArchived=true`, { signal }),
   replacementCandidates: (id: number, logical: number, channel: string, signal?: AbortSignal) =>

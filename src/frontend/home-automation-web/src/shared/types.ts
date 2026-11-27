@@ -10,8 +10,30 @@ export type Metric =
   | 'leavingWaterTemperature' | 'targetLeavingWaterTemperature' | 'heatingControlMode' | 'waterSetpointMode'
   | 'heatingWarning' | 'heatingEmergency'
 
-export type Property = { id: number; name: string; timeZone: string }
+export type Property = { id: number; name: string; timeZone: string; description?: string | null }
 export type Room = { id: number; name: string }
+export type ManagedRoom = { id: number; name: string; description: string | null; devices: number }
+export type PropertyOverview = {
+  id: number; name: string; description: string | null; timeZone: string; role: string; canManage: boolean; canDelete: boolean
+  rooms: number; devices: number; installations: number; growattProfile: boolean | null
+}
+export type PropertyManagementView = { canCreate: boolean; properties: PropertyOverview[] }
+export type PropertyDeletionImpact = {
+  id: number; name: string; rooms: number; devices: number; installations: number; historicalDevices: number; members: number
+  vaultProfiles: number; dashboardGroups: number; canDelete: boolean
+}
+export type DeviceAuditEntry = {
+  id: number; occurredAt: string; actor: string; action: string; otherPropertyId: number | null; otherPropertyName: string | null
+  detail: string | null
+}
+export type TransferableDevice = {
+  deviceId: number; propertyId: number; propertyName: string; name: string; providerName: string; provider: string; model: string
+  roomName: string | null
+}
+export type DeviceTransferImpact = {
+  deviceId: number; name: string; provider: string; sourcePropertyId: number; sourcePropertyName: string; destinationPropertyId: number
+  destinationPropertyName: string; currentRoom: string | null; openLogicalAssignments: number; blocked: string | null
+}
 export type Reading = {
   metric: Metric
   unit: string | null
@@ -33,6 +55,10 @@ export type Device = {
   faultCode: string | null
   lastContactAt: string | null
   quality: Quality
+  /** Name reported by the provider; differs from name when a custom name is set. */
+  providerName?: string | null
+  provider?: string | null
+  customName?: boolean
   endpoints: {
     id: number
     name: string

@@ -94,7 +94,8 @@ function TuyaCard({ device, property, rooms, assigned, visibility }: {
   const [history, setHistory] = useState(false)
   const assign = useMutation({
     mutationFn: () => api.assignTuya(property.id, device.id, room ? Number(room) : null),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['property', property.id, 'tuya'] }),
+    onSuccess: () => Promise.all([client.invalidateQueries({ queryKey: ['property', property.id] }),
+      client.invalidateQueries({ queryKey: ['property-management'] })]),
   })
   return <Card className="device-card">
     <div className="device-card-top"><h3>{device.name}</h3>
@@ -124,8 +125,9 @@ function TuyaCard({ device, property, rooms, assigned, visibility }: {
         <option value="">No room</option>
         {rooms.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select>
-      <Button variant="outline" onClick={() => assign.mutate()} disabled={assign.isPending}>Assign here</Button>
-      {assign.isError && <p role="alert">Could not assign this device.</p>}
+      <Button variant="outline" onClick={() => assign.mutate()}
+        disabled={assign.isPending || (assigned && room === (device.roomId?.toString() ?? ''))}>{assigned ? 'Save room' : 'Assign here'}</Button>
+      {assign.isError && <p role="alert">{assigned ? 'Could not change the room.' : 'Could not assign this device.'}</p>}
     </div>}
   </Card>
 }

@@ -56,9 +56,12 @@ internal static class TuyaEndpoints
             return Results.NoContent();
         }).RequireRateLimiting("session");
         group.MapPost("/devices/{device:guid}/assign", async (HttpContext http, long property, Guid device,
-            RoomAssignment assignment, TuyaService service, CancellationToken ct) =>
+            RoomAssignment assignment, TuyaService service, IDeviceAssignmentAudit audit, CancellationToken ct) =>
         {
-            await service.AssignAsync(User(http), property, device.ToString("N"), assignment.RoomId, ct);
+            var id = device.ToString("N");
+            var before = await PropertyManagementEndpoints.AssignmentBeforeAsync(http, audit, "tuya", id, ct);
+            await service.AssignAsync(User(http), property, id, assignment.RoomId, ct);
+            await PropertyManagementEndpoints.RecordAssignmentAsync(http, audit, "tuya", before, id, ct);
             return Results.NoContent();
         });
     }

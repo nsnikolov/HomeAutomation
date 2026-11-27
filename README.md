@@ -155,6 +155,23 @@ The command checks that property 1 is the seeded `countryside` property and that
 
 Use `dotnet run --project src/backend/HomeAutomation.Api -- --create-property` in a separate administrative session. Set `PropertyAdmin__AccountEmail` to the existing creator account's sign-in email, `PropertyAdmin__SiteKey` to a unique lowercase key such as `city-home`, `PropertyAdmin__Name` to the display name, and `PropertyAdmin__TimeZone` to an IANA zone such as `Europe/Sofia`. The command inserts the property and its creator's Owner membership in one transaction. An existing site key causes the command to fail before any membership changes.
 
+## Properties, rooms and devices
+
+Settings lists your properties and rooms. The installation administrator can add a property; it starts with no rooms, devices or provider settings. Owners and Admins can edit a property, manage its optional rooms, rename devices, change their room, and move Daikin, eWeLink and Tuya devices between properties they manage. Earlier history stays with the original property. Only an Owner can delete a property, by typing its name, and only when it has no current devices. Deletion hides the property but keeps its history and encrypted provider settings. Details are in [property, room and device management](docs/architecture/16-property-room-device-management.md).
+
+Migration 020 is required: after upgrading, the API reports not ready until it is applied with `--migrate`. Room deletion also needs a table-specific runtime grant, applied by the database administrator after the migration:
+
+```sql
+GRANT DELETE ON homeautomation.rooms TO 'home_runtime'@'127.0.0.1';
+```
+
+To remove every room assignment once (rooms and devices stay), run the dry run first, take a verified backup, then execute:
+
+```powershell
+dotnet run --project src/backend/HomeAutomation.Api -- --clear-room-assignments
+dotnet run --project src/backend/HomeAutomation.Api -- --clear-room-assignments --execute --confirm-room-assignment-clearing
+```
+
 ## Historical telemetry
 
 Milestone 7A adds hourly rollups, local calendar days, energy estimates and provider-neutral history routes. The model, quality rules and API are in [historical telemetry](docs/architecture/10-historical-telemetry.md).

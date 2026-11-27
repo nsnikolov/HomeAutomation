@@ -13,6 +13,9 @@ GRANT SELECT, INSERT, UPDATE ON homeautomation.* TO 'home_runtime'@'127.0.0.1';
 -- After migration 011 creates dashboard_groups, apply this table-specific grant as the database administrator.
 -- GRANT DELETE ON homeautomation.dashboard_groups TO 'home_runtime'@'127.0.0.1';
 
+-- After migration 020, room deletion needs this table-specific grant.
+-- GRANT DELETE ON homeautomation.rooms TO 'home_runtime'@'127.0.0.1';
+
 -- For existing installations whose migrator lacks ALTER, before applying 012 and 013:
 -- GRANT ALTER ON homeautomation.dashboard_widgets TO 'home_migrator'@'127.0.0.1';
 -- GRANT ALTER ON homeautomation.dashboard_values TO 'home_migrator'@'127.0.0.1';

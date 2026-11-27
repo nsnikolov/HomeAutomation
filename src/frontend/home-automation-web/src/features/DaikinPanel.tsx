@@ -2,6 +2,8 @@ import { useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
 import { api, ApiError } from '../shared/api'
+import { ActionMenu } from '../shared/ActionMenu'
+import { ConfirmDialog } from '../shared/ConfirmDialog'
 import { Button, Card, Input } from '../shared/ui'
 import { formatMoment, humanize } from '../shared/utils'
 import type { DaikinDevice, DaikinRange, Property, Room } from '../shared/types'
@@ -70,6 +72,7 @@ export function DaikinPanel({ property }: { property: Property }) {
     },
     onSettled: () => cache.invalidateQueries({ queryKey: key }),
   })
+  const [confirming, setConfirming] = useState<'reconnect' | 'disconnect' | null>(null)
 
   return <section aria-label="Daikin ONECTA">
     <div className="page-heading"><h1>Daikin ONECTA</h1>
@@ -78,15 +81,34 @@ export function DaikinPanel({ property }: { property: Property }) {
     </div>
     {state?.manage && <div className="filters">
       {params.get('onecta') === 'finish' && <Button onClick={() => action.mutate('complete')} disabled={action.isPending}>Finish connecting</Button>}
-      <Button variant="outline" onClick={() => action.mutate('connect')} disabled={action.isPending}>
-        {state.status === 'disconnected' ? 'Connect account' : 'Reconnect account'}
-      </Button>
-      {state.status !== 'disconnected' && <>
-        <Button variant="outline" onClick={() => action.mutate('refresh')} disabled={action.isPending}>Refresh discovery</Button>
-        <Button variant="outline" onClick={() => action.mutate('disconnect')} disabled={action.isPending}>Disconnect account</Button>
-      </>}
+      {state.status === 'disconnected'
+        ? <Button variant="outline" onClick={() => action.mutate('connect')} disabled={action.isPending}>Connect account</Button>
+        : <>
+          <Button variant="outline" onClick={() => action.mutate('refresh')} disabled={action.isPending}>Refresh discovery</Button>
+          <ActionMenu label="ONECTA account actions" items={[
+            { label: 'Reconnect account…', disabled: action.isPending, onSelect: () => setConfirming('reconnect') },
+            { label: 'Disconnect account…', destructive: true, disabled: action.isPending, onSelect: () => setConfirming('disconnect') },
+          ]} />
+        </>}
       {action.isError && <p role="alert">ONECTA account action failed. Check the connection status.</p>}
     </div>}
+    <ConfirmDialog open={confirming === 'reconnect'} title="Reconnect the ONECTA account?" confirmLabel="Continue to Daikin"
+      onCancel={() => setConfirming(null)} onConfirm={async () => { await action.mutateAsync('connect') }}
+      errorText={() => 'ONECTA reconnection could not start. Check the connection status and try again.'}>
+      <p>You will be sent to Daikin to sign in and approve access again. The new authorization replaces the current one when you finish
+        connecting.</p>
+      <p>Devices, room assignments, history and stored settings stay as they are.</p>
+    </ConfirmDialog>
+    <ConfirmDialog open={confirming === 'disconnect'} title="Disconnect the ONECTA account?" confirmLabel="Disconnect account" destructive
+      typedConfirmation="DISCONNECT" onCancel={() => setConfirming(null)}
+      onConfirm={async () => { await action.mutateAsync('disconnect'); setConfirming(null) }}
+      errorText={() => 'The ONECTA account could not be disconnected. Check the connection status and try again.'}>
+      <ul>
+        <li>Synchronization and manual controls for every Daikin device stop.</li>
+        <li>The stored ONECTA authorization is removed. Reconnecting requires signing in to Daikin again.</li>
+        <li>Device metadata, room assignments, history and the encrypted provider settings in Settings are kept.</li>
+      </ul>
+    </ConfirmDialog>
     {preferences.error && <p className="muted" role="alert">{preferences.error}</p>}
     {!!state?.devices.length && <section className="room"><h2>Assigned devices</h2>
       <DeviceCardOrder items={state.devices} group="assigned" preferences={preferences}>{unit =>
@@ -96,26 +118,29 @@ export function DaikinPanel({ property }: { property: Property }) {
     {!!state?.unassigned.length && <section className="room"><h2>Unassigned devices</h2>
       <DeviceCardOrder items={state.unassigned} group="unassigned" preferences={preferences}>{unit =>
         <Card className="device-card"><h3>{unit.name}</h3>
-          <AssignRoom property={property.id} device={unit} rooms={rooms.data ?? []} /></Card>}</DeviceCardOrder>
+          <AssignRoom property={property.id} device={unit} rooms={rooms.data ?? []} assigned={false} /></Card>}</DeviceCardOrder>
     </section>}
   </section>
 }
 
-function AssignRoom({ property, device, rooms }: { property: number; device: DaikinDevice; rooms: Room[] }) {
+/** Assigns an unassigned device to this property, or changes the optional room of a device already here. */
+function AssignRoom({ property, device, rooms, assigned }: { property: number; device: DaikinDevice; rooms: Room[]; assigned: boolean }) {
   const [selected, setSelected] = useState(device.roomId?.toString() ?? '')
   const cache = useQueryClient()
   const assignment = useMutation({
     mutationFn: () => api.assignDaikin(property, device.id, selected ? Number(selected) : null),
-    onSuccess: () => cache.invalidateQueries({ queryKey: ['property', property, 'daikin'] }),
+    onSuccess: () => Promise.all([cache.invalidateQueries({ queryKey: ['property', property] }),
+      cache.invalidateQueries({ queryKey: ['property-management'] })]),
   })
   return <div className="filters">
     <select className="input" aria-label={`Room for ${device.name}`} value={selected} onChange={event => setSelected(event.target.value)}>
       <option value="">No room</option>{rooms.map(room => <option key={room.id} value={room.id}>{room.name}</option>)}
     </select>
-    <Button variant="outline" disabled={assignment.isPending} onClick={() => assignment.mutate()}>
-      {assignment.isPending ? 'Saving…' : 'Assign here'}
+    <Button variant="outline" disabled={assignment.isPending || (assigned && selected === (device.roomId?.toString() ?? ''))}
+      onClick={() => assignment.mutate()}>
+      {assignment.isPending ? 'Saving…' : assigned ? 'Save room' : 'Assign here'}
     </Button>
-    {assignment.isError && <p role="alert">Could not assign this device.</p>}
+    {assignment.isError && <p role="alert">{assigned ? 'Could not change the room.' : 'Could not assign this device.'}</p>}
   </div>
 }
 
@@ -201,7 +226,7 @@ export function DaikinDeviceCard({ device, property, writes, rooms }: {
       : 'Command could not be confirmed. Check the device and command status.'}</p>}
     {[...visible.values()].map(outcome => <p key={outcome.id} role="status">{outcomes[outcome.status] ?? humanize(outcome.status)}
       {' · '}{humanize(outcome.operation)} {outcome.value}</p>)}
-    {rooms && <AssignRoom property={property.id} device={device} rooms={rooms} />}
+    {rooms && <AssignRoom property={property.id} device={device} rooms={rooms} assigned />}
   </Card>
 }
 
