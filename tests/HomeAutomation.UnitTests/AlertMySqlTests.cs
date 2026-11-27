@@ -262,6 +262,61 @@ public sealed class AlertMySqlTests
     }
 
     [AlertMySqlFact]
+    public async Task TheCatalogTemplatesPreviewAndStoredRulesShareOneSignalIdentityAndDistinctLabels()
+    {
+        var f = await FixtureAsync(soc: 38);
+        await WriteAsync(f, "daikin", "altherma", "Heatpump", DeviceKind.HeatPump, "climateControl", Capability.TemperatureMeasurement,
+            Metric.OutdoorTemperature, 4, T0.AddMinutes(-1), model: "Altherma");
+        await WriteAsync(f, "ewelink", "heatpump-switch", "Heatpump", DeviceKind.SmartSwitch, "main", Capability.VoltageMeasurement,
+            Metric.Voltage, 231, T0.AddMinutes(-1), model: "PSF-X67");
+        var rules = Rules(f);
+        var catalog = (await rules.CatalogAsync(f.Viewer, f.Property, default))!;
+
+        // Keys are the canonical identity, in the JSON spelling the browser derives from a stored SignalRef.
+        Assert.All(catalog, entry => Assert.Equal(AlertSignals.Key(entry.Signal), entry.Key));
+        Assert.Equal(catalog.Count, catalog.Select(entry => entry.Key).Distinct().Count());
+        var soc = catalog.Single(entry => entry.Key == $"m:d{f.Battery}:battery:batterySoc");
+        Assert.Equal(("Battery · Battery SOC", SignalValueType.Number, "%", 38d), (soc.Label, soc.ValueType, soc.Unit, soc.Number));
+        Assert.Contains(ConditionOperator.LessThan, soc.Operators);
+        Assert.Contains(catalog, entry => entry.Key == $"m:d{f.InverterA}:ac:gridVoltage" && entry.Unit == "V");
+
+        // Two devices with the same name are distinct signals with distinguishable labels; nothing is merged.
+        var offline = catalog.Where(entry => entry.Signal.EventCode == "DEVICE_OFFLINE" && entry.Label.StartsWith("Heatpump", StringComparison.Ordinal))
+            .Select(entry => entry.Label).Order().ToArray();
+        Assert.Equal(["Heatpump (Altherma) went offline", "Heatpump (PSF-X67) went offline"], offline);
+        Assert.Equal(catalog.Count, catalog.Select(entry => entry.Label).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+
+        // Templates only use signals the catalog offers, and the grid setup reads with names, not identifiers.
+        var keys = catalog.Select(entry => entry.Key).ToHashSet();
+        var templates = (await rules.TemplatesAsync(f.Owner, f.Property, default))!;
+        var drafts = templates.Templates.Where(template => template.Draft is not null).Select(template => template.Draft!)
+            .Concat(templates.GridOutageSetup!).ToArray();
+        Assert.Contains(templates.Templates, template => template.Code == "battery-low" && template.Available);
+        Assert.All(drafts.SelectMany(draft => AlertSignals.Conditions(draft.Definition)).SelectMany(condition => condition.Signals),
+            signal => Assert.Contains(AlertSignals.Key(signal), keys));
+
+        // Preview evidence carries the same labels as the catalog for the same keys.
+        var heatpump = catalog.Single(entry => entry.Label == "Heatpump (PSF-X67) went offline");
+        var probe = templates.GridOutageSetup![1] with
+        {
+            Definition = new RuleGroup(LogicalOperator.And, [
+                .. templates.GridOutageSetup[1].Definition.Children,
+                new(new RuleCondition("c9", [heatpump.Signal], SignalAggregation.Single, ConditionOperator.EventOccurred, WindowSeconds: 900)),
+            ]),
+        };
+        var labels = catalog.ToDictionary(entry => entry.Key, entry => entry.Label);
+        var preview = (await rules.PreviewAsync(f.Viewer, f.Property, probe, default))!;
+        Assert.True(preview.Valid);
+        Assert.All(preview.Conditions.SelectMany(condition => condition.Signals), evidence =>
+            Assert.Equal(labels[AlertSignals.Key(evidence.Signal)], evidence.Label));
+
+        // A stored rule reads back with the same identity.
+        Assert.Equal(ManagementStatus.Done, (await rules.CreateAsync(f.Owner, f.Property, templates.GridOutageSetup[0] with { Enabled = false }, default)).Status);
+        var stored = (await rules.ListAsync(f.Viewer, f.Property, default))!.Rules.Single();
+        Assert.All(AlertSignals.Conditions(stored.Definition).SelectMany(condition => condition.Signals), signal => Assert.Contains(AlertSignals.Key(signal), keys));
+    }
+
+    [AlertMySqlFact]
     public async Task ABatteryWarningIsItsOwnIncidentAndAnExplicitPolicySuppressesOnlyItsNotifications()
     {
         var f = await FixtureAsync();
@@ -427,10 +482,10 @@ public sealed class AlertMySqlTests
         WriteAsync(f, "growatt", "battery", "Battery", DeviceKind.Battery, "battery", Capability.BatteryLevel, Metric.BatterySoc, soc, at);
 
     private static async Task WriteAsync(Fixture f, string provider, string external, string name, DeviceKind kind, string endpoint,
-        Capability capability, Metric metric, double value, DateTimeOffset at, long? property = null)
+        Capability capability, Metric metric, double value, DateTimeOffset at, long? property = null, string model = "Model")
     {
         var id = $"{f.Prefix}-{external}";
-        var device = new DiscoveredDevice(id, name, kind, "", "Fixture", "Model", [new DeviceEndpoint(endpoint, endpoint, [capability])]);
+        var device = new DiscoveredDevice(id, name, kind, "", "Fixture", model, [new DeviceEndpoint(endpoint, endpoint, [capability])]);
         var batch = new ObservationBatch(at, [new DeviceObservation(id, Connectivity.Online, null,
             [new EndpointObservation(endpoint, [Sample.Numeric(metric, at, value)])], at)], []);
         await new TelemetryWriter(f.Runtime, f.Clock).StoreCloudDeviceAsync(provider, property ?? f.Property, null, device, batch, default);

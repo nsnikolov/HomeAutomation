@@ -45,6 +45,7 @@ Updated 2026-11-27. [AGENTS.md](../AGENTS.md) contains the shared development ru
   - **Notifications:** per incident event, recipients per member, per-channel delivery attempts; preferences per severity and event (Critical in-app always on); rate limit, reminders, explicit suppression. Browser channel over SignalR, system notification only in a background tab; mobile push is a future `INotificationChannel`.
   - **UI:** Automations → Alert rules (list, filters, editor, preview, templates, explicit grid outage setup); Alerts (incidents, history, settings); header bell; Critical banner.
   - **Migration 021**, optional for readiness; no grant change. The prompt referenced an earlier notification spec that was never archived; Phase 15 of [prompt 0065](prompts/0065-event-rules-incidents-notifications.md) was used as its requirements.
+  - **Signal identity fix ([prompt 0066](prompts/0066-fix-rule-editor-signal-resolution.md)):** the catalog spelled metrics in C# PascalCase inside `key` (`BatterySoc`) while the editor derived camelCase keys from stored signals (`batterySoc`), so every measurement looked unavailable. `AlertSignals.Key` is now the single camelCase identity. The browser resolves signals through `signalIndex`, built from each entry's own `signal`. Devices sharing a name are told apart by model, then manufacturer, room or number, in the catalog, evidence and timelines. An unavailable stored signal is kept and explained, never substituted.
 - Settings stages provider settings in a global or property profile. Property Owner/Admin may edit their own scope. Global access requires an explicitly designated Identity account. Settings reads ordinary identifiers and polling intervals. Genuine secrets are write-only and stored with an external AES-256-GCM key. Since Milestone 6B, each provider can load a complete imported vault snapshot at startup when explicitly selected. Existing deployments use Legacy by default and OAuth grants stay in their existing encrypted stores. See the [configuration and cutover guide](architecture/09-configuration-vault.md). Property Settings pages show installation-wide (global) Daikin, eWeLink and Tuya profile presence; property profiles never inherit global values.
 
 | Integration | Shipped behavior and evidence |
@@ -58,7 +59,8 @@ Updated 2026-11-27. [AGENTS.md](../AGENTS.md) contains the shared development ru
 
 | Commit | Change |
 | --- | --- |
-| Alerts and notifications | Rules, incidents, notifications, worker, migration 021, Alerts and Automations pages, bell and Critical banner. See [prompt 0065](prompts/0065-event-rules-incidents-notifications.md). |
+| Rule editor signal resolution | Canonical camelCase signal keys, one browser signal index, distinguishable equal device names, explained unavailable signals, grid setup names. No migration. See [prompt 0066](prompts/0066-fix-rule-editor-signal-resolution.md). |
+| `a2bf0b4` | Rules, incidents, notifications, worker, migration 021, Alerts and Automations pages, bell and Critical banner. See [prompt 0065](prompts/0065-event-rules-incidents-notifications.md). |
 | `ae1df1d` | Provider cards drop the inline room dropdown and **Save room**; a shared `AssignHere` keeps **Assign here** (no room) for unassigned devices. Frontend only. See [prompt 0064](prompts/0064-remove-redundant-room-controls.md). |
 | `6fc3dcc` | Property, room and device management, device moves with historical ownership, custom names, audit, Daikin account menu, migration 020. See [prompt 0063](prompts/0063-property-room-device-management.md). |
 | Settings global profile visibility | Property Settings report installation-wide (global) Daikin, eWeLink and Tuya profile presence without values or inheritance. See [prompt 0062](prompts/0062-configuration-vault-global-profile-visibility.md). |
@@ -148,6 +150,18 @@ Keep manual commands on provider pages and behind explicit authorization. Record
 - Use the [roadmap](architecture/08-implementation-roadmap.md) for new work when requested. Do not treat its future architecture as deployed.
 
 ## Verification baseline
+
+- **Rule editor signal resolution**:
+  - **Backend:** the Release build passed with zero warnings. With disposable MySQL 8.0.46 fixtures, 356 passed and 11 opt-in skips, twice in a row; without fixtures, 309 passed and 58 skipped.
+  - **New backend tests:**
+    - 2 pure tests: canonical keys equal the JSON metric spelling for every metric; equal device names are distinguished.
+    - 1 MySQL test: catalog keys are canonical and unique; Battery SOC and AC input voltage carry their units and comparisons; two devices named "Heatpump" stay separate with distinct labels; every template and grid setup signal is in the catalog; preview evidence labels equal catalog labels; a stored rule reads back with the same identity.
+  - **Frontend:** the production build passed (main chunk 522 kB, AlertRules 23 kB). Vitest reported 135 passes, including 12 new signal-resolution tests:
+    - Growatt battery SOC and AC input voltage selection with thresholds;
+    - the Battery low template, and the grid setup text and its loading guard;
+    - equal labels, saved identity, older key spelling and null-free stored rules;
+    - property switching, preview agreement, an unavailable signal, and accessibility.
+  - **Not touched:** live or development databases (no rule was created or enabled outside the disposable fixture), vault credentials, OAuth, the running backend and the providers.
 
 - **Alerts and notifications**:
   - **Backend:** the Release build passed with zero warnings. With disposable MySQL 8.0.46 fixtures (new `homeautomation_alerts_test` schema, runtime account limited to `SELECT, INSERT, UPDATE`), 353 passed and 11 opt-in skips, twice in a row; without fixtures, 307 passed and 57 skipped.

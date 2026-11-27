@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import {
-  AlertApiError, alertsApi, groupText, ruleSummary, type AlertRuleInput, type AlertRuleView, type Severity,
+  AlertApiError, alertsApi, groupText, ruleSummary, signalIndex, type AlertRuleInput, type AlertRuleView, type Severity,
 } from '../../shared/alerts'
 import { ActionMenu } from '../../shared/ActionMenu'
 import { ConfirmDialog } from '../../shared/ConfirmDialog'
@@ -43,7 +43,11 @@ export function AlertRules({ property, properties }: { property: Property; prope
     enabled: list.isSuccess })
   const templates = useQuery({ queryKey: [...key, 'templates'], queryFn: ({ signal }) => alertsApi.templates(selected.id, signal), retry: false,
     enabled: list.isSuccess && !!list.data?.canManage })
-  const labels = useMemo(() => new Map((catalog.data ?? []).map(entry => [entry.key, entry.label])), [catalog.data])
+  const labels = useMemo(() => signalIndex(catalog.data ?? []).labels, [catalog.data])
+  // Rules, signals and drafts belong to one property; switching starts from that property's own list.
+  const switchProperty = (id: number) => {
+    setPropertyId(id); setEditing(null); setTemplatesOpen(false); setGridSetup(false); setDeleting(null); setNotice('')
+  }
   const refresh = () => client.invalidateQueries({ queryKey: key })
   const toggle = useMutation({
     mutationFn: (rule: AlertRuleView) => alertsApi.setEnabled(selected.id, rule.id, !rule.enabled, rule.revision),
@@ -71,7 +75,7 @@ export function AlertRules({ property, properties }: { property: Property; prope
   return <section aria-label="Alert rules" className="alert-rules">
     <div className="filters">
       <h2>Alert rules</h2>
-      <label>Property<select className="input select-input" value={selected.id} onChange={event => setPropertyId(Number(event.target.value))}>
+      <label>Property<select className="input select-input" value={selected.id} onChange={event => switchProperty(Number(event.target.value))}>
         {properties.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label>Severity<select className="input select-input" value={severity} onChange={event => setSeverity(event.target.value as '' | Severity)}>
         <option value="">All</option><option value="info">Info</option><option value="warning">Warning</option><option value="critical">Critical</option>
@@ -134,7 +138,7 @@ export function AlertRules({ property, properties }: { property: Property; prope
       </ul>
     </ConfirmDialog>
     <ConfirmDialog open={gridSetup} title="Set up grid outage alerts?" confirmLabel="Create and enable both rules"
-      onCancel={() => setGridSetup(false)}
+      blocked={!catalog.data} onCancel={() => setGridSetup(false)}
       onConfirm={async () => {
         await alertsApi.createRules(selected.id, templates.data!.gridOutageSetup!)
         setNotice('Grid outage alerts are on. Review or adjust them in the list.')
@@ -143,7 +147,9 @@ export function AlertRules({ property, properties }: { property: Property; prope
       }}
       errorText={error => error instanceof AlertApiError ? error.message : 'The rules could not be created.'}>
       <p>These two rules share one grid outage incident: it opens as Warning and escalates to Critical when the battery is low.</p>
-      <ul>{templates.data?.gridOutageSetup?.map(rule => <li key={rule.name}><strong>{rule.name}</strong>: {ruleSummary(rule, labels)}</li>)}</ul>
+      {catalog.data
+        ? <ul>{templates.data?.gridOutageSetup?.map(rule => <li key={rule.name}><strong>{rule.name}</strong>: {ruleSummary(rule, labels)}</li>)}</ul>
+        : <p role="status">{catalog.isError ? 'Signal names could not be loaded, so the rules cannot be reviewed yet.' : 'Loading signal names…'}</p>}
     </ConfirmDialog>
   </section>
 }

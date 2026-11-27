@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import {
   aggregationLabel, AlertApiError, alertsApi, conditions, defaultPolicy, evidenceValue, operatorLabel, qualityLabel, ruleSummary, severityLabel,
-  signalKey, type AlertRuleInput, type AlertRulePreview, type ConditionOperator, type RuleCondition, type RuleGroup, type Severity,
-  type SignalCatalogEntry,
+  signalIndex, signalKey, type AlertRuleInput, type AlertRulePreview, type ConditionOperator, type RuleCondition, type RuleGroup, type Severity,
+  type SignalCatalogEntry, type SignalIndex,
 } from '../../shared/alerts'
 import type { Property } from '../../shared/types'
 import { Button, Card, Input } from '../../shared/ui'
@@ -55,7 +55,8 @@ export function RuleEditor({ property, catalog, initial, ruleId, revision, onSav
   const [input, setInput] = useState<AlertRuleInput>(() => ({ ...initial, notifications: initial.notifications ?? { ...defaultPolicy } }))
   const [shownErrors, setShownErrors] = useState<string[]>([])
   const [preview, setPreview] = useState<AlertRulePreview | null>(null)
-  const labels = useMemo(() => new Map(catalog.map(entry => [entry.key, entry.label])), [catalog])
+  const index = useMemo(() => signalIndex(catalog), [catalog])
+  const labels = index.labels
   const errors = validateRule(input)
   const policy = input.notifications ?? defaultPolicy
   const save = useMutation({
@@ -103,7 +104,7 @@ export function RuleEditor({ property, catalog, initial, ruleId, revision, onSav
     </div>
 
     <h3>Conditions</h3>
-    <GroupEditor group={input.definition} depth={1} catalog={catalog} nextId={nextId}
+    <GroupEditor group={input.definition} depth={1} index={index} timeZone={property.timeZone} nextId={nextId}
       onChange={definition => update({ definition })} />
 
     <h3>Notifications</h3>
@@ -129,17 +130,17 @@ export function RuleEditor({ property, catalog, initial, ruleId, revision, onSav
       <Button variant="ghost" onClick={onCancel}>Cancel</Button>
     </div>
     {evaluate.isError && <p className="form-error" role="alert">The preview is unavailable.</p>}
-    {preview && <RulePreview preview={preview} property={property} />}
+    {preview && <RulePreview preview={preview} property={property} labels={labels} />}
   </Card>
 }
 
-function GroupEditor({ group, depth, catalog, nextId, onChange, onRemove }: {
-  group: RuleGroup; depth: number; catalog: SignalCatalogEntry[]; nextId: () => string; onChange: (group: RuleGroup) => void
+function GroupEditor({ group, depth, index, timeZone, nextId, onChange, onRemove }: {
+  group: RuleGroup; depth: number; index: SignalIndex; timeZone: string; nextId: () => string; onChange: (group: RuleGroup) => void
   onRemove?: () => void
 }) {
-  const setChild = (index: number, node: RuleGroup['children'][number] | null) =>
-    onChange({ ...group, children: node ? group.children.map((child, at) => at === index ? node : child) : group.children.filter((_, at) => at !== index) })
-  const first = catalog[0]
+  const setChild = (at: number, node: RuleGroup['children'][number] | null) =>
+    onChange({ ...group, children: node ? group.children.map((child, position) => position === at ? node : child) : group.children.filter((_, position) => position !== at) })
+  const first = index.entries[0]
   return <div className={`rule-group depth-${depth}`} role="group" aria-label={depth === 1 ? 'Rule conditions' : 'Condition group'}>
     <div className="filters">
       <label>Match<select className="input select-input" value={group.operator}
@@ -148,13 +149,13 @@ function GroupEditor({ group, depth, catalog, nextId, onChange, onRemove }: {
       </select></label>
       {onRemove && <Button variant="ghost" onClick={onRemove}>Remove group</Button>}
     </div>
-    {group.children.map((child, index) => <div key={child.condition?.id ?? `group-${index}`} className="rule-node">
-      {index > 0 && <span className="rule-joiner">{group.operator.toUpperCase()}</span>}
+    {group.children.map((child, at) => <div key={child.condition?.id ?? `group-${at}`} className="rule-node">
+      {at > 0 && <span className="rule-joiner">{group.operator.toUpperCase()}</span>}
       {child.condition
-        ? <ConditionEditor condition={child.condition} catalog={catalog} onChange={condition => setChild(index, { condition })}
-          onRemove={() => setChild(index, null)} />
-        : child.group && <GroupEditor group={child.group} depth={depth + 1} catalog={catalog} nextId={nextId}
-          onChange={nested => setChild(index, { group: nested })} onRemove={() => setChild(index, null)} />}
+        ? <ConditionEditor condition={child.condition} index={index} timeZone={timeZone} onChange={condition => setChild(at, { condition })}
+          onRemove={() => setChild(at, null)} />
+        : child.group && <GroupEditor group={child.group} depth={depth + 1} index={index} timeZone={timeZone} nextId={nextId}
+          onChange={nested => setChild(at, { group: nested })} onRemove={() => setChild(at, null)} />}
     </div>)}
     <div className="filters">
       <Button variant="outline" disabled={!first || group.children.length >= 8}
@@ -180,26 +181,43 @@ export function conditionFor(entry: SignalCatalogEntry, id: string): RuleConditi
   }
 }
 
-function ConditionEditor({ condition, catalog, onChange, onRemove }: {
-  condition: RuleCondition; catalog: SignalCatalogEntry[]; onChange: (condition: RuleCondition) => void; onRemove: () => void
+/** The catalog's latest value for a signal; a missing reading is not the same as an unavailable signal. */
+function latestReading(entry: SignalCatalogEntry, timeZone: string) {
+  if (entry.valueType === 'event') return null
+  if (!entry.observedAt) return 'No reading yet. Until one arrives this condition is unknown, never true.'
+  const value = entry.number != null ? `${entry.number}${entry.unit ? entry.unit === '%' ? '%' : ` ${entry.unit}` : ''}`
+    : entry.flag != null ? entry.flag ? 'On' : 'Off' : entry.text ?? 'No value'
+  return `Latest reading ${value}, observed ${formatMoment(entry.observedAt, timeZone)}.`
+}
+
+const numericOperators: ConditionOperator[] = ['lessThan', 'lessThanOrEqual', 'greaterThan', 'greaterThanOrEqual', 'equals', 'notEquals']
+
+function ConditionEditor({ condition, index, timeZone, onChange, onRemove }: {
+  condition: RuleCondition; index: SignalIndex; timeZone: string; onChange: (condition: RuleCondition) => void; onRemove: () => void
 }) {
-  const byKey = new Map(catalog.map(entry => [entry.key, entry]))
-  const primary = condition.signals[0] ? byKey.get(signalKey(condition.signals[0])) : undefined
-  const compatible = primary ? catalog.filter(entry => entry.key !== primary.key && entry.signal.kind === primary.signal.kind &&
+  const noteId = useId()
+  const stored = condition.signals[0]
+  const primary = index.get(stored)
+  // A stored signal the property no longer offers stays as it is: it is shown as unavailable and never replaced by another one.
+  const unavailable = !!stored && !primary
+  const compatible = primary ? index.entries.filter(entry => entry !== primary && entry.signal.kind === primary.signal.kind &&
     entry.signal.metric === primary.signal.metric && entry.signal.eventCode === primary.signal.eventCode) : []
   const selected = new Set(condition.signals.map(signalKey))
   const operator = condition.operator
-  const numeric = primary?.valueType === 'number'
+  const numeric = primary ? primary.valueType === 'number'
+    : stored?.kind === 'measurement' && condition.text == null && numericOperators.includes(operator)
   const status = primary?.valueType === 'status' && (operator === 'equals' || operator === 'notEquals')
   const windowed = operator === 'eventOccurred' || operator === 'stateChanged'
   const ordered = operator.startsWith('less') || operator.startsWith('greater')
+  const reading = primary ? latestReading(primary, timeZone) : null
 
   function choose(key: string) {
-    const entry = byKey.get(key)
+    const entry = index.byKey(key)
     if (entry) onChange(conditionFor(entry, condition.id))
   }
   function toggleExtra(entry: SignalCatalogEntry, on: boolean) {
-    const signals = on ? [...condition.signals, entry.signal] : condition.signals.filter(signal => signalKey(signal) !== entry.key)
+    const key = signalKey(entry.signal)
+    const signals = on ? [...condition.signals, entry.signal] : condition.signals.filter(signal => signalKey(signal) !== key)
     onChange({ ...condition, signals, aggregation: signals.length > 1 ? (condition.aggregation === 'single' ? 'all' : condition.aggregation) : 'single' })
   }
   function setOperator(value: ConditionOperator) {
@@ -211,13 +229,19 @@ function ConditionEditor({ condition, catalog, onChange, onRemove }: {
   }
 
   return <div className="rule-condition" role="group" aria-label={`Condition ${condition.id}`}>
-    <label className="wide">Signal<select className="input select-input" value={primary?.key ?? ''} onChange={event => choose(event.target.value)}>
-      {!primary && <option value="">The selected device is no longer available</option>}
-      {catalog.map(entry => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+    <label className="wide">Signal<select className="input select-input" value={primary ? signalKey(primary.signal) : ''}
+      aria-invalid={unavailable || undefined} aria-describedby={unavailable || reading ? noteId : undefined}
+      onChange={event => choose(event.target.value)}>
+      {!primary && <option value="" disabled>{unavailable ? 'Unavailable signal (choose another)' : 'Choose a signal'}</option>}
+      {index.entries.map(entry => <option key={signalKey(entry.signal)} value={signalKey(entry.signal)}>{entry.label}</option>)}
     </select></label>
+    {unavailable && <p id={noteId} className="form-error wide">This condition uses a signal this property no longer offers: its device may have
+      moved, been removed or stopped reporting this measurement. The rule keeps that signal until you choose another one, and the condition
+      stays unknown meanwhile.</p>}
+    {reading && <p id={noteId} className="muted wide">{reading}</p>}
     {compatible.length > 0 && <fieldset className="wide rule-extra">
       <legend>Also check</legend>
-      {compatible.map(entry => <label key={entry.key} className="check"><input type="checkbox" checked={selected.has(entry.key)}
+      {compatible.map(entry => <label key={signalKey(entry.signal)} className="check"><input type="checkbox" checked={selected.has(signalKey(entry.signal))}
         onChange={event => toggleExtra(entry, event.target.checked)} />{entry.label}</label>)}
       {condition.signals.length > 1 && <label>Combine<select className="input select-input" value={condition.aggregation}
         onChange={event => onChange({ ...condition, aggregation: event.target.value as 'any' | 'all' })}>
@@ -248,18 +272,19 @@ function ConditionEditor({ condition, catalog, onChange, onRemove }: {
   </div>
 }
 
-export function RulePreview({ preview, property }: { preview: AlertRulePreview; property: Property }) {
+/** The preview names signals exactly as the editor does; the server's evidence label is the fallback for signals no longer offered. */
+export function RulePreview({ preview, property, labels }: { preview: AlertRulePreview; property: Property; labels?: Map<string, string> }) {
   if (!preview.valid) return <ul className="form-error" role="alert">{preview.errors.map(error => <li key={error}>{error}</li>)}</ul>
   return <section className="rule-preview" aria-label="Rule preview">
     <p>Overall result now: <TruthBadge value={preview.result} /> <span className="muted">Evaluated {formatMoment(preview.evaluatedAt, property.timeZone)}.
       A preview never creates incidents or notifications.</span></p>
     <div className="table-scroll"><table>
       <thead><tr><th>Condition</th><th>Signal</th><th>Value</th><th>Observed</th><th>Freshness</th><th>Result</th></tr></thead>
-      <tbody>{preview.conditions.flatMap(condition => condition.signals.map((signal, index) => <tr key={`${condition.conditionId}-${index}`}>
-        <td>{index === 0 ? condition.conditionId : ''}</td><td>{signal.label}</td><td>{evidenceValue(signal)}</td>
+      <tbody>{preview.conditions.flatMap(condition => condition.signals.map((signal, at) => <tr key={`${condition.conditionId}-${at}`}>
+        <td>{at === 0 ? condition.conditionId : ''}</td><td>{labels?.get(signalKey(signal.signal)) ?? signal.label}</td><td>{evidenceValue(signal)}</td>
         <td>{signal.observedAt ? formatMoment(signal.observedAt, property.timeZone) : '—'}</td>
         <td>{qualityLabel[signal.quality]}{signal.reason ? ` · ${signal.reason}` : ''}</td>
-        <td><TruthBadge value={signal.result} />{index === 0 && condition.signals.length > 1 ? <> condition: <TruthBadge value={condition.result} /></> : null}</td>
+        <td><TruthBadge value={signal.result} />{at === 0 && condition.signals.length > 1 ? <> condition: <TruthBadge value={condition.result} /></> : null}</td>
       </tr>))}</tbody>
     </table></div>
   </section>

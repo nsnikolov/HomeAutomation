@@ -169,9 +169,30 @@ export const aggregationLabel: Record<Aggregation, string> = {
   single: 'the selected signal', any: 'any selected signal', all: 'every selected signal',
 }
 
+/**
+ * The canonical signal identity, the same string the server's catalog sends as `key` (`AlertSignals.Key`). Metrics use their JSON
+ * (camelCase) spelling. Labels are presentation only and never identify a signal.
+ */
 export const signalKey = (signal: SignalRef) => signal.kind === 'measurement'
-  ? signal.installationId != null ? `m:i${signal.installationId}:${signal.metric}` : `m:d${signal.deviceId}:${signal.endpointKey}:${signal.metric}`
-  : signal.kind === 'connectivity' ? `c:d${signal.deviceId}` : `e:d${signal.deviceId}:${signal.eventCode}`
+  ? signal.installationId != null ? `m:i${signal.installationId}:${signal.metric ?? ''}`
+    : `m:d${signal.deviceId ?? ''}:${signal.endpointKey ?? ''}:${signal.metric ?? ''}`
+  : signal.kind === 'connectivity' ? `c:d${signal.deviceId ?? ''}` : `e:d${signal.deviceId ?? ''}:${signal.eventCode ?? ''}`
+
+/**
+ * Looks catalog entries up by the identity derived from each entry's own signal, so the editor, summaries, templates and the preview
+ * resolve a stored SignalRef the same way. Entries with the same identity are one signal; equal labels never merge entries.
+ */
+export function signalIndex(catalog: SignalCatalogEntry[]) {
+  const entries = new Map<string, SignalCatalogEntry>()
+  for (const entry of catalog) if (!entries.has(signalKey(entry.signal))) entries.set(signalKey(entry.signal), entry)
+  const labels = new Map([...entries].map(([key, entry]) => [key, entry.label]))
+  return {
+    entries: [...entries.values()], labels,
+    get: (signal: SignalRef | undefined) => signal ? entries.get(signalKey(signal)) : undefined,
+    byKey: (key: string) => entries.get(key),
+  }
+}
+export type SignalIndex = ReturnType<typeof signalIndex>
 
 export function conditions(group: RuleGroup): RuleCondition[] {
   return group.children.flatMap(node => node.condition ? [node.condition] : node.group ? conditions(node.group) : [])
@@ -182,9 +203,11 @@ const unitText = (unit: string | null | undefined) => !unit ? '' : unit === '%' 
 const duration = (seconds: number) => seconds % 3600 === 0 && seconds >= 3600 ? `${seconds / 3600} h`
   : seconds % 60 === 0 && seconds >= 60 ? `${seconds / 60} min` : `${seconds} s`
 
+export const unavailableSignal = 'an unavailable signal'
+
 /** A readable sentence for one condition, using catalog labels and never raw identifiers. */
 export function conditionText(condition: RuleCondition, labels: Map<string, string>) {
-  const names = condition.signals.map(signal => labels.get(signalKey(signal)) ?? 'an unavailable signal')
+  const names = condition.signals.map(signal => labels.get(signalKey(signal)) ?? unavailableSignal)
   const subject = condition.signals.length > 1
     ? `${condition.aggregation === 'all' ? 'every one of' : 'any of'} ${names.join(', ')}` : names[0] ?? 'a signal'
   if (condition.operator === 'eventOccurred') return `${subject} in the last ${duration(condition.windowSeconds ?? 0)}`

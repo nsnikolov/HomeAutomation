@@ -69,6 +69,23 @@ public static class AlertLimits
 
 public static class AlertSignals
 {
+    /// <summary>
+    /// The canonical, stable identity of a signal, shared by the catalog, the editor, templates and previews. Metric names use the
+    /// camelCase spelling of the JSON contract, so the browser derives the same key from a stored <see cref="SignalRef"/>.
+    /// Labels are presentation only and never identify a signal.
+    /// </summary>
+    public static string Key(SignalRef signal) => signal.Kind switch
+    {
+        SignalKind.Measurement when signal.InstallationId is { } installation => $"m:i{installation}:{MetricName(signal.Metric)}",
+        SignalKind.Measurement => $"m:d{signal.DeviceId}:{signal.EndpointKey}:{MetricName(signal.Metric)}",
+        SignalKind.Connectivity => $"c:d{signal.DeviceId}",
+        _ => $"e:d{signal.DeviceId}:{signal.EventCode}",
+    };
+
+    /// <summary>The wire spelling of a metric, for example <c>batterySoc</c>.</summary>
+    public static string MetricName(Metric? metric) =>
+        metric is { } value ? System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(value.ToString()) : "";
+
     public static SignalValueType ValueType(SignalRef signal) => signal.Kind switch
     {
         SignalKind.Connectivity => SignalValueType.Status,
@@ -490,5 +507,42 @@ public sealed record NotificationPreferences(SeverityPreference Info, SeverityPr
         var wanted = Wants(kind);
         var inApp = severity == AlertSeverity.Critical || (preference.InApp && wanted);
         return (inApp, wanted && preference.Browser ? [Browser] : []);
+    }
+}
+
+/// <summary>A device as alert signals name it: its custom or provider name plus attributes that can tell equal names apart.</summary>
+public sealed record SignalOwner(long Id, string Name, string? Model = null, string? Manufacturer = null, string? Room = null);
+
+/// <summary>
+/// Readable, unambiguous device names for signal labels. Equal names keep their text and gain the first attribute that tells every
+/// device in the group apart (model, then manufacturer, then room), or the device number as a last resort. Names never identify a
+/// signal: <see cref="AlertSignals.Key"/> does.
+/// </summary>
+public static class SignalOwnerNames
+{
+    public static IReadOnlyDictionary<long, string> Distinguish(IEnumerable<SignalOwner> owners)
+    {
+        var result = new Dictionary<long, string>();
+        foreach (var group in owners.DistinctBy(owner => owner.Id).GroupBy(owner => owner.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            var items = group.OrderBy(owner => owner.Id).ToArray();
+            if (items.Length == 1)
+            {
+                result[items[0].Id] = items[0].Name.Trim();
+                continue;
+            }
+            Func<SignalOwner, string?>[] qualifiers = [owner => owner.Model, owner => owner.Manufacturer, owner => owner.Room];
+            var chosen = qualifiers.FirstOrDefault(qualifier => items.All(owner => !string.IsNullOrWhiteSpace(qualifier(owner))) &&
+                items.Select(owner => qualifier(owner)!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() == items.Length);
+            foreach (var owner in items)
+                result[owner.Id] = chosen is not null ? $"{owner.Name.Trim()} ({chosen(owner)!.Trim()})"
+                    : string.IsNullOrWhiteSpace(owner.Model) ? $"{owner.Name.Trim()} (device {owner.Id})"
+                    : $"{owner.Name.Trim()} ({owner.Model.Trim()}, device {owner.Id})";
+        }
+        // A qualified name can still equal another device's own name, for example a device literally called "Heatpump (PSF-X67)".
+        foreach (var clash in result.GroupBy(pair => pair.Value, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1).ToArray())
+        foreach (var pair in clash)
+            result[pair.Key] = $"{pair.Value} · device {pair.Key}";
+        return result;
     }
 }

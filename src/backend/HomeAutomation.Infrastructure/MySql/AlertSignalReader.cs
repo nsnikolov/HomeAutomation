@@ -35,13 +35,22 @@ internal static class AlertSignalReader
     public const string DeviceOffline = "DEVICE_OFFLINE";
     public const string AnyFault = "ANY_FAULT";
 
-    public static string Key(SignalRef signal) => signal.Kind switch
-    {
-        SignalKind.Measurement when signal.InstallationId is { } installation => $"m:i{installation}:{signal.Metric}",
-        SignalKind.Measurement => $"m:d{signal.DeviceId}:{signal.EndpointKey}:{signal.Metric}",
-        SignalKind.Connectivity => $"c:d{signal.DeviceId}",
-        _ => $"e:d{signal.DeviceId}:{signal.EventCode}",
-    };
+    public static string Key(SignalRef signal) => Domain.AlertSignals.Key(signal);
+
+    /// <summary>Unambiguous names for the property's current, non-simulated devices (custom name first).</summary>
+    public static async Task<IReadOnlyDictionary<long, string>> OwnerNamesAsync(MySqlConnection db, MySqlTransaction? tx, long property,
+        CancellationToken ct) => SignalOwnerNames.Distinguish(await db.QueryAsync<SignalOwner>(Query("""
+            SELECT d.id AS Id, COALESCE(NULLIF(TRIM(d.display_name), ''), d.name) AS Name, d.model AS Model, d.manufacturer AS Manufacturer,
+                   r.name AS Room
+            FROM devices d LEFT JOIN rooms r ON r.property_id = d.property_id AND r.id = d.room_id
+            WHERE d.property_id = @property AND d.retired_at_utc IS NULL AND d.inventory_key NOT LIKE 'simulator:%'
+            """, ct, new { property }, tx)));
+
+    /// <summary>One measurement label: owner, the endpoint when it adds information, and the metric.</summary>
+    private static string MeasurementLabel(string owner, string? baseName, string? endpoint, Metric metric) =>
+        endpoint is { Length: > 0 } name && !string.Equals(name, baseName ?? owner, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(name, owner, StringComparison.OrdinalIgnoreCase)
+            ? $"{owner} · {name} · {MetricLabel(metric)}" : $"{owner} · {MetricLabel(metric)}";
 
     /// <summary>Provider report cadences used to suggest a maximum reading age (three missed reports).</summary>
     public static int SamplingSeconds(string provider) => provider switch
@@ -125,6 +134,7 @@ internal static class AlertSignalReader
             .GroupBy(row => (row.DeviceId, row.InstallationId, row.EndpointKey, row.Metric))
             .ToDictionary(group => group.Key, group => group.OrderByDescending(row => row.Observed ?? DateTime.MinValue).First());
 
+        var names = current.Length == 0 ? new Dictionary<long, string>() : await OwnerNamesAsync(db, tx, property, ct);
         var connectivity = current.Length == 0 ? new Dictionary<long, StateRow>() : (await db.QueryAsync<StateRow>(Query("""
             SELECT device_id AS DeviceId, connectivity AS Connectivity, observed_at_utc AS Observed FROM device_state WHERE device_id IN @current
             """, ct, new { current }, tx))).ToDictionary(row => row.DeviceId);
@@ -161,7 +171,7 @@ internal static class AlertSignalReader
 
         return (condition, signal) =>
         {
-            var label = Label(signal, devices, installations, series);
+            var label = Label(signal, devices, names, installations, series);
             if (signal.DeviceId is { } deviceId)
             {
                 if (!devices.TryGetValue(deviceId, out var device) || device.PropertyId != property)
@@ -200,18 +210,18 @@ internal static class AlertSignalReader
         (signal.InstallationId is null ? signal.DeviceId : null, signal.InstallationId, signal.InstallationId is null ? signal.EndpointKey : null,
             signal.Metric?.ToString() ?? "");
 
-    private static string Label(SignalRef signal, IReadOnlyDictionary<long, DeviceRow> devices, IReadOnlyDictionary<long, InstallationRow> installations,
-        IReadOnlyDictionary<(long?, long?, string?, string), SeriesRow> series)
+    private static string Label(SignalRef signal, IReadOnlyDictionary<long, DeviceRow> devices, IReadOnlyDictionary<long, string> names,
+        IReadOnlyDictionary<long, InstallationRow> installations, IReadOnlyDictionary<(long?, long?, string?, string), SeriesRow> series)
     {
-        var owner = signal.DeviceId is { } device ? devices.TryGetValue(device, out var row) ? row.Name : $"Device {device}"
+        var baseName = signal.DeviceId is { } device ? devices.TryGetValue(device, out var row) ? row.Name : $"Device {device}"
             : signal.InstallationId is { } installation && installations.TryGetValue(installation, out var site) ? site.Name : "Installation";
+        var owner = signal.DeviceId is { } id && names.TryGetValue(id, out var distinct) ? distinct : baseName;
         return signal.Kind switch
         {
             SignalKind.Connectivity => $"{owner} · connectivity",
             SignalKind.DeviceEvent => $"{owner} {EventLabel(signal.EventCode ?? "")}",
-            _ => series.TryGetValue(Lookup(signal), out var endpoint) && endpoint.EndpointName is { Length: > 0 } name &&
-                 !string.Equals(name, owner, StringComparison.OrdinalIgnoreCase)
-                ? $"{owner} · {name} · {MetricLabel(signal.Metric!.Value)}" : $"{owner} · {MetricLabel(signal.Metric!.Value)}",
+            _ => MeasurementLabel(owner, baseName, series.TryGetValue(Lookup(signal), out var endpoint) ? endpoint.EndpointName : null,
+                signal.Metric!.Value),
         };
     }
 
@@ -253,6 +263,8 @@ internal static class AlertSignalReader
             """, ct, new { ids }));
 
         var byId = devices.ToDictionary(device => device.Id);
+        var names = devices.Length == 0 ? new Dictionary<long, string>() : await OwnerNamesAsync(db, null, property, ct);
+        string NameOf(CatalogDevice device) => names.TryGetValue(device.Id, out var name) ? name : device.Name;
         var entries = new List<SignalCatalogEntry>();
         foreach (var group in rows.Where(row => Enum.TryParse<Metric>(row.Metric, out var metric) && Enum.IsDefined(metric))
                      .GroupBy(row => (row.DeviceId, row.InstallationId, row.EndpointKey, row.Metric)))
@@ -263,22 +275,36 @@ internal static class AlertSignalReader
             var signal = row.DeviceId is { } deviceId
                 ? new SignalRef(SignalKind.Measurement, DeviceId: deviceId, EndpointKey: row.EndpointKey, Metric: metric)
                 : new SignalRef(SignalKind.Measurement, InstallationId: row.InstallationId, Metric: metric);
-            var owner = row.DeviceId is { } ownerId ? byId[ownerId].Name : installations[row.InstallationId!.Value].Name;
-            var label = row.EndpointName is { Length: > 0 } name && !string.Equals(name, owner, StringComparison.OrdinalIgnoreCase)
-                ? $"{owner} · {name} · {MetricLabel(metric)}" : $"{owner} · {MetricLabel(metric)}";
+            var baseName = row.DeviceId is { } ownerId ? byId[ownerId].Name : installations[row.InstallationId!.Value].Name;
+            var owner = row.DeviceId is { } namedId ? NameOf(byId[namedId]) : baseName;
+            var label = MeasurementLabel(owner, baseName, row.EndpointName, metric);
             var type = Domain.AlertSignals.ValueType(metric);
             entries.Add(Entry(signal, label, row.DeviceId, row.DeviceId is null ? null : owner, row.EndpointName, provider, type,
                 Telemetry.Unit(metric), [], row.Number, row.Flag, row.Text, Utc(row.Observed)));
         }
         foreach (var device in devices)
         {
-            entries.Add(Entry(new SignalRef(SignalKind.Connectivity, DeviceId: device.Id), $"{device.Name} · connectivity", device.Id, device.Name,
+            var name = NameOf(device);
+            entries.Add(Entry(new SignalRef(SignalKind.Connectivity, DeviceId: device.Id), $"{name} · connectivity", device.Id, name,
                 null, device.Provider, SignalValueType.Status, null, Enum.GetNames<Connectivity>(), null, null, device.Connectivity, Utc(device.Observed)));
             foreach (var code in new[] { DeviceOffline, AnyFault }.Concat(faults.Where(fault => fault.DeviceId == device.Id).Select(fault => fault.Code)))
-                entries.Add(Entry(new SignalRef(SignalKind.DeviceEvent, DeviceId: device.Id, EventCode: code), $"{device.Name} {EventLabel(code)}",
-                    device.Id, device.Name, null, device.Provider, SignalValueType.Event, null, [], null, null, null, null));
+                entries.Add(Entry(new SignalRef(SignalKind.DeviceEvent, DeviceId: device.Id, EventCode: code), $"{name} {EventLabel(code)}",
+                    device.Id, name, null, device.Provider, SignalValueType.Event, null, [], null, null, null, null));
         }
-        return entries.OrderBy(entry => entry.Label, StringComparer.OrdinalIgnoreCase).ToArray();
+        return Distinct(entries).OrderBy(entry => entry.Label, StringComparer.OrdinalIgnoreCase).ThenBy(entry => entry.Key, StringComparer.Ordinal)
+            .ToArray();
+
+        // Entries with the same stable key are one signal; entries with different keys stay separate even when their labels match,
+        // and gain the endpoint (or device) so the editor can tell them apart.
+        static IEnumerable<SignalCatalogEntry> Distinct(IEnumerable<SignalCatalogEntry> all)
+        {
+            var unique = all.DistinctBy(entry => entry.Key).ToArray();
+            var clashes = unique.GroupBy(entry => entry.Label, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1)
+                .SelectMany(group => group).Select(entry => entry.Key).ToHashSet(StringComparer.Ordinal);
+            return unique.Select(entry => !clashes.Contains(entry.Key) ? entry
+                : entry.Signal.EndpointKey is { Length: > 0 } endpoint ? entry with { Label = $"{entry.Label} (channel {endpoint})" }
+                : entry.DeviceId is { } device ? entry with { Label = $"{entry.Label} (device {device})" } : entry);
+        }
 
         static SignalCatalogEntry Entry(SignalRef signal, string label, long? device, string? deviceName, string? endpoint, string provider,
             SignalValueType type, string? unit, IReadOnlyList<string> states, double? number, bool? flag, string? text, DateTimeOffset? observed)

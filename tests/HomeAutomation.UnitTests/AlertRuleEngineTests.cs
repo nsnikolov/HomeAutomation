@@ -201,4 +201,44 @@ public sealed class AlertRuleEngineTests
             return (inApp, string.Join(",", channels));
         }
     }
+
+    [Fact]
+    public void SignalKeysAreStableAndUseTheJsonSpellingOfMetrics()
+    {
+        // The browser derives keys from stored SignalRefs, whose metrics arrive as camelCase JSON strings.
+        Assert.Equal("m:d3:battery:batterySoc", AlertSignals.Key(Soc));
+        Assert.Equal("m:d1:ac:gridVoltage", AlertSignals.Key(VoltageA));
+        Assert.Equal("m:i7:batterySoc", AlertSignals.Key(new SignalRef(SignalKind.Measurement, InstallationId: 7, Metric: Metric.BatterySoc)));
+        Assert.Equal("m:d5:main:pv1Voltage", AlertSignals.Key(new SignalRef(SignalKind.Measurement, DeviceId: 5, EndpointKey: "main", Metric: Metric.Pv1Voltage)));
+        Assert.Equal("c:d4", AlertSignals.Key(new SignalRef(SignalKind.Connectivity, DeviceId: 4)));
+        Assert.Equal("e:d4:DEVICE_OFFLINE", AlertSignals.Key(new SignalRef(SignalKind.DeviceEvent, DeviceId: 4, EventCode: "DEVICE_OFFLINE")));
+        // Every metric's key segment is its wire name, so no metric can drift between the catalog and the editor.
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        options.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+        foreach (var metric in Enum.GetValues<Metric>())
+            Assert.Equal($"\"{AlertSignals.MetricName(metric)}\"", System.Text.Json.JsonSerializer.Serialize(metric, options));
+        Assert.Equal(AlertSignals.Key(Soc), AlertSignals.Key(Soc with { }));
+        Assert.NotEqual(AlertSignals.Key(VoltageA), AlertSignals.Key(VoltageB));
+    }
+
+    [Fact]
+    public void EqualDeviceNamesGainTheFirstAttributeThatTellsThemApart()
+    {
+        var names = SignalOwnerNames.Distinguish([
+            new(10, "Heatpump", "Altherma", "Daikin", "Boiler room"), new(11, "heatpump", "PSF-X67", "Sonoff", "Boiler room"),
+            new(12, "Growatt Master", "SPF 5000 ES", "Growatt"),
+        ]);
+        Assert.Equal(["Heatpump (Altherma)", "heatpump (PSF-X67)", "Growatt Master"], [names[10], names[11], names[12]]);
+
+        // Same model: the manufacturer, then the room, then the device number.
+        names = SignalOwnerNames.Distinguish([new(1, "Relay", "PSF-X67", "Sonoff", "Hall"), new(2, "Relay", "PSF-X67", "Sonoff", "Garage")]);
+        Assert.Equal(["Relay (Hall)", "Relay (Garage)"], [names[1], names[2]]);
+        names = SignalOwnerNames.Distinguish([new(1, "Relay", "PSF-X67", "Sonoff"), new(2, "Relay", "PSF-X67", "Sonoff")]);
+        Assert.Equal(["Relay (PSF-X67, device 1)", "Relay (PSF-X67, device 2)"], [names[1], names[2]]);
+
+        // A qualified name that equals another device's own name still ends unique.
+        names = SignalOwnerNames.Distinguish([new(1, "Pump", "A"), new(2, "Pump", "B"), new(3, "Pump (A)", "C")]);
+        Assert.Equal(3, names.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal("Pump (B)", names[2]);
+    }
 }

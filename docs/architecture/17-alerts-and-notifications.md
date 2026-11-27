@@ -33,6 +33,13 @@ Definitions are JSON stored in `alert_rules.definition`, validated on save and n
   - **Device event:** `deviceId` and `eventCode`, which is `DEVICE_OFFLINE`, `ANY_FAULT` or a reported fault code.
 
   Signals refer to device identity and capability, never to display names. Saving a rule rejects any device or installation that is not currently in the rule's property, and any measurement the device has not reported.
+- **Signal identity and names.**
+  - **Key:** a signal's stable identity is `AlertSignals.Key`, derived only from the `SignalRef` fields: `m:d{device}:{endpoint}:{metric}`, `m:i{installation}:{metric}`, `c:d{device}` or `e:d{device}:{eventCode}`.
+  - **Spelling:** metrics use their JSON (camelCase) spelling, for example `m:d21:main:batterySoc`.
+  - **Who uses it:** the catalog sends the key, and the editor, rule list, templates, grid outage setup and preview all resolve a stored `SignalRef` through one index built from each catalog entry's own `signal` (`signalIndex` in `shared/alerts.ts`).
+  - **Persistence:** keys are not persisted, and labels are never identity. Entries with the same key are one signal.
+  - **Equal device names:** labels use the custom name when set. When two current devices share a name, both keep it and gain the first attribute that tells them apart: model, then manufacturer, then room, then the device number, for example *Heatpump (Altherma)* and *Heatpump (PSF-X67)*. Measurement labels that still clash gain their channel.
+  - **Agreement:** evaluation evidence, incident timelines and the preview use the same names.
 - **Operators by value type.**
 
   | Value type | Operators | Examples |
@@ -208,14 +215,15 @@ Every mutation needs the antiforgery token. Until migration 021 is recorded, the
 - **Automations: Alert rules.**
   - **Rule list:** name, property, enabled switch, severity (icon and text), condition summary, last triggered and incident state. It filters by property, severity and status, and shows warnings for moved devices.
   - **Templates:** each is offered only when its signals exist. A template opens the editor disabled, with its devices and thresholds proposed for review.
-  - **Grid outage setup:** *Set up grid outage alerts* creates the two grid rules after a confirmation that lists them.
+  - **Grid outage setup:** *Set up grid outage alerts* creates the two grid rules after a confirmation that lists them with their device names, comparisons and thresholds. Confirmation stays disabled until signal names have loaded.
   - **Device actions** remain a placeholder there.
 - **Editor.**
-  - **Conditions:** nested AND/OR groups. Each condition selects a signal from the property catalog, can add more signals of the same metric with every/any, and offers only valid comparisons. It shows units, recovery thresholds, the look-back window and the maximum age.
+  - **Conditions:** nested AND/OR groups. Each condition selects a signal from the property catalog, can add more signals of the same metric with every/any, and offers only valid comparisons. It shows units, recovery thresholds, the look-back window, the maximum age and the signal's latest reading (or *No reading yet*).
+  - **Unavailable signals:** a stored signal the property no longer offers is shown as *Unavailable signal* with an explanation. It is kept unchanged on save and never replaced by another signal; its threshold stays editable. Missing or stale readings of an offered signal are a different state: they make the condition Unknown.
   - **Other settings:** severity, correlation group and incident title, timing, and the notification policy.
   - **Summary:** a sentence such as *When Inverter A · AC input voltage is at or below 10 V AND Battery · Battery SOC is below 50% for 1 min, create or escalate a Critical grid power unavailable incident.*
   - **Validation:** problems are explained before saving and checked again by the server.
-  - **Preview with latest readings:** for each signal, the value, observation time, freshness and True/False/Unknown, plus the overall result. It never writes.
+  - **Preview with latest readings:** for each signal, the value, observation time, freshness and True/False/Unknown, plus the overall result. Signals carry the same names as in the editor. It never writes.
 - **Alerts page.**
   - **Incidents:** active or resolved, with highest severity and date filters. The detail shows contributing rules, the timeline with evidence and observation times, and acknowledgment.
   - **Notification history:** filters by property, severity, event, incident status, read state and dates; shows delivery outcomes; can mark notifications read; loads more pages.
