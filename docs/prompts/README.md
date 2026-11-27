@@ -68,3 +68,4 @@ This index lists substantial Codex development prompts in sequence. Each linked 
 64. 2026-11-27 · [HomeAutomation — Remove redundant room assignment controls](0064-remove-redundant-room-controls.md)
 65. 2026-11-27 · [HomeAutomation — Advanced Event Rules, Composite Conditions, Severity and Notification Architecture](0065-event-rules-incidents-notifications.md)
 66. 2026-11-27 · [HomeAutomation — Fix Rule Editor Signal Resolution and Duplicate Signal Labels](0066-fix-rule-editor-signal-resolution.md)
+67. 2026-11-27 · [HomeAutomation — Fix Notification Read Behavior](0067-notification-read-behavior.md)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import {
   AlertApiError, alertsApi, evidenceValue, formatDuration, qualityLabel, severityLabel, type IncidentEvent, type IncidentFilters,
   type NotificationFilters, type NotificationItem, type NotificationPreferences, type Severity,
@@ -9,15 +9,28 @@ import type { Property } from '../../shared/types'
 import { Badge, Button, Card, Input } from '../../shared/ui'
 import { formatMoment, humanize } from '../../shared/utils'
 import { SeverityBadge, TruthBadge } from './AlertBits'
-import { summaryKey } from './NotificationCenter'
+import { notificationLink, summaryKey, useNotificationReads } from './NotificationCenter'
 
 type Tab = 'incidents' | 'history' | 'settings'
 
 export function AlertsPage({ property, properties }: { property: Property; properties: Property[] }) {
   const [params, setParams] = useSearchParams()
   const incident = Number(params.get('incident')) || null
+  const notification = Number(params.get('notification'))
   const [tab, setTab] = useState<Tab>('incidents')
+  const reads = useNotificationReads()
+  const { markOne } = reads
+  // A link from a notification opens its incident.
+  useEffect(() => { if (incident) setTab('incidents') }, [incident])
+  // A link that names its notification (a system notification click) marks exactly that one read, once. Opening an incident by
+  // itself reads nothing: it may have several notifications. Reading never acknowledges or resolves the incident.
+  useEffect(() => {
+    if (!Number.isSafeInteger(notification) || notification <= 0) return
+    void markOne(notification)
+    setParams(current => { const next = new URLSearchParams(current); next.delete('notification'); return next }, { replace: true })
+  }, [notification, markOne, setParams])
   return <section aria-label="Alerts">
+    {reads.error && <p className="form-error" role="alert">{reads.error}</p>}
     <div className="page-heading"><h1>Alerts</h1>
       <p>Incidents, notification history and how you are notified. Alerts never control equipment.</p></div>
     <div className="filters" role="tablist" aria-label="Alert views">
@@ -141,7 +154,7 @@ const kindLabel: Record<string, string> = {
 }
 
 function History({ property, properties }: { property: Property; properties: Property[] }) {
-  const client = useQueryClient()
+  const reads = useNotificationReads()
   const [filters, setFilters] = useState<NotificationFilters>({ propertyId: property.id })
   const [pages, setPages] = useState<number[]>([])
   useEffect(() => setPages([]), [filters])
@@ -155,10 +168,6 @@ function History({ property, properties }: { property: Property; properties: Pro
   })
   const items: NotificationItem[] = [...first.data?.items ?? [], ...(more.data ?? []).flatMap(page => page.items)]
   const next = pages.length > 0 ? more.data?.at(-1)?.next : first.data?.next
-  const read = useMutation({
-    mutationFn: (body: { ids?: number[]; all?: boolean; propertyId?: number }) => alertsApi.markRead(body),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['notifications'] }),
-  })
   const set = (patch: Partial<NotificationFilters>) => setFilters(current => ({ ...current, ...patch }))
   return <div className="notification-history">
     <div className="filters">
@@ -178,14 +187,15 @@ function History({ property, properties }: { property: Property; properties: Pro
         <option value="">All</option><option value="unread">Unread</option><option value="read">Read</option></select></label>
       <label>From<Input type="date" onChange={event => set({ from: event.target.value ? new Date(`${event.target.value}T00:00:00`).toISOString() : undefined })} /></label>
       <label>To<Input type="date" onChange={event => set({ to: event.target.value ? new Date(`${event.target.value}T23:59:59`).toISOString() : undefined })} /></label>
-      <Button variant="outline" disabled={read.isPending} onClick={() => read.mutate({ all: true, propertyId: filters.propertyId })}>Mark all read</Button>
+      <Button variant="outline" disabled={reads.markingAll} onClick={() => reads.markAll(filters.propertyId)}>Mark all read</Button>
     </div>
+    {reads.error && <p className="form-error" role="alert">{reads.error}</p>}
     {first.isError && <p className="form-error" role="alert">{first.error instanceof AlertApiError ? first.error.message : 'History could not be loaded.'}</p>}
     {first.isPending && <p role="status">Loading notifications…</p>}
     {first.isSuccess && items.length === 0 && <Card className="placeholder"><p className="muted">No notifications match these filters.</p></Card>}
-    <ul className="notification-list">{items.map(item => <li key={item.id} className={item.readAt ? '' : 'unread'}>
+    <ul className="notification-list">{items.map(item => <li key={item.id} className={item.readAt ? 'read' : 'unread'}>
       <SeverityBadge severity={item.severity} />
-      <div><strong>{item.title}</strong> <Badge className="tone-neutral">{kindLabel[item.kind] ?? humanize(item.kind)}</Badge>
+      <div><Link className="notification-title" to={notificationLink(item)} onClick={() => void reads.markOne(item)}>{item.title}</Link> <Badge className="tone-neutral">{kindLabel[item.kind] ?? humanize(item.kind)}</Badge>
         {!item.readAt && <Badge className="tone-warn">Unread</Badge>}
         <p>{item.body}</p>
         <small className="muted">{item.propertyName} · {formatMoment(item.createdAt, property.timeZone)} · incident {item.incidentStatus}
@@ -193,7 +203,7 @@ function History({ property, properties }: { property: Property; properties: Pro
           {!item.inApp && !item.suppressedReason ? ' · not shown in the app by your settings' : ''}
           {item.deliveries.map(delivery => ` · ${humanize(delivery.channel)} ${humanize(delivery.status).toLowerCase()}`).join('')}</small>
       </div>
-      {!item.readAt && <Button variant="ghost" onClick={() => read.mutate({ ids: [item.id] })} disabled={read.isPending}>Mark read</Button>}
+      {!item.readAt && <Button variant="ghost" aria-label={`Mark “${item.title}” read`} onClick={() => void reads.markOne(item)}>Mark read</Button>}
     </li>)}</ul>
     {next != null && <Button variant="outline" onClick={() => setPages([...pages, next])} disabled={more.isFetching}>Load more</Button>}
   </div>

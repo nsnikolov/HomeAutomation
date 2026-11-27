@@ -1,6 +1,7 @@
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { refreshNotifications } from './alerts'
 
 export function useLiveUpdates(propertyId: number) {
   const client = useQueryClient()
@@ -111,7 +112,7 @@ export function useLiveUpdates(propertyId: number) {
       void client.invalidateQueries({ queryKey: ['property', event.propertyId, 'alerts'] })
       void client.invalidateQueries({ queryKey: ['notifications', 'summary'] })
     })
-    connection.on('notificationsChanged', () => { void client.invalidateQueries({ queryKey: ['notifications'] }) })
+    connection.on('notificationsChanged', () => { void refreshNotifications(client) })
     connection.on('browserNotification', (message: unknown) => {
       window.dispatchEvent(new CustomEvent('homeautomation:browser-notification', { detail: message }))
     })

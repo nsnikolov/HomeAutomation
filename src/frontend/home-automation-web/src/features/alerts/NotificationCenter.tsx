@@ -1,8 +1,8 @@
-import { useEffect, useId, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell } from 'lucide-react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { Bell, X } from 'lucide-react'
 import { Link } from 'react-router'
-import { alertsApi, type BrowserNotification } from '../../shared/alerts'
+import { alertsApi, refreshNotifications, type BrowserNotification, type NotificationItem, type NotificationPage, type NotificationSummary } from '../../shared/alerts'
 import type { Property } from '../../shared/types'
 import { Button } from '../../shared/ui'
 import { formatMoment } from '../../shared/utils'
@@ -17,9 +17,69 @@ export function useNotificationSummary() {
   return useQuery({ queryKey: summaryKey, queryFn: ({ signal }) => alertsApi.summary(signal), refetchInterval: 60_000, retry: false })
 }
 
-/** The header bell: unread in-app notifications across the user's properties, with Critical and Warning counts. */
-export function NotificationBell({ property }: { property: Property }) {
+/** The incident a notification belongs to; `notification` lets the Alerts page mark exactly that one read when opened directly. */
+export const notificationLink = (item: Pick<NotificationItem, 'id' | 'propertyId' | 'incidentId'>, withId = false) =>
+  `/properties/${item.propertyId}/alerts?incident=${item.incidentId}${withId ? `&notification=${item.id}` : ''}`
+
+// Requests in flight in this tab, so a double click, the bell and the Alerts page never send the same read twice.
+const pendingReads = new Set<number>()
+
+type ReadTarget = number | Pick<NotificationItem, 'id' | 'severity' | 'inApp' | 'readAt'>
+
+/** Applies a persisted read to cached lists and the bell summary, so counters change as soon as the server confirms. */
+function applyRead(client: QueryClient, ids: number[] | 'all', readAt: string, propertyId?: number) {
+  const mark = (item: NotificationItem) => !item.readAt && (ids === 'all' ? propertyId === undefined || item.propertyId === propertyId : ids.includes(item.id))
+    ? { ...item, readAt } : item
+  client.setQueriesData<NotificationPage | NotificationPage[]>({ queryKey: ['notifications', 'list'] }, data =>
+    !data ? data : Array.isArray(data) ? data.map(page => ({ ...page, items: page.items.map(mark) })) : { ...data, items: data.items.map(mark) })
+}
+
+/**
+ * Marks notifications read for the signed-in user. Read state is only shown after the server confirms it; a failure leaves the
+ * notification unread and is reported. Reading never acknowledges or resolves an incident. Other tabs follow through the
+ * `notificationsChanged` live event the server sends to this user's connections.
+ */
+export function useNotificationReads() {
   const client = useQueryClient()
+  const [error, setError] = useState<string | null>(null)
+  const markOne = useCallback(async (target: ReadTarget) => {
+    const id = typeof target === 'number' ? target : target.id
+    if ((typeof target !== 'number' && target.readAt) || pendingReads.has(id)) return
+    pendingReads.add(id)
+    setError(null)
+    try {
+      const { changed } = await alertsApi.markRead({ ids: [id] })
+      await refreshNotifications(client, () => {
+        if (changed === 0) return
+        applyRead(client, [id], new Date().toISOString())
+        if (typeof target !== 'number' && target.inApp)
+          client.setQueryData<NotificationSummary>(summaryKey, summary => summary && {
+            ...summary, unread: Math.max(0, summary.unread - 1),
+            unreadCritical: Math.max(0, summary.unreadCritical - (target.severity === 'critical' ? 1 : 0)),
+            unreadWarning: Math.max(0, summary.unreadWarning - (target.severity === 'warning' ? 1 : 0)),
+          })
+      })
+    } catch {
+      setError('The notification could not be marked as read. It is still unread.')
+    } finally {
+      pendingReads.delete(id)
+    }
+  }, [client])
+  const all = useMutation({
+    mutationFn: (propertyId?: number) => alertsApi.markRead({ all: true, propertyId }),
+    onMutate: () => setError(null),
+    onSuccess: (_, propertyId) => refreshNotifications(client, () => {
+      applyRead(client, 'all', new Date().toISOString(), propertyId)
+      if (propertyId === undefined)
+        client.setQueryData<NotificationSummary>(summaryKey, summary => summary && { ...summary, unread: 0, unreadCritical: 0, unreadWarning: 0 })
+    }),
+    onError: () => setError('Notifications could not be marked as read. They are still unread.'),
+  })
+  return { markOne, markAll: (propertyId?: number) => all.mutate(propertyId), markingAll: all.isPending, error, clearError: () => setError(null) }
+}
+
+/** The header bell: unread in-app notifications across the user's properties, with Critical and Warning counts. Opening it reads nothing. */
+export function NotificationBell({ property }: { property: Property }) {
   const summary = useNotificationSummary()
   const [open, setOpen] = useState(false)
   const panelId = useId()
@@ -28,10 +88,7 @@ export function NotificationBell({ property }: { property: Property }) {
     queryKey: ['notifications', 'list', { inApp: true, limit: 8 }],
     queryFn: ({ signal }) => alertsApi.notifications({ inApp: true, limit: 8 }, signal), enabled: open, retry: false,
   })
-  const read = useMutation({
-    mutationFn: () => alertsApi.markRead({ all: true }),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['notifications'] }),
-  })
+  const reads = useNotificationReads()
   useEffect(() => {
     if (!open) return
     const outside = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false) }
@@ -50,16 +107,22 @@ export function NotificationBell({ property }: { property: Property }) {
     </button>
     {open && <div id={panelId} className="bell-panel" role="region" aria-label="Recent notifications">
       <div className="bell-heading"><strong>Notifications</strong>
-        <Button variant="ghost" disabled={unread === 0 || read.isPending} onClick={() => read.mutate()}>Mark all read</Button></div>
+        <Button variant="ghost" disabled={unread === 0 || reads.markingAll} onClick={() => reads.markAll()}>Mark all read</Button></div>
       {recent.isPending && <p role="status" className="muted">Loading…</p>}
+      {recent.isError && <p role="alert" className="form-error">Notifications could not be loaded.</p>}
       {recent.data?.items.length === 0 && <p className="muted">No notifications yet.</p>}
-      <ul className="bell-list">{recent.data?.items.map(item => <li key={item.id} className={item.readAt ? '' : 'unread'}>
-        <SeverityBadge severity={item.severity} />
-        <Link to={`/properties/${item.propertyId}/alerts?incident=${item.incidentId}`} onClick={() => setOpen(false)}>{item.title}</Link>
-        <small className="muted">{item.propertyName} · {formatMoment(item.createdAt, property.timeZone)}{item.readAt ? '' : ' · Unread'}</small>
+      <ul className="bell-list">{recent.data?.items.map(item => <li key={item.id} className={item.readAt ? 'read' : 'unread'}>
+        <Link className="bell-item" to={notificationLink(item)} onClick={() => { setOpen(false); void reads.markOne(item) }}>
+          <SeverityBadge severity={item.severity} />
+          <span className="bell-title">{item.title}</span>
+          <small className="muted">{item.propertyName} · {formatMoment(item.createdAt, property.timeZone)}
+            {item.readAt ? '' : <> · <span className="unread-label">Unread</span></>}</small>
+        </Link>
       </li>)}</ul>
       <Link className="text-link" to={`/properties/${property.id}/alerts`} onClick={() => setOpen(false)}>Open alerts and history</Link>
     </div>}
+    {reads.error && <p className="bell-error" role="alert">{reads.error}
+      <button type="button" aria-label="Dismiss" onClick={reads.clearError}><X size={14} aria-hidden /></button></p>}
   </div>
 }
 
@@ -98,7 +161,7 @@ export function useBrowserNotifications() {
         })
         shown.onclick = () => {
           window.focus()
-          window.location.assign(`/properties/${message.propertyId}/alerts?incident=${message.incidentId}`)
+          window.location.assign(notificationLink({ id: message.notificationId, propertyId: message.propertyId, incidentId: message.incidentId }, true))
         }
         report('shown')
       } catch {

@@ -428,6 +428,58 @@ public sealed class AlertMySqlTests
         Assert.DoesNotContain((await center.SummaryAsync(f.Outsider, default)).ActiveCritical, incident => incident.PropertyId == f.Property);
     }
 
+    [AlertMySqlFact]
+    public async Task ReadingOneNotificationPersistsForItsReaderOnlyAndNeverAcknowledgesOrResolvesTheIncident()
+    {
+        var f = await FixtureAsync();
+        await Rules(f).CreateAsync(f.Owner, f.Property, Battery(f, "Battery critical", AlertSeverity.Critical, 80), default);
+        var evaluator = Evaluator(f);
+        await EvaluateAsync(f, evaluator, T0);
+        var opened = Assert.Single(await NotificationsAsync(f, f.Owner));
+        var incident = Assert.Single(await IncidentsAsync(f));
+        const string eventCount = "SELECT COUNT(*) FROM alert_incident_events e JOIN alert_incidents i ON i.id = e.incident_id WHERE i.property_id = @Property";
+        var events = await ScalarAsync(f, eventCount);
+
+        // One notification, one reader; repeats change nothing, and nobody else can read it for them.
+        Assert.Equal(1, await Center(f).MarkReadAsync(f.Owner, new([opened.Id]), default));
+        Assert.Equal(0, await Center(f).MarkReadAsync(f.Owner, new([opened.Id]), default));
+        Assert.Equal(0, await Center(f).MarkReadAsync(f.Outsider, new([opened.Id]), default));
+        Assert.Equal(0, await Center(f).MarkReadAsync(f.Outsider, new(null, All: true), default));
+
+        // A new store instance, as after a reload, reads the stored state.
+        var fresh = Center(f);
+        Assert.NotNull(Assert.Single(await NotificationsAsync(f, f.Owner)).ReadAt);
+        Assert.Null(Assert.Single(await NotificationsAsync(f, f.Viewer)).ReadAt);
+        Assert.Null(Assert.Single(await NotificationsAsync(f, f.Operator)).ReadAt);
+        Assert.Equal((0, 0), ((await fresh.SummaryAsync(f.Owner, default)).Unread, (await fresh.SummaryAsync(f.Owner, default)).UnreadCritical));
+        Assert.Equal((1, 1), ((await fresh.SummaryAsync(f.Viewer, default)).Unread, (await fresh.SummaryAsync(f.Viewer, default)).UnreadCritical));
+
+        // Reading is not acknowledging or resolving.
+        var unchanged = Assert.Single(await IncidentsAsync(f));
+        Assert.Equal(("active", null, null, null), (unchanged.Status, unchanged.AcknowledgedAt, unchanged.ResolvedAt, unchanged.Resolution));
+        Assert.Equal(incident.LastChangedAt, unchanged.LastChangedAt);
+        Assert.Equal(events, await ScalarAsync(f, eventCount));
+
+        // Acknowledging does not read anyone's notification, and resolution keeps read state as it was.
+        Assert.Equal(ManagementStatus.Done, (await Center(f).AcknowledgeAsync(f.Operator, f.Property, incident.Id, default)).Status);
+        Assert.Null(Assert.Single(await NotificationsAsync(f, f.Operator)).ReadAt);
+        Assert.Null(Assert.Single(await NotificationsAsync(f, f.Viewer)).ReadAt);
+        await SocAsync(f, 95, T0.AddMinutes(1));
+        await EvaluateAsync(f, evaluator, T0.AddMinutes(1));
+        await EvaluateAsync(f, evaluator, T0.AddMinutes(1).AddSeconds(30));
+        Assert.Equal("resolved", Assert.Single(await IncidentsAsync(f)).Status);
+        var owner = await NotificationsAsync(f, f.Owner);
+        Assert.Equal(2, owner.Count);
+        Assert.NotNull(owner.Single(item => item.Id == opened.Id).ReadAt);
+        var recovered = owner.Single(item => item.Id != opened.Id);
+        Assert.Null(recovered.ReadAt);
+        Assert.Equal(1, await Center(f).MarkReadAsync(f.Owner, new([recovered.Id]), default));
+        var resolved = Assert.Single(await IncidentsAsync(f));
+        Assert.Equal(("resolved", "recovered"), (resolved.Status, resolved.Resolution));
+        Assert.NotNull(resolved.AcknowledgedAt);
+        Assert.Equal(2, (await Center(f).SummaryAsync(f.Viewer, default)).Unread);
+    }
+
     private static AlertRuleInput Battery(Fixture f, string name, AlertSeverity severity, double below) => new(name, null, true, severity, null, null,
         new RuleGroup(LogicalOperator.And, [new(new RuleCondition("c1", [Soc(f)], SignalAggregation.Single, ConditionOperator.LessThan, below, Unit: "%",
             FreshnessSeconds: 900))]), 0, 0);

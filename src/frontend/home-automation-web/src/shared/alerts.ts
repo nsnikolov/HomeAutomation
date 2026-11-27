@@ -1,5 +1,16 @@
 // Alert rules, incidents and notifications. Rules only create incidents and notifications; nothing here controls equipment.
+import type { QueryClient } from '@tanstack/react-query'
 import type { Metric } from './types'
+
+/**
+ * Refreshes notification lists and the bell after a change. Requests that started before the change are cancelled first: otherwise
+ * a refetch joins them and a stale unread count survives. `apply` writes the confirmed change in between, so cancelling cannot revert it.
+ */
+export async function refreshNotifications(client: QueryClient, apply?: () => void) {
+  await client.cancelQueries({ queryKey: ['notifications'] })
+  apply?.()
+  await client.invalidateQueries({ queryKey: ['notifications'] })
+}
 
 export type Severity = 'info' | 'warning' | 'critical'
 export type Truth = 'true' | 'false' | 'unknown'

@@ -173,6 +173,12 @@ A referenced device that moves to another property or is removed makes its condi
   - **Sound:** when enabled, Critical notifications play a short chime.
 - **Live refresh.** `alertsChanged` (property group) and `notificationsChanged` (the affected users) refresh open views.
 - **Critical visibility.** The header banner lists active Critical incidents in all of the user's properties until they resolve, whether or not they were read.
+- **Read state.** It is stored per user in `notification_recipients.read_at_utc` and is separate from acknowledgment and resolution: reading never acknowledges or resolves, and acknowledging never reads.
+  - **Bell:** opening it reads nothing. Selecting a notification opens its incident and marks that one notification read.
+  - **Notification history:** a title link and **Mark read** read one notification, and **Mark all read** (bell and history) reads them all.
+  - **Direct links:** a link that carries `notification=<id>` (a system notification click) marks exactly that notification read once. A plain incident link reads nothing, because an incident may have several notifications.
+  - **Display:** counters and styles change only after the server confirms. A failure is shown and the notification stays unread. Repeated clicks send one request.
+  - **Other tabs:** they follow through `notificationsChanged`. Every refresh first cancels in-flight notification reads so a stale count cannot survive (`refreshNotifications`).
 
 ### Mobile push extension point
 

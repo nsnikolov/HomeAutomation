@@ -46,6 +46,7 @@ Updated 2026-11-27. [AGENTS.md](../AGENTS.md) contains the shared development ru
   - **UI:** Automations → Alert rules (list, filters, editor, preview, templates, explicit grid outage setup); Alerts (incidents, history, settings); header bell; Critical banner.
   - **Migration 021**, optional for readiness; no grant change. The prompt referenced an earlier notification spec that was never archived; Phase 15 of [prompt 0065](prompts/0065-event-rules-incidents-notifications.md) was used as its requirements.
   - **Signal identity fix ([prompt 0066](prompts/0066-fix-rule-editor-signal-resolution.md)):** the catalog spelled metrics in C# PascalCase inside `key` (`BatterySoc`) while the editor derived camelCase keys from stored signals (`batterySoc`), so every measurement looked unavailable. `AlertSignals.Key` is now the single camelCase identity. The browser resolves signals through `signalIndex`, built from each entry's own `signal`. Devices sharing a name are told apart by model, then manufacturer, room or number, in the catalog, evidence and timelines. An unavailable stored signal is kept and explained, never substituted.
+  - **Read behavior ([prompt 0067](prompts/0067-notification-read-behavior.md)):** opening the bell reads nothing. Selecting a notification in the bell or history opens its incident and marks only that notification read. A `notification=<id>` link (system notification click) reads that one notification. Counters change after server confirmation, failures keep notifications unread, and in-flight reads are deduplicated. Other tabs follow `notificationsChanged`, with in-flight reads cancelled first so a stale count cannot survive. Reading, acknowledgment and resolution stay independent. Frontend only.
 - Settings stages provider settings in a global or property profile. Property Owner/Admin may edit their own scope. Global access requires an explicitly designated Identity account. Settings reads ordinary identifiers and polling intervals. Genuine secrets are write-only and stored with an external AES-256-GCM key. Since Milestone 6B, each provider can load a complete imported vault snapshot at startup when explicitly selected. Existing deployments use Legacy by default and OAuth grants stay in their existing encrypted stores. See the [configuration and cutover guide](architecture/09-configuration-vault.md). Property Settings pages show installation-wide (global) Daikin, eWeLink and Tuya profile presence; property profiles never inherit global values.
 
 | Integration | Shipped behavior and evidence |
@@ -59,7 +60,8 @@ Updated 2026-11-27. [AGENTS.md](../AGENTS.md) contains the shared development ru
 
 | Commit | Change |
 | --- | --- |
-| Rule editor signal resolution | Canonical camelCase signal keys, one browser signal index, distinguishable equal device names, explained unavailable signals, grid setup names. No migration. See [prompt 0066](prompts/0066-fix-rule-editor-signal-resolution.md). |
+| Notification read behavior | Bell and history selection marks one notification read, `notification=<id>` links, confirmed counters, failure handling, dedupe, stale-count race fix, unread styling. Frontend only. See [prompt 0067](prompts/0067-notification-read-behavior.md). |
+| `b3f9a53` | Canonical camelCase signal keys, one browser signal index, distinguishable equal device names, explained unavailable signals, grid setup names. No migration. See [prompt 0066](prompts/0066-fix-rule-editor-signal-resolution.md). |
 | `a2bf0b4` | Rules, incidents, notifications, worker, migration 021, Alerts and Automations pages, bell and Critical banner. See [prompt 0065](prompts/0065-event-rules-incidents-notifications.md). |
 | `ae1df1d` | Provider cards drop the inline room dropdown and **Save room**; a shared `AssignHere` keeps **Assign here** (no room) for unassigned devices. Frontend only. See [prompt 0064](prompts/0064-remove-redundant-room-controls.md). |
 | `6fc3dcc` | Property, room and device management, device moves with historical ownership, custom names, audit, Daikin account menu, migration 020. See [prompt 0063](prompts/0063-property-room-device-management.md). |
@@ -150,6 +152,12 @@ Keep manual commands on provider pages and behind explicit authorization. Record
 - Use the [roadmap](architecture/08-implementation-roadmap.md) for new work when requested. Do not treat its future architecture as deployed.
 
 ## Verification baseline
+
+- **Notification read behavior**:
+  - **Backend:** unchanged code. The Release build passed with zero warnings. With disposable MySQL 8.0.46 fixtures, 357 passed and 11 opt-in skips, twice in a row; without fixtures, 309 passed and 59 skipped.
+  - **New backend test (1):** a MySQL test showing that one read persists for its reader only, that repeats and other users change nothing, and that the incident's status, acknowledgment, resolution and events are unchanged. Acknowledging reads nothing, and resolution keeps read state.
+  - **Frontend:** the production build passed (main chunk 524 kB; the size warning predates this). Vitest reported 145 passes, including 10 new read tests: the bell opening reads nothing, a single click, counter confirmed before refetch, dedupe, failures, Mark all read, reload, per-user state, two tabs over mocked SignalR, `notification=<id>` links, history links, keyboard access, and no acknowledge requests.
+  - **Not touched:** live or development databases, vault credentials, OAuth, the running backend and the providers. Browser behavior on a real phone is unverified.
 
 - **Rule editor signal resolution**:
   - **Backend:** the Release build passed with zero warnings. With disposable MySQL 8.0.46 fixtures, 356 passed and 11 opt-in skips, twice in a row; without fixtures, 309 passed and 58 skipped.
